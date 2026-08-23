@@ -100,7 +100,7 @@ CREATE TABLE finding (
   provenance     TEXT NOT NULL,           -- JSON
   run_id         TEXT,
   step_id        TEXT,
-  batch_id       TEXT REFERENCES batch(id)
+  batch_id       TEXT                     -- idempotency key of the appending step (not a ledger batch)
 );
 CREATE INDEX finding_subject ON finding(subject, as_of);
 CREATE INDEX finding_code ON finding(code);

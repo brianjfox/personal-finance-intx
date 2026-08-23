@@ -14,6 +14,9 @@
       "path": "packages/institutions"
     },
     {
+      "path": "packages/actions"
+    },
+    {
       "path": "apps/host"
     }
   ]
