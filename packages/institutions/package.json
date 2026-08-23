@@ -1,0 +1,10 @@
+{
+  "name": "@fin/institutions",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Institution adapters: every connector produces the same InstitutionSnapshot. Phase 1 ships file-based adapters (JSON drop folder, CSV exports).",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": { "@fin/contracts": "workspace:*", "arktype": "2.1.29" }
+}

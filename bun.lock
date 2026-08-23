@@ -26,12 +26,28 @@
         "arktype": "2.1.29",
       },
     },
+    "packages/institutions": {
+      "name": "@fin/institutions",
+      "version": "0.0.0",
+      "dependencies": {
+        "@fin/contracts": "workspace:*",
+        "arktype": "2.1.29",
+      },
+    },
     "packages/ledger": {
       "name": "@fin/ledger",
       "version": "0.0.0",
       "dependencies": {
         "@fin/contracts": "workspace:*",
         "arktype": "2.1.29",
+      },
+    },
+    "packages/vault": {
+      "name": "@fin/vault",
+      "version": "0.0.0",
+      "dependencies": {
+        "@fin/contracts": "workspace:*",
+        "@fin/ledger": "workspace:*",
       },
     },
   },
@@ -44,7 +60,11 @@
 
     "@fin/host": ["@fin/host@workspace:apps/host"],
 
+    "@fin/institutions": ["@fin/institutions@workspace:packages/institutions"],
+
     "@fin/ledger": ["@fin/ledger@workspace:packages/ledger"],
+
+    "@fin/vault": ["@fin/vault@workspace:packages/vault"],
 
     "@intx/agent": ["@intx/agent@0.3.0", "", { "dependencies": { "@intx/inference": "0.3.0", "@intx/log": "0.3.0", "@intx/mime": "0.3.0", "@intx/types": "0.3.0", "arktype": "^2.1.29" } }, "sha512-a7cgmH8FSsGQ7BpLKQhEwZYRfofWh3lWEGgKFsk53zdgjndtDfqAf2I64QMPAqC2Y2Npag/z1NA5lEsIqAGvPg=="],
 
