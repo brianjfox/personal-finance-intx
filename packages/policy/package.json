@@ -1,0 +1,15 @@
+{
+  "name": "@fin/policy",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The trust-boundary matrix (deck slide 13) as @intx/authz grants, deny-by-default, plus the workflow authorize fn that maps steps to principals",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@fin/contracts": "workspace:*",
+    "@intx/authz": "0.3.0",
+    "@intx/types": "0.3.0",
+    "@intx/workflow": "0.3.0"
+  }
+}
