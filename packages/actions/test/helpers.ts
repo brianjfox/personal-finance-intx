@@ -44,9 +44,9 @@ export function runNight(ledger: Ledger, runKey: string, fetch: FetchResult, now
       });
     }
     const findings = rec.findings.map((d) => {
-      const { after_refs, holds: _h, fingerprint: _f, ...rest } = d;
+      const { after_refs, holds, fingerprint: _f, ...rest } = d;
       const after = after_refs.map((r) => ids[r]).filter((x): x is string => x !== undefined);
-      return { ...rest, after, evidence: [...new Set([...d.evidence, ...after])] };
+      return { ...rest, detail: { ...rest.detail, holds }, after, evidence: [...new Set([...d.evidence, ...after])] };
     });
     ledger.appendFindings(`${runKey}:findings`, findings);
     return ids;

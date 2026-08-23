@@ -42,8 +42,9 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
     const drafts = input.findings ?? [];
     const inputs: FindingInput[] = drafts.map((d) => {
       const after = d.after_refs.map((r) => refToId.get(r)).filter((x): x is string => x !== undefined);
-      const { after_refs: _a, holds: _h, fingerprint: _f, ...rest } = d;
-      return { ...rest, after, evidence: [...new Set([...d.evidence, ...after])] };
+      const { after_refs: _a, holds, fingerprint: _f, ...rest } = d;
+      // `holds` rides in detail so resolution knows whether this finding held its subject.
+      return { ...rest, detail: { ...rest.detail, holds }, after, evidence: [...new Set([...d.evidence, ...after])] };
     });
     const out = (await ctx.perform({
       effectId: "record-findings",

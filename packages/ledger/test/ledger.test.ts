@@ -265,3 +265,47 @@ describe("documents", () => {
     expect(b.id).toBe(a.id);
   });
 });
+
+describe("release of a held subject", () => {
+  test("every fact of a held night is provisional; the hold lifts only when no open holding finding remains", () => {
+    const l = openLedger(":memory:");
+    const night = l.commit({
+      batchId: "d1",
+      writer: "assets_manager",
+      facts: [
+        { ...acct("acct.demo.checking", "checking"), provisional: true },
+        bal("100", T0, T0, { provisional: true }),
+        bal("90", T0, T0, { key: "available", payload: { account_id: "acct.demo.checking", balance_type: "available", amount: "90", currency: "USD" }, provisional: true }),
+      ],
+    });
+    const mk = (code: "stale_balance" | "duplicate_transaction", after: string[], holds: boolean) =>
+      l.appendFinding({
+        kind: "break",
+        code,
+        severity: "high",
+        subject: "acct.demo.checking",
+        summary: code,
+        detail: { holds },
+        evidence: after,
+        before: [],
+        after,
+        requires_human: true,
+        emitted_by: "reconciliation",
+        as_of: T1,
+        provenance: { source_id: "handler.reconcile", source_doc_id: null, observed_at: T1 },
+      });
+    const f1 = mk("stale_balance", [night.factIds[1] as string], true);
+    const f2 = mk("duplicate_transaction", [night.factIds[2] as string], true);
+    expect(l.provisionalSubjects().get("acct.demo.checking")).toHaveLength(3);
+    resolveFinding(l, { findingId: f1, decision: "dismiss", note: "", decidedBy: "b", decidedAt: T2 });
+    // f2 still holds the subject: only f1's disputed fact was released.
+    expect(l.isProvisional("acct.demo.checking")).toBe(true);
+    expect(l.provisionalSubjects().get("acct.demo.checking")).toHaveLength(2);
+    const r2 = resolveFinding(l, { findingId: f2, decision: "accept_incoming", note: "", decidedBy: "b", decidedAt: T3 });
+    // Nothing holds it now: the disputed fact AND the untouched account fact are released.
+    expect(l.isProvisional("acct.demo.checking")).toBe(false);
+    expect(r2.resultingFacts).toHaveLength(2);
+    expect(l.asOf({ kind: "account", subject: "acct.demo.checking" })[0]?.source_id).toBe("operator.b");
+    expect(l.factCount()).toBe(6);
+  });
+});
