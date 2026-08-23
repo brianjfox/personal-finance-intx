@@ -80,27 +80,41 @@ describe("2. a balance that stopped updating four days ago but still looks live"
     expect(n.rec.provisional_subjects).toEqual(["acct.bank.sav"]);
   });
 
-  test("fresh as-of but frozen value while transactions keep arriving", () => {
+  test("fresh-looking as-of but a value frozen for days while transactions keep posting", () => {
     const ledger = freshLedger();
     const day = (d: number) => `2026-08-${String(d).padStart(2, "0")}T00:00:00.000Z`;
     const fetch = (d: number) => `2026-08-${String(d).padStart(2, "0")}T06:00:00.000Z`;
-    for (let d = 18; d <= 22; d += 1) {
-      runNight(
+    // Nights 18-21: the feed stamps each night's as-of (looks live) but the total never moves.
+    for (let d = 18; d <= 21; d += 1) {
+      const n = runNight(
         ledger,
         `n${d}`,
-        { snapshots: [snap("inst.bank", fetch(d), [checking("acct.bank.chk", day(d), "4242.00", { as_of: day(18), transactions: [{ txn_id: `t${d}`, posted_at: day(d), amount: "-12", type: "debit", description: "coffee" }] })])], failures: [] },
+        { snapshots: [snap("inst.bank", fetch(d), [checking("acct.bank.chk", day(d), "4242.00", { transactions: [{ txn_id: `t${d}`, posted_at: day(d), amount: "-12", type: "debit", description: "coffee" }] })])], failures: [] },
         fetch(d),
-      ).commit();
+      );
+      expect(n.rec.findings.filter((x) => x.code === "stale_balance")).toHaveLength(0); // not yet past the threshold
+      n.commit();
     }
     const n = runNight(
       ledger,
-      "n23",
-      { snapshots: [snap("inst.bank", fetch(23), [checking("acct.bank.chk", day(18), "4242.00", { transactions: [{ txn_id: "t23", posted_at: day(23), amount: "-12", type: "debit", description: "coffee" }] })])], failures: [] },
-      fetch(23),
+      "n22",
+      { snapshots: [snap("inst.bank", fetch(22), [checking("acct.bank.chk", day(22), "4242.00", { transactions: [{ txn_id: "t22", posted_at: day(22), amount: "-12", type: "debit", description: "coffee" }] })])], failures: [] },
+      fetch(22),
     );
     const f = n.rec.findings.filter((x) => x.code === "stale_balance");
-    expect(f.length).toBeGreaterThanOrEqual(1);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.detail["unchanged_since"]).toBe(fetch(18));
     expect(n.rec.provisional_subjects).toEqual(["acct.bank.chk"]);
+    n.commit();
+    // Night 23, still frozen: the open finding stands; no second item in the queue.
+    const n23 = runNight(
+      ledger,
+      "n23",
+      { snapshots: [snap("inst.bank", fetch(23), [checking("acct.bank.chk", day(23), "4242.00", { transactions: [{ txn_id: "t23", posted_at: day(23), amount: "-12", type: "debit", description: "coffee" }] })])], failures: [] },
+      fetch(23),
+    );
+    expect(n23.rec.findings.filter((x) => x.code === "stale_balance")).toHaveLength(0);
+    expect(ledger.openFindings({ requiresHuman: true }).filter((x) => x.code === "stale_balance")).toHaveLength(1);
   });
 });
 
@@ -248,5 +262,29 @@ describe("extras", () => {
     expect(n2.rec.findings.filter((f) => f.requires_human)).toHaveLength(0);
     const closed = n2.norm.facts.find((f) => f.fact.kind === "position" && f.fact.key === "BBB")!;
     expect((closed.fact.payload as { quantity: string }).quantity).toBe("0");
+  });
+});
+
+describe("the queue you stop reading", () => {
+  test("a known, unresolved gap is not re-raised night after night; a changed condition is", () => {
+    const ledger = freshLedger();
+    const lot = (basis: string | null) => ({
+      instrument: { symbol: "AAPL", asset_class: "equity" as const },
+      quantity: "50",
+      price: "230",
+      market_value: "11500",
+      cost_basis: basis,
+      lots: [{ lot_id: "aapl-xfer", quantity: "50", acquired_at: "2019-09-10", cost_basis: basis, transferred_in: true }],
+    });
+    const n1 = runNight(ledger, "n1", { snapshots: [snap("inst.broker", NIGHT1, [brokerage("acct.broker.taxable", ASOF1, { positions: [lot(null)] })])], failures: [] }, NIGHT1);
+    expect(n1.rec.findings.filter((f) => f.code === "missing_cost_basis")).toHaveLength(1);
+    n1.commit();
+    const n2 = runNight(ledger, "n2", { snapshots: [snap("inst.broker", NIGHT2, [brokerage("acct.broker.taxable", ASOF2, { positions: [lot(null)] })])], failures: [] }, NIGHT2);
+    expect(n2.rec.findings.filter((f) => f.code === "missing_cost_basis")).toHaveLength(0);
+    expect(n2.rec.stats["suppressed_known"]).toBe(1);
+    expect(ledger.openFindings({ requiresHuman: true })).toHaveLength(1);
+    // Basis arrives: no gap at all.
+    const n3 = runNight(ledger, "n3", { snapshots: [snap("inst.broker", NIGHT2, [brokerage("acct.broker.taxable", ASOF2, { positions: [lot("9000")] })])], failures: [] }, NIGHT2);
+    expect(n3.rec.findings.filter((f) => f.code === "missing_cost_basis")).toHaveLength(0);
   });
 });

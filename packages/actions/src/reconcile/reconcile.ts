@@ -36,6 +36,14 @@ import type { NormalizeOutput, ProposedFact } from "../normalize/normalize";
 export interface FindingDraft extends Omit<FindingInput, "after" | "evidence"> {
   /** Ledger fact ids already known. */
   evidence: string[];
+  /**
+   * Stable identity of the condition (code + subject + the detail that
+   * defines it). A finding whose fingerprint already exists in the ledger
+   * -- open, or for gap-like codes ever -- is not re-emitted night after
+   * night: "if the approval queue is long and boring, you will rubber-stamp
+   * it" (deck slide 21). Stored in `detail.fingerprint`.
+   */
+  fingerprint: string;
   /** Refs of proposed facts (tonight's); resolved to ids after commit. */
   after_refs: string[];
   /** Whether this finding holds its subject's data provisional. */
@@ -72,16 +80,43 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
   detectCryptoSwaps(ctx);
   detectPositionBalanceMismatch(ctx);
 
-  const provisional = [...new Set(findings.filter((f) => f.holds).map((f) => f.subject))].sort();
+  const fresh = suppressKnown(findings, ledger);
+  const provisional = [...new Set(fresh.filter((f) => f.holds).map((f) => f.subject))].sort();
   const stats: Record<string, number> = {};
-  for (const f of findings) stats[f.code] = (stats[f.code] ?? 0) + 1;
+  for (const f of fresh) stats[f.code] = (stats[f.code] ?? 0) + 1;
+  if (findings.length !== fresh.length) stats["suppressed_known"] = findings.length - fresh.length;
   return {
     run_key: input.run_key,
     clean: provisional.length === 0,
-    findings,
+    findings: fresh,
     provisional_subjects: provisional,
     stats,
   };
+}
+
+/** Codes whose finding, once recorded (open or resolved), is not re-raised while its fingerprint is unchanged. */
+const DEDUPE_FOREVER: ReadonlySet<FindingCode> = new Set([
+  "missing_cost_basis",
+  "corrected_tax_document",
+  "crypto_swap_taxable_event",
+  "unknown_account",
+  "duplicate_transaction",
+  "internal_transfer_booked_as_income",
+]);
+
+function suppressKnown(drafts: FindingDraft[], ledger: Ledger): FindingDraft[] {
+  const known = new Set<string>();
+  const openOnly = new Set<string>();
+  for (const f of ledger.allFindings(5000)) {
+    const fp = typeof f.detail["fingerprint"] === "string" ? (f.detail["fingerprint"] as string) : null;
+    if (fp === null) continue;
+    known.add(fp);
+    if (!f.resolved) openOnly.add(fp);
+  }
+  return drafts.filter((d) => {
+    if (DEDUPE_FOREVER.has(d.code)) return !known.has(d.fingerprint);
+    return !openOnly.has(d.fingerprint);
+  });
 }
 
 interface DetectorContext {
@@ -106,15 +141,20 @@ function emit(
     after_refs?: string[];
     requires_human: boolean;
     holds: boolean;
+    /** Detail keys that identify the condition; default: every key of `detail`. */
+    identity?: string[];
   },
 ): void {
+  const idKeys = (f.identity ?? Object.keys(f.detail)).sort();
+  const fingerprint = `${f.code}|${f.subject}|${JSON.stringify(idKeys.map((k) => [k, f.detail[k] ?? null]))}`;
   ctx.findings.push({
     kind: f.kind,
     code: f.code,
     severity: f.severity,
     subject: f.subject,
     summary: f.summary,
-    detail: f.detail,
+    detail: { ...f.detail, fingerprint },
+    fingerprint,
     evidence: f.evidence ?? [],
     before: f.before ?? [],
     after_refs: f.after_refs ?? [],
@@ -257,30 +297,35 @@ function detectStaleBalances(ctx: DetectorContext): void {
         subject: a.account_id,
         summary: `${a.account_id}: institution as-of ${a.as_of} is ${(age / 86_400_000).toFixed(1)} days older than tonight's fetch`,
         detail: { as_of: a.as_of, fetched_at: a.fetched_at, age_days: age / 86_400_000 },
+        identity: ["as_of"],
         after_refs: totalRef === undefined ? [] : [totalRef],
         requires_human: true,
         holds: true,
       });
       continue;
     }
-    // Fresh as-of but frozen value: identical total and identical stated as-of
-    // to a balance first observed more than the threshold ago.
+    // Fresh-looking as-of but frozen value: the total has not moved for
+    // longer than the threshold while transactions kept posting to the
+    // account. A balance that activity should have moved, and did not, is
+    // stale whatever timestamp the feed puts on it.
     if (totalRef === undefined) continue;
     const incoming = ctx.input.facts.find((f) => f.ref === totalRef) as ProposedFact;
     const ip = incoming.fact.payload as BalancePayload;
     const prior = ctx.ledger.asOf({ kind: "balance", subject: a.account_id, key: "total" })[0];
     if (prior === undefined) continue;
     const pp = prior.payload as BalancePayload;
+    if (pp.amount !== ip.amount) continue;
     const firstSeen = oldestIdentical(ctx.ledger, prior);
     const frozenMs = Date.parse(a.fetched_at) - Date.parse(firstSeen.observed_at);
-    if (pp.amount === ip.amount && (pp.stated_as_of ?? null) === (ip.stated_as_of ?? null) && frozenMs > maxAgeMs && hasActivity(ctx, a.account_id)) {
+    if (frozenMs > maxAgeMs && hasActivitySince(ctx, a.account_id, firstSeen.observed_at)) {
       emit(ctx, {
         kind: "staleness",
         code: "stale_balance",
         severity: "medium",
         subject: a.account_id,
-        summary: `${a.account_id}: total ${ip.amount} and as-of ${String(ip.stated_as_of)} unchanged since ${firstSeen.observed_at} while transactions kept arriving`,
+        summary: `${a.account_id}: total ${ip.amount} unchanged since ${firstSeen.observed_at} while transactions kept posting`,
         detail: { amount: ip.amount, stated_as_of: ip.stated_as_of ?? null, unchanged_since: firstSeen.observed_at },
+        identity: ["amount", "unchanged_since"],
         evidence: [prior.id],
         before: [prior.id],
         after_refs: [totalRef],
@@ -304,14 +349,19 @@ function oldestIdentical(ledger: Ledger, latest: StoredFact): StoredFact {
     const f = ledger.getFact(r.id);
     if (f === null) break;
     const p = f.payload as BalancePayload;
-    if (p.amount !== lp.amount || (p.stated_as_of ?? null) !== (lp.stated_as_of ?? null)) break;
+    if (p.amount !== lp.amount) break;
     oldest = f;
   }
   return oldest;
 }
 
-function hasActivity(ctx: DetectorContext, account: string): boolean {
-  return ctx.input.facts.some((f) => f.fact.kind === "transaction" && f.fact.subject === account);
+function hasActivitySince(ctx: DetectorContext, account: string, since: string): boolean {
+  const sinceMs = Date.parse(since) - 86_400_000;
+  const posted = (p: TransactionPayload): boolean => Date.parse(p.posted_at) >= sinceMs;
+  if (ctx.input.facts.some((f) => f.fact.kind === "transaction" && f.fact.subject === account && posted(f.fact.payload as TransactionPayload))) {
+    return true;
+  }
+  return ctx.ledger.asOf({ kind: "transaction", subject: account }).some((f) => posted(f.payload as TransactionPayload));
 }
 
 // --- 3. corrected tax document ---------------------------------------
