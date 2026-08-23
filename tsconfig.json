@@ -20,6 +20,9 @@
       "path": "packages/policy"
     },
     {
+      "path": "packages/workflows"
+    },
+    {
       "path": "apps/host"
     }
   ]

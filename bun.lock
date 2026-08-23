@@ -72,6 +72,19 @@
         "@fin/ledger": "workspace:*",
       },
     },
+    "packages/workflows": {
+      "name": "@fin/workflows",
+      "version": "0.0.0",
+      "dependencies": {
+        "@fin/actions": "workspace:*",
+        "@fin/contracts": "workspace:*",
+        "@fin/institutions": "workspace:*",
+        "@fin/ledger": "workspace:*",
+        "@fin/policy": "workspace:*",
+        "@fin/vault": "workspace:*",
+        "@intx/workflow": "0.3.0",
+      },
+    },
   },
   "packages": {
     "@ark/schema": ["@ark/schema@0.56.0", "", { "dependencies": { "@ark/util": "0.56.0" } }, "sha512-ECg3hox/6Z/nLajxXqNhgPtNdHWC9zNsDyskwO28WinoFEnWow4IsERNz9AnXRhTZJnYIlAJ4uGn3nlLk65vZA=="],
@@ -91,6 +104,8 @@
     "@fin/policy": ["@fin/policy@workspace:packages/policy"],
 
     "@fin/vault": ["@fin/vault@workspace:packages/vault"],
+
+    "@fin/workflows": ["@fin/workflows@workspace:packages/workflows"],
 
     "@intx/agent": ["@intx/agent@0.3.0", "", { "dependencies": { "@intx/inference": "0.3.0", "@intx/log": "0.3.0", "@intx/mime": "0.3.0", "@intx/types": "0.3.0", "arktype": "^2.1.29" } }, "sha512-a7cgmH8FSsGQ7BpLKQhEwZYRfofWh3lWEGgKFsk53zdgjndtDfqAf2I64QMPAqC2Y2Npag/z1NA5lEsIqAGvPg=="],
 
