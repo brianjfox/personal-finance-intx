@@ -879,19 +879,21 @@ export function createApp(opts: AppOptions): App {
       const spec = chatWorkflowSpec(o.agent);
       const messageId = newId("msg");
       const active = await this.activeChatRun(o.agent);
+      let runId: string;
       if (active === null) {
-        const runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
+        runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
         drive(buildChatWorkflow(o.agent, model).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
       } else {
+        runId = active.runId;
         // Deliver on the step's CURRENT input channel: the reserved
         // signal name of the newest input park not yet consumed. While a
         // turn is in flight there is no open channel -- poll until the
         // re-arm parks it (or time out as "busy").
-        const channel = await openInputChannel(active.runId, spec.stepId, o.timeoutMs ?? 30_000);
-        host.deliver(active.runId, channel, { text: o.text, message_id: messageId }, messageId);
+        const channel = await openInputChannel(runId, spec.stepId, o.timeoutMs ?? 30_000);
+        host.deliver(runId, channel, { text: o.text, message_id: messageId }, messageId);
       }
       if (o.wait === false) return { message_id: messageId, turn: null };
-      const turn = await waitForTurn(o.agent, messageId, o.timeoutMs ?? 240_000);
+      const turn = await waitForTurn(o.agent, runId, messageId, o.timeoutMs ?? 240_000);
       return { message_id: messageId, turn };
     },
     chatTranscript(agent) {
@@ -1012,14 +1014,26 @@ export function createApp(opts: AppOptions): App {
     }
   }
 
-  async function waitForTurn(agent: ChatAgent, messageId: string, timeoutMs: number): Promise<ChatTurn> {
+  async function waitForTurn(agent: ChatAgent, runId: string, messageId: string, timeoutMs: number): Promise<ChatTurn> {
     const evtId = `chat:${agent}:${messageId}`;
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
+    for (let i = 0; ; i += 1) {
       const hit = ledger
         .eventsSince(0, 10_000)
         .find((e) => e.kind === "chat.turn" && e.id === evtId);
       if (hit !== undefined) return hit.payload as ChatTurn;
+      // A dead run will never reply: surface the failing step's own
+      // message now (e.g. "ANTHROPIC_API_KEY is not set") instead of
+      // letting the operator wait out the full timeout. Checked every
+      // ~1s -- reading the log is heavier than the event poll above.
+      if (i % 5 === 4) {
+        const events = await host.readLog(runId);
+        const last = events.at(-1);
+        if (last !== undefined && (last.kind === "RunFailed" || last.kind === "RunCancelled")) {
+          const failed = [...events].reverse().find((e) => e.kind === "StepFailed") as { error?: { message?: string } } | undefined;
+          throw new Error(failed?.error?.message ?? `chat: the ${agent} run ${last.kind === "RunFailed" ? "failed" : "was cancelled"} before replying`);
+        }
+      }
       if (Date.now() > deadline) throw new Error(`chat: no reply for ${messageId} within ${String(timeoutMs)}ms; the turn may still be running -- poll the transcript`);
       await new Promise((r) => setTimeout(r, 200));
     }

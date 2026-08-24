@@ -36,6 +36,27 @@ const openApp = (dataDir: string): App =>
   });
 
 describe("phase 3 through fin-host: the strategist chat over real tools", () => {
+  test("a chat with no inference source fails fast with the step's own message, not a long timeout", async () => {
+    const dataDir = tmp();
+    const app = createApp({
+      dataDir,
+      adapters: [],
+      pollMs: 20,
+      inferenceSource: () => {
+        throw new Error("fin-host: ANTHROPIC_API_KEY is not set (test)");
+      },
+    });
+    try {
+      const started = Date.now();
+      expect(app.sendChat({ agent: "strategist", text: "hello", timeoutMs: 60_000 })).rejects.toThrow(/ANTHROPIC_API_KEY is not set/);
+      await app.sendChat({ agent: "strategist", text: "hello", timeoutMs: 60_000 }).catch(() => {});
+      // The run died instantly; the wait must not burn the 60s timeout.
+      expect(Date.now() - started).toBeLessThan(20_000);
+    } finally {
+      app.close();
+    }
+  });
+
   test("the slide-19 scenario: figures from tools, facts clickable, thesis journaled; policy refuses cross-agent tools", async () => {
     const dataDir = tmp();
     writePhase3Config(dataDir);
