@@ -15,7 +15,8 @@ src/app.ts           createApp(): ledger + vault + institutions + fs-host with t
                      tax profile, standing tax-year run lifecycle, taxStatus()
 src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, start nightly, resolve
                      finding, tax calendar (status/check/skip), obligations
-src/cli.ts           fin-host init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|serve
+src/cli.ts           fin-host init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|
+                     chat|estate-audit|scenario|projection|serve
 src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes + a demo tax profile
 src/fs-host/
   paths.ts           data-dir layout + atomic write helper
@@ -25,6 +26,9 @@ src/fs-host/
   scheduler.ts       Scheduler: runlocal's scheduler wrapped with long-delay chunking (the setTimeout
                      2^31-1 ms clamp) and overdue-timer staggering (D-014/D-015)
   signal-channel.ts  SignalChannel: in-process FIFO + durable per-run inbox
+  step-invoker.ts    model-backed steps (Phase 3, D-018): wraps @intx/workflow-host's
+                     createWorkflowStepInvoker; per-agent isogit context+audit repo under
+                     <dataDir>/context/<agentId>/; records each chat turn as a ChatTurn
   flush.ts           periodic pending-commit-buffer flush for standing runs (D-017)
   host.ts            createFsHost(): assembles the env, run()/deliver(); rehydrates trigger.payload
                      on adopted resume (D-015)
@@ -36,6 +40,9 @@ test/
   phase1-nightly.test.ts        Phase 1 acceptance through fin-host; SIGKILL mid-nightly
   phase2-taxyear.test.ts        Phase 2: a deadline parked in a timed awaitSignal survives SIGKILL
                                 and fires after restart; skips delivered while down; long-timer clamp
+  phase3-chat.test.ts           Phase 3: the slide-19 acceptance over a scripted agent -- real tools,
+                                policy, evidence, journal, transcript; crash-resume mid-conversation
+  phase3-chat-live.test.ts      the same question against the real model (needs ANTHROPIC_API_KEY)
 ```
 
 Data directory (`~/Library/Application Support/FinInterchange/` in the
@@ -51,6 +58,8 @@ app; any path in tests):
 <dataDir>/institutions.json            institution registry
 <dataDir>/institutions/<id>/inbox/     file-drop inboxes
 <dataDir>/tax-profile.json             the operator's tax profile (rates, prior-year tax, reserve account)
+<dataDir>/estate.json                  the estate plan (intended titling, documents, executors) + observed titling
+<dataDir>/context/<agentId>/           an advisory agent's git-backed context + audit trail (bin/audit reads it)
 ```
 
 ## Run the Phase 0 gate by hand
@@ -91,8 +100,8 @@ bun test
 
 ## Not yet wired (fails loudly, by contract)
 
-- Model-backed `step` (Phase 3; `createWorkflowStepInvoker` per D-010).
-- `childWorkflow`, `onTrigger` (Phase 3; `createInMemorySpawnChild` per D-010).
+- `childWorkflow`, `onTrigger` (deferred with the mail transport per D-018;
+  `createInMemorySpawnChild` per D-010 when Phase 4 needs sub-workflows).
 - Resume of a `sleep` left `awaiting-timer` -- not supported by the
   runtime at the pinned framework version. See `DECISIONS.md` D-006.
 - An `action` left in flight at a crash is settled as failed on resume

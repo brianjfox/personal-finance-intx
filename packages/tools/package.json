@@ -1,0 +1,16 @@
+{
+  "name": "@fin/tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "defineTool bundles for the advisory agents, scoped per agent (deck slide 13): the Strategist reads aggregates and writes only the journal; the Estate Planner reads the registry and the vault and emits findings",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@fin/actions": "workspace:*",
+    "@fin/contracts": "workspace:*",
+    "@fin/ledger": "workspace:*",
+    "@intx/agent": "0.3.0",
+    "@intx/types": "0.3.0"
+  }
+}

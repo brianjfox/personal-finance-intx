@@ -4,10 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "description": "defineWorkflow definitions: the nightly ingest/normalise/reconcile/commit run with the provisional gate, plus the topology walker",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "bun test" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "@fin/actions": "workspace:*",
+    "@fin/agents": "workspace:*",
     "@fin/contracts": "workspace:*",
     "@fin/institutions": "workspace:*",
     "@fin/ledger": "workspace:*",

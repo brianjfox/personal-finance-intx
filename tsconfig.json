@@ -24,6 +24,12 @@
     },
     {
       "path": "apps/host"
+    },
+    {
+      "path": "packages/tools"
+    },
+    {
+      "path": "packages/agents"
     }
   ]
 }

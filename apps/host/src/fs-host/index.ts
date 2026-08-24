@@ -11,3 +11,4 @@ export {
   type FsSignalChannel,
   type InboxSignal,
 } from "./signal-channel";
+export { createFinStepInvoker, anthropicSourceFromEnv, type FinStepInvokerOptions } from "./step-invoker";

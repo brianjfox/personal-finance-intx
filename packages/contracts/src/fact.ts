@@ -10,6 +10,7 @@
 
 import { type } from "arktype";
 
+import { TitlingPayload } from "./estate";
 import { Principal } from "./principals";
 import { Currency, Decimal, Id, IsoDate, IsoDateTime, Subject } from "./scalars";
 
@@ -24,6 +25,7 @@ export const FACT_KINDS = [
   "tax_document",
   "obligation",
   "entity",
+  "titling",
 ] as const;
 export type FactKind = (typeof FACT_KINDS)[number];
 export const FactKind = type.enumerated(...FACT_KINDS);
@@ -44,6 +46,7 @@ export const FACT_WRITERS = {
   tax_document: "document_vault",
   obligation: "liabilities",
   entity: "registry",
+  titling: "registry",
 } as const satisfies Record<FactKind, Principal>;
 
 export function writerOf(kind: FactKind): Principal {
@@ -217,6 +220,7 @@ export const FACT_PAYLOADS = {
   tax_document: TaxDocumentPayload,
   obligation: ObligationPayload,
   entity: EntityPayload,
+  titling: TitlingPayload,
 } as const;
 
 export type FactPayloadOf<K extends FactKind> = (typeof FACT_PAYLOADS)[K]["infer"];

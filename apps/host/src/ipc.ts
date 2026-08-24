@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
-import { ResolutionDecision, TaxStage } from "@fin/contracts";
+import { ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
 import { type } from "arktype";
 
 import type { App } from "./app";
@@ -30,6 +30,7 @@ const ResolveBody = type({
 const TaxYearBody = type({ "year?": "number.integer >= 1990" });
 const TaxCheckBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage });
 const TaxSkipBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage, "note?": "string" });
+const ChatBody = type({ agent: ChatAgent, text: "string > 0", "wait?": "boolean" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -82,6 +83,32 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           const r = await app.runTaxCheck({ quarter: body.quarter as 1 | 2 | 3 | 4, stage: body.stage });
           return json({ runId: r.runId, status: r.terminalStatus });
+        }
+        if (p === "/api/estate") return json(app.estateStatus());
+        if (p === "/api/estate/audit" && req.method === "POST") {
+          const r = await app.runEstateAudit();
+          return json({ runId: r.runId, status: r.terminalStatus, audit: r.outputs["audit_estate"] ?? null });
+        }
+        if (p === "/api/scenario" && req.method === "POST") {
+          const body = ScenarioRequest({ kind: "sell_asset", ...((await req.json()) as object) });
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.runScenarioNow(body));
+        }
+        if (p === "/api/projection" && req.method === "POST") {
+          const body = ProjectionRequest(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.runProjectionNow(body));
+        }
+        const chatMatch = /^\/api\/chat\/(strategist|estate_planner)$/.exec(p);
+        if (chatMatch !== null && req.method === "GET") {
+          return json(app.chatTranscript(chatMatch[1] as "strategist" | "estate_planner"));
+        }
+        if (p === "/api/chat" && req.method === "POST") {
+          const body = ChatBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          // The connection's idle timeout is 120s; keep the wait under it.
+          const r = await app.sendChat({ agent: body.agent, text: body.text, wait: body.wait ?? true, timeoutMs: 100_000 });
+          return json(r, r.turn === null ? 202 : 200);
         }
         if (p === "/api/tax/skip" && req.method === "POST") {
           const body = TaxSkipBody(await req.json());

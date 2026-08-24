@@ -111,12 +111,15 @@ describe("definition lints", () => {
     }
     expect(Object.keys(allStepPrincipals()).length).toBeGreaterThan(0);
   });
-  test("advisory-tier principals never run a step that declares a ledger-write capability", () => {
+  test("advisory-tier principals never run a step that declares a FACT-table write capability", () => {
+    // The matrix (slide 13) lets the estate planner append findings and the
+    // strategist append journal entries; what the advisory tier may never
+    // touch is a fact table -- those have exactly one ledger-tier writer.
     const advisory = new Set(["strategist", "market_manager", "estate_planner"]);
     for (const w of ALL_WORKFLOWS) {
       for (const [id, p] of Object.entries(w.definition.steps)) {
         if (p.kind !== "action" || !advisory.has(w.stepPrincipals[id] ?? "")) continue;
-        for (const cap of p.effect?.requires ?? []) expect(cap.startsWith("ledger.write")).toBe(false);
+        for (const cap of p.effect?.requires ?? []) expect(cap.startsWith("ledger.write.fact")).toBe(false);
       }
     }
   });

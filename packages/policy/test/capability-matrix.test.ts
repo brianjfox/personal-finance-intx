@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { PRINCIPALS, type Principal } from "@fin/contracts";
-import { createPolicyAuthorize, createPolicyStore, decide, MATRIX, RECORD_TABLES, WRITE_TABLES } from "../src/index";
+import { createPolicyAuthorize, createPolicyStore, decide, MATRIX, RECORD_TABLES, rowFor, WRITE_TABLES } from "../src/index";
 
 const store = createPolicyStore();
 const allow = async (p: Principal, r: string, a: string) => (await decide(store, p, r, a)).effect === "allow";
@@ -136,10 +136,49 @@ describe("workflow authorize: step -> principal -> matrix cell", () => {
   });
 });
 
-describe("tool-set halves (grow in Phase 3/4)", () => {
-  test.todo("Strategist agent definition lists no credential-touching tool factory");
+describe("tool-set halves (Phase 3: the advisory agents exist; Phase 4/5 rows stay todo)", () => {
+  // The deploy-time capability walk the deck wants (slide 13): tool names
+  // are STATICALLY declared on the factories, so these assertions never
+  // instantiate an agent, and the matrix's `tools` column is the single
+  // authority the reactor authorizes against at runtime.
+  const FORBIDDEN = /credential|order|execute|trade|withdraw|transfer|commit|write_fact/i;
+
+  test("Strategist: exactly the matrix's tools; no credential, execution, or fact-write tool; journal is the only write", async () => {
+    const { strategistTools } = await import("@fin/tools");
+    const { strategistAgent } = await import("@fin/agents");
+    const declared = strategistTools.definitions.map((d) => d.name).sort();
+    expect(declared).toEqual([...(rowFor("strategist").tools ?? [])].sort());
+    for (const name of declared) expect(name).not.toMatch(FORBIDDEN);
+    // The runtime enforces it: every declared tool authorizes as strategist, and a forged one refuses.
+    for (const name of declared) expect(await allow("strategist", `tool:${name}`, "invoke")).toBe(true);
+    expect(await allow("strategist", "tool:ledger_commit", "invoke")).toBe(false);
+    expect(await allow("strategist", "tool:registry_read", "invoke")).toBe(false); // the estate planner's tool
+    // The agent definition carries only this factory -- no second bundle can widen it silently.
+    const def = strategistAgent("test-model");
+    expect(def.toolFactories.map((f) => f.id)).toEqual(["fin/strategist"]);
+  });
+
+  test("Estate Planner: exactly the matrix's tools; findings only, no journal, no credentials", async () => {
+    const { estateTools } = await import("@fin/tools");
+    const { estatePlannerAgent } = await import("@fin/agents");
+    const declared = estateTools.definitions.map((d) => d.name).sort();
+    expect(declared).toEqual([...(rowFor("estate_planner").tools ?? [])].sort());
+    for (const name of declared) expect(name).not.toMatch(FORBIDDEN);
+    for (const name of declared) expect(await allow("estate_planner", `tool:${name}`, "invoke")).toBe(true);
+    expect(await allow("estate_planner", "tool:journal_write", "invoke")).toBe(false);
+    expect(await allow("estate_planner", "tool:run_scenario", "invoke")).toBe(false);
+    const def = estatePlannerAgent("test-model");
+    expect(def.toolFactories.map((f) => f.id)).toEqual(["fin/estate"]);
+  });
+
+  test("non-advisory principals hold no tools at all", async () => {
+    for (const p of ["assets_manager", "reconciliation", "tax_engine", "scheduler", "operator"] as const) {
+      expect(await allow(p, "tool:ledger_read_aggregates", "invoke")).toBe(false);
+      expect(await allow(p, "tool:journal_write", "invoke")).toBe(false);
+    }
+  });
+
   test.todo("Market Manager agent definition has no tool that returns account identifiers or balances beyond positions");
-  test.todo("Estate Planner agent definition has no credential or execution tool");
   test.todo("Auditor narrator receives the verdict and has no tool that computes figures");
   test.todo("Execution is the only handler holding a write-scoped credential binding (Phase 5)");
 });

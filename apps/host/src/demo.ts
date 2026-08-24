@@ -40,10 +40,62 @@ export function seedTaxProfile(dataDir: string): string | null {
   return file;
 }
 
+/**
+ * Demo estate plan (Phase 3): a fictional household -- one person, one
+ * revocable trust holding the rental property, and a deliberate
+ * beneficiary mismatch on the brokerage account so the hygiene audit
+ * has something honest to find.
+ */
+export function seedEstateFile(dataDir: string): string | null {
+  const file = path.join(dataDir, "estate.json");
+  if (fs.existsSync(file)) return null;
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      {
+        entities: [
+          { entity_id: "ent.demo.person", kind: "person", name: "Demo Person (fictional)" },
+          { entity_id: "ent.demo.trust", kind: "trust", name: "Demo Family Revocable Trust (fictional)" },
+        ],
+        plan: {
+          titling: [
+            { account_id: "acct.demobank.checking", owner: "ent.demo.person" },
+            { account_id: "acct.demobank.savings", owner: "ent.demo.person" },
+            { account_id: "acct.demobroker.taxable", owner: "ent.demo.person", beneficiaries: [{ name: "Demo Spouse", share: "1" }] },
+            { account_id: "acct.demobroker.ira", owner: "ent.demo.person", beneficiaries: [{ name: "Demo Spouse", share: "1" }] },
+            { account_id: "acct.demoproperty.rental", owner: "ent.demo.trust", in_trust: "ent.demo.trust" },
+          ],
+          documents: [
+            { kind: "will", description: "Pour-over will (executed copy)" },
+            { kind: "trust", description: "Demo Family Revocable Trust instrument" },
+          ],
+          executors: ["Demo Executor (fictional)"],
+          digital_access: "Sealed envelope in the fictional safe; password manager recovery kit with the executor.",
+        },
+        observed: {
+          titling: [
+            { account_id: "acct.demobank.checking", owner: "ent.demo.person", verified_at: "2026-07-01" },
+            { account_id: "acct.demobank.savings", owner: "ent.demo.person", verified_at: "2026-07-01" },
+            // The mismatch: the paperwork never got the spouse added.
+            { account_id: "acct.demobroker.taxable", owner: "ent.demo.person", beneficiaries: [], verified_at: "2026-07-01" },
+            { account_id: "acct.demobroker.ira", owner: "ent.demo.person", beneficiaries: [{ name: "Demo Spouse", share: "1" }], verified_at: "2026-07-01" },
+            { account_id: "acct.demoproperty.rental", owner: "ent.demo.trust", in_trust: "ent.demo.trust", verified_at: "2026-06-15" },
+          ],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  return file;
+}
+
 export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
   const written: string[] = [];
   const profile = seedTaxProfile(dataDir);
   if (profile !== null) written.push(profile);
+  const estate = seedEstateFile(dataDir);
+  if (estate !== null) written.push(estate);
   const registry = path.join(dataDir, "institutions.json");
   if (!fs.existsSync(registry)) {
     fs.writeFileSync(
@@ -53,6 +105,7 @@ export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
           institutions: [
             { institution_id: "inst.demobank", name: "Demo Bank (fictional)", adapter: "jsondrop" },
             { institution_id: "inst.demobroker", name: "Demo Brokerage (fictional)", adapter: "jsondrop" },
+            { institution_id: "inst.demoproperty", name: "Demo Property Records (fictional)", adapter: "jsondrop" },
           ],
         },
         null,
@@ -149,7 +202,27 @@ export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
     ],
   };
 
-  for (const [inst, body] of [["inst.demobank", bank], ["inst.demobroker", broker]] as const) {
+  // The rental property (Phase 3): appraised value as a `total` balance
+  // on an `other`-type account, titled in the demo trust -- the asset
+  // the slide-19 scenario sells.
+  const property = {
+    accounts: [
+      {
+        account_id: "acct.demoproperty.rental",
+        name: "Rental property, 12 Demo St (fictional)",
+        type: "other",
+        currency: "USD",
+        as_of: asOf,
+        balances: [{ balance_type: "total", amount: "480000.00" }],
+        transactions: [
+          // Monthly rent lands here so the property contributes income.
+          { txn_id: `rent-${day}`, posted_at: `${day}T00:00:00.000Z`, amount: "2400.00", type: "income", description: "RENT RECEIVED 12 DEMO ST" },
+        ],
+      },
+    ],
+  };
+
+  for (const [inst, body] of [["inst.demobank", bank], ["inst.demobroker", broker], ["inst.demoproperty", property]] as const) {
     const inbox = defaultInbox(dataDir, inst);
     fs.mkdirSync(inbox, { recursive: true });
     const file = path.join(inbox, `${day}.json`);

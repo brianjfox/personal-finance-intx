@@ -1,11 +1,15 @@
 import type { Principal } from "@fin/contracts";
 import type { WorkflowDefinition } from "@intx/workflow";
 
+import { buildChatWorkflow, CHAT_WORKFLOWS, REFERENCE_CHAT_MODEL } from "./chat";
+import { ESTATE_AUDIT_PRINCIPALS, estateAuditWorkflow } from "./estate-audit";
 import { NIGHTLY_PRINCIPALS, nightlyWorkflow } from "./nightly";
 import { buildTaxYearWorkflow, TAX_CHECK_PRINCIPALS, taxCheckWorkflow } from "./tax-year";
 
 export * from "./nightly";
 export * from "./tax-year";
+export * from "./chat";
+export * from "./estate-audit";
 export * from "./topology";
 export * from "./lint";
 export * from "./outcomes";
@@ -26,11 +30,16 @@ export const taxYearReference = buildTaxYearWorkflow({
   now: new Date("2026-01-01T00:00:00.000Z"),
 });
 
+/** The reference chat instances the static tests and lints walk. */
+export const chatReferences = CHAT_WORKFLOWS.map((spec) => buildChatWorkflow(spec.agent, REFERENCE_CHAT_MODEL));
+
 /** Every product workflow. The topology, capability and lint tests walk this list. */
 export const ALL_WORKFLOWS: readonly RegisteredWorkflow[] = [
   { definition: nightlyWorkflow, stepPrincipals: NIGHTLY_PRINCIPALS },
   { definition: taxYearReference.definition, stepPrincipals: taxYearReference.stepPrincipals },
   { definition: taxCheckWorkflow, stepPrincipals: TAX_CHECK_PRINCIPALS },
+  { definition: estateAuditWorkflow, stepPrincipals: ESTATE_AUDIT_PRINCIPALS },
+  ...chatReferences.map((c) => ({ definition: c.definition, stepPrincipals: c.stepPrincipals })),
 ];
 
 export function workflowById(id: string): RegisteredWorkflow {
