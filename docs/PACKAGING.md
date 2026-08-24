@@ -60,8 +60,7 @@ The default build is **ad-hoc signed**: it runs on this machine and is
 not distributable. To ship:
 
 1. Get a **Developer ID Application** certificate into the login
-   keychain (this machine currently has only an "Apple Development"
-   identity, which cannot notarize).
+   keychain (present on this machine since 2026-08-24: team UZHK52XR6P).
 2. Sign the sidecar and bundle with it:
    ```bash
    export SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
@@ -71,11 +70,20 @@ not distributable. To ship:
    The entitlements (`src-tauri/entitlements.plist`) already carry the
    hardened-runtime JIT exceptions the Bun binary needs — that is the
    usual notarization snag, pre-solved.
-3. Notarize and staple the dmg:
+3. Notarize and staple (credentials live in the keychain as the
+   `fin-notary` profile, created once with `xcrun notarytool
+   store-credentials`):
    ```bash
-   xcrun notarytool submit <dmg> --apple-id <id> --team-id <team> --password <app-specific> --wait
+   xcrun notarytool submit <dmg> --keychain-profile fin-notary --wait
    xcrun stapler staple <dmg>
+   xcrun stapler staple "<...>/Financial Interchange.app"
+   spctl --assess --type execute -v "<...>/Financial Interchange.app"   # accepted, Notarized Developer ID
    ```
+   First done 2026-08-24 (submission 6f1634d0, Accepted). Note for a
+   fully-offline install story: on the next release, staple the .app
+   BEFORE the dmg is packed (staple app -> rebuild dmg -> staple dmg);
+   the current stapled dmg + notarized app is fine whenever the
+   installing Mac can reach Apple once.
 
 ## What is deliberately NOT in the bundle
 
