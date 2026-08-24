@@ -5,9 +5,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, money, when, type Fact, type Finding, type NetWorth, type Position, type RunSummary, type Doc } from "./api";
+import { api, money, when, type Fact, type Finding, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "positions" | "tax" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -29,6 +29,7 @@ export function App() {
             ["queue", "Exceptions", queue.length],
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
+            ["tax", "Tax calendar", null],
             ["runs", "Nightly runs", null],
             ["documents", "Documents", null],
           ] as const
@@ -43,6 +44,7 @@ export function App() {
         {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
         {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
         {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
+        {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
         {page === "runs" && <Runs tick={tick} onChanged={refresh} />}
         {page === "documents" && <Documents tick={tick} />}
       </main>
@@ -251,6 +253,122 @@ function FactDrawer({ id, onClose, openFact }: { id: string; onClose: () => void
             <pre>{JSON.stringify(h.payload)}</pre>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// Phase 2: the tax calendar. Deadline gates, the running estimate, and
+// reserve coverage -- every figure clickable back to its facts.
+function TaxPage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [tax, setTax] = useState<TaxStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.tax().then(setTax).catch(() => setTax(null));
+  }, [tick]);
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (tax === null) return <p className="muted">Host unreachable.</p>;
+  if (tax.profile === null) {
+    return (
+      <>
+        <h2>Tax calendar</h2>
+        <p className="muted">
+          No tax profile. Write <code>tax-profile.json</code> into the data directory (rates, prior-year tax, the reserve
+          account) -- with your accountant -- and reload. The engine is an estimator, not tax advice.
+        </p>
+      </>
+    );
+  }
+  return (
+    <>
+      <h2>Tax calendar · {tax.year}</h2>
+      <p className="small muted">
+        Reserve account: {tax.profile.reserve_account} · safe harbour base {money(tax.profile.prior_year_tax)} · withholding{" "}
+        {money(tax.profile.withholding_annual)}/yr ·{" "}
+        {tax.runId !== null ? (
+          <>standing run <span className="small">{tax.runId}</span> ({tax.runStatus})</>
+        ) : (
+          <button disabled={busy} onClick={() => act(() => api.taxYearStart())}>Start the {tax.profile.tax_year} standing run</button>
+        )}
+      </p>
+      <div className="cards">
+        {tax.quarters.map((q) => (
+          <QuarterCard key={q.quarter} q={q} busy={busy} act={act} openFact={openFact} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function StageChip({ label, s }: { label: string; s: TaxStageStatus }) {
+  const pill =
+    s.state === "armed" ? "info" : s.state === "ran" ? (s.covered === false ? "high" : "low") : s.state === "failed" ? "critical" : "medium";
+  return (
+    <div className="small">
+      {label}: <span className={`pill ${pill}`}>{s.state}</span>
+      {s.state === "armed" && s.fire_at !== null && <span className="muted"> fires {when(s.fire_at)}</span>}
+      {s.covered !== null && <span className="muted">{s.covered ? " · covered by reserve" : " · reserve short -- escalated"}</span>}
+    </div>
+  );
+}
+
+function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>; openFact: (id: string) => void }) {
+  const [note, setNote] = useState("");
+  const f = q.estimate?.figures ?? null;
+  return (
+    <div className="card" style={{ minWidth: 320 }}>
+      <div className="label">Q{q.quarter} · period ends {q.period_end} · due {q.due}</div>
+      <div className="value">
+        {q.obligation !== null && q.obligation.amount !== null ? (
+          <FactLink id={q.obligation.fact_id} openFact={openFact}>{money(q.obligation.amount)}</FactLink>
+        ) : (
+          <span className="muted">—</span>
+        )}
+        {q.obligation?.superseded && <span className="small muted"> (corrected)</span>}
+      </div>
+      <StageChip label="pre-stage" s={q.pre} />
+      <StageChip label="deadline" s={q.due_stage} />
+      {q.estimate !== null && q.estimate.blocked.length > 0 && (
+        <div className="small pill high">estimate blocked: {q.estimate.blocked.join(", ")} provisional</div>
+      )}
+      {f !== null && (
+        <table className="small" style={{ marginTop: 8 }}>
+          <tbody>
+            <tr><td className="muted">income YTD</td><td className="num">{money(f.ordinary_income)}</td></tr>
+            <tr><td className="muted">gains ST / LT</td><td className="num">{money(f.st_gains)} / {money(f.lt_gains)}{f.basis_incomplete ? " (basis gaps)" : ""}</td></tr>
+            <tr><td className="muted">required cum.</td><td className="num">{money(f.required_cum)}</td></tr>
+            <tr><td className="muted">paid cum.</td><td className="num">{money(f.payments_cum)}</td></tr>
+            <tr><td className="muted">installment</td><td className="num"><b>{money(f.installment_due)}</b></td></tr>
+            {q.estimate!.reserve !== null && (
+              <tr>
+                <td className="muted">reserve</td>
+                <td className="num">
+                  {money(q.estimate!.reserve.balance)}{" "}
+                  {q.estimate!.reserve_ok ? <span className="pill low">covers</span> : <span className="pill critical">short {money(q.estimate!.reserve.shortfall)}</span>}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+      {(q.estimate?.wash_sales ?? []).map((w) => (
+        <div key={w.sale_txn_id} className="small muted">wash-sale watch: {w.symbol} loss {money(w.loss)}, ~{money(w.disallowed_estimate)} disallowed</div>
+      ))}
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxCheck(q.quarter, "pre"))}>Check now</button>
+        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxCheck(q.quarter, "due"))}>Deadline check</button>
+        <input placeholder="skip note (why)" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: 110 }} />
+        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxSkip(q.quarter, q.pre.state === "armed" ? "pre" : "due", note))}>Skip gate</button>
       </div>
     </div>
   );
