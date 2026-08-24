@@ -1,0 +1,16 @@
+{
+  "name": "@fin/host",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "fin-host: the embedded filesystem Interchange host for the Household Financial Interchange",
+  "scripts": {
+    "spike": "bun src/spike/cli.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@intx/agent": "0.3.0",
+    "@intx/workflow": "0.3.0",
+    "arktype": "2.1.29"
+  }
+}
