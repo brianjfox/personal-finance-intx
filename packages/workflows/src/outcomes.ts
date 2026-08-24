@@ -49,12 +49,14 @@ export function stepOutcomes(events: readonly WorkflowEvent[]): Record<string, S
 function parseInlineSentinel(ref: string): { gateId: string; branch: string } | null {
   if (!ref.startsWith("inline:")) return null;
   try {
-    const v = JSON.parse(ref.slice("inline:".length)) as { skipped?: boolean; gateId?: string; branch?: string; timedOut?: boolean };
-    if (v !== null && typeof v === "object" && v.skipped === true && typeof v.gateId === "string") {
+    const v = JSON.parse(ref.slice("inline:".length)) as { skipped?: boolean; gateId?: string; loopId?: string; branch?: string; timedOut?: boolean; outcome?: string };
+    if (v !== null && typeof v === "object" && v.skipped === true) {
       // A gate sentinel carries `branch`; a timed awaitSignal's routing
-      // sentinel carries `timedOut` instead (the pruned side is implied).
-      if (typeof v.branch === "string") return { gateId: v.gateId, branch: v.branch };
-      if (typeof v.timedOut === "boolean") return { gateId: v.gateId, branch: v.timedOut ? "timeout" : "signal" };
+      // sentinel carries `timedOut`; a loop's routing sentinel carries
+      // `loopId` + `outcome` (converged/exhausted).
+      if (typeof v.gateId === "string" && typeof v.branch === "string") return { gateId: v.gateId, branch: v.branch };
+      if (typeof v.gateId === "string" && typeof v.timedOut === "boolean") return { gateId: v.gateId, branch: v.timedOut ? "timeout" : "signal" };
+      if (typeof v.loopId === "string" && typeof v.outcome === "string") return { gateId: v.loopId, branch: v.outcome };
     }
   } catch {
     /* not a sentinel */
