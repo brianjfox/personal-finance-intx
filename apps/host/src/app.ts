@@ -39,9 +39,13 @@ import {
 } from "@fin/contracts";
 import {
   addInstitutionEntry,
+  defaultSecretStore,
+  ENABLEBANKING_SERVICE,
   loadInstitutions,
+  PLAID_SERVICE,
   removeInstitutionEntry,
   setInstitutionEnabled as setEnabledInRegistry,
+  updateInstitutionOptions,
   type InstitutionAdapter,
   type InstitutionEntry,
   type LoadedInstitutions,
@@ -74,6 +78,7 @@ import type { Agent, AgentDefinition, BaseEnv } from "@intx/agent";
 import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
+import { createConnectors, type ConnectorConfig } from "./connect";
 import { seedDemo } from "./demo";
 import { runBreakGlassExport, type BreakGlassResult } from "./export/break-glass";
 import { anthropicSourceFromEnv, createFinStepInvoker, createFsHost, type FsHost } from "./fs-host/index";
@@ -99,6 +104,8 @@ export interface AppOptions {
   inferenceSource?: () => InferenceSource;
   /** Model the chat definitions name (default FIN_MODEL or claude-sonnet-5). */
   model?: string;
+  /** Connector config (Plaid / Enable Banking): secret store, base-URL overrides (tests/mocks), redirect URL. */
+  connectors?: Partial<ConnectorConfig>;
 }
 
 export interface RunSummary {
@@ -168,6 +175,21 @@ export interface App {
   removeManagedAccount(institutionId: string, accountId: string): Promise<{ runId: string; status: string }>;
   /** One click of made-up data: seed the fictional household and run the first reconciliation. */
   seedDemoData(): Promise<{ institutions: number; runId: string; status: string }>;
+  /** Plaid, step 1: a Hosted Link session for the operator to open in the browser. */
+  connectPlaidStart(): Promise<{ link_token: string; hosted_link_url: string | null }>;
+  /**
+   * Plaid, step 2: exchange the finished Link session (or an explicit
+   * public_token) for the read-only access token, store it in the secret
+   * store, and reconcile. New entry by `name`, or a reconnect of an
+   * existing `institutionId`.
+   */
+  connectPlaidComplete(opts: { name?: string; institutionId?: string; linkToken?: string; publicToken?: string }): Promise<{ institution_id: string; runId: string; status: string }>;
+  /** Enable Banking: the banks available in a country (two-letter code). */
+  ebListBanks(country: string): Promise<Array<{ name: string; country: string }>>;
+  /** Enable Banking, step 1: start the bank's own consent page. New entry by `name`, or a reconnect of `institutionId`. */
+  connectEbStart(opts: { name?: string; institutionId?: string; country: string; bank: string; redirectUrl?: string }): Promise<{ url: string; state: string }>;
+  /** Enable Banking, step 2: the code from the redirect becomes a 90-180 day read-only session; store and reconcile. */
+  connectEbComplete(opts: { state: string; code: string }): Promise<{ institution_id: string; consent_until: string | null; runId: string; status: string }>;
   /** Start (or resume) a nightly run. Resolves when the run is terminal. */
   runNightly(opts?: { runId?: string; institutions?: string[] }): Promise<RunResult>;
   /** Resume every non-terminal run on disk (startup). */
@@ -259,6 +281,10 @@ export interface InstitutionOverview {
   accounts: InstitutionAccountRow[];
   /** Open `fetch_failed` findings for this institution, in plain words. */
   problems: string[];
+  /** For connector institutions: when the bank consent runs out (Enable Banking). */
+  consent_until: string | null;
+  /** For Enable Banking institutions: which bank, for the reconnect flow. */
+  aspsp: { name: string; country: string } | null;
 }
 
 export interface InstitutionsOverview {
@@ -276,6 +302,10 @@ export interface EstateStatus {
   lastAudit: unknown;
 }
 
+function isAspsp(v: unknown): v is { name: string; country: string } {
+  return typeof v === "object" && v !== null && typeof (v as Record<string, unknown>)["name"] === "string" && typeof (v as Record<string, unknown>)["country"] === "string";
+}
+
 export function createApp(opts: AppOptions): App {
   const dataDir = path.resolve(opts.dataDir);
   fs.mkdirSync(dataDir, { recursive: true });
@@ -283,8 +313,38 @@ export function createApp(opts: AppOptions): App {
   const ledger = openLedger(path.join(dataDir, "ledger.db"), { clock });
   const vault = createVault({ dir: path.join(dataDir, "vault"), ledger, clock });
 
+  // Connector credentials (Plaid, Enable Banking) resolve through one
+  // secret store: env + macOS Keychain by default, injected in tests.
+  const secrets = opts.connectors?.secrets ?? defaultSecretStore();
+  const connectorCfg: ConnectorConfig = {
+    secrets,
+    clock,
+    ...(opts.connectors?.plaidBaseUrl ?? process.env["FIN_PLAID_BASE_URL"]
+      ? { plaidBaseUrl: (opts.connectors?.plaidBaseUrl ?? process.env["FIN_PLAID_BASE_URL"]) as string }
+      : {}),
+    plaidEnvironment: opts.connectors?.plaidEnvironment ?? (process.env["FIN_PLAID_ENV"] === "sandbox" ? "sandbox" : "production"),
+    ...(opts.connectors?.ebBaseUrl ?? process.env["FIN_EB_BASE_URL"]
+      ? { ebBaseUrl: (opts.connectors?.ebBaseUrl ?? process.env["FIN_EB_BASE_URL"]) as string }
+      : {}),
+    ...(opts.connectors?.ebRedirectUrl !== undefined
+      ? { ebRedirectUrl: opts.connectors.ebRedirectUrl }
+      : process.env["FIN_EB_REDIRECT_URL"] !== undefined
+        ? { ebRedirectUrl: process.env["FIN_EB_REDIRECT_URL"] }
+        : {}),
+    ...(opts.connectors?.fetchImpl !== undefined ? { fetchImpl: opts.connectors.fetchImpl } : {}),
+  };
+  const connectors = createConnectors(connectorCfg);
+  const reloadRegistry = (): LoadedInstitutions => loadInstitutions(dataDir, undefined, secrets);
+  /** Registry options a new connector entry should carry (mock base URLs in tests, environment otherwise). */
+  const plaidEntryOptions = (): Record<string, unknown> =>
+    connectorCfg.plaidBaseUrl !== undefined ? { base_url: connectorCfg.plaidBaseUrl } : { environment: connectorCfg.plaidEnvironment };
+  const storeSecret = (service: string, account: string, value: string): void => {
+    if (secrets.set === undefined) throw new Error("the configured secret store cannot persist tokens");
+    secrets.set(service, account, value);
+  };
+
   let loaded: LoadedInstitutions =
-    opts.adapters !== undefined ? { entries: [], adapters: opts.adapters } : loadInstitutions(dataDir);
+    opts.adapters !== undefined ? { entries: [], adapters: opts.adapters } : reloadRegistry();
   const taxProfilePath = path.join(dataDir, "tax-profile.json");
   const taxProfile = (): TaxProfile | null => {
     if (!fs.existsSync(taxProfilePath)) return null;
@@ -443,7 +503,7 @@ export function createApp(opts: AppOptions): App {
     host,
     institutions: () => loaded,
     reloadInstitutions() {
-      loaded = loadInstitutions(dataDir);
+      loaded = reloadRegistry();
       return loaded;
     },
     institutionsOverview() {
@@ -492,6 +552,8 @@ export function createApp(opts: AppOptions): App {
           managed,
           accounts: rows,
           problems,
+          consent_until: typeof e.options?.["valid_until"] === "string" ? (e.options["valid_until"] as string) : null,
+          aspsp: isAspsp(e.options?.["aspsp"]) ? (e.options["aspsp"] as { name: string; country: string }) : null,
         };
       });
       return { institutions, hasFacts: nw.lines.length > 0 };
@@ -503,17 +565,17 @@ export function createApp(opts: AppOptions): App {
         ...(input.mode === "managed" ? { options: { managed: true } } : {}),
       });
       if (input.mode === "managed") initManagedInstitution(dataDir, entry.institution_id, clock());
-      loaded = loadInstitutions(dataDir);
+      loaded = reloadRegistry();
       return entry;
     },
     removeInstitution(institutionId) {
       const removed = removeInstitutionEntry(dataDir, institutionId);
-      if (removed) loaded = loadInstitutions(dataDir);
+      if (removed) loaded = reloadRegistry();
       return removed;
     },
     setInstitutionEnabled(institutionId, enabled) {
       const changed = setEnabledInRegistry(dataDir, institutionId, enabled);
-      if (changed) loaded = loadInstitutions(dataDir);
+      if (changed) loaded = reloadRegistry();
       return changed;
     },
     storeInstitutionFile(institutionId, filename, bytes) {
@@ -547,10 +609,66 @@ export function createApp(opts: AppOptions): App {
     },
     async seedDemoData() {
       seedDemo(dataDir, 1);
-      loaded = loadInstitutions(dataDir);
+      loaded = reloadRegistry();
       const runId = newId("nightly");
       const r = await runNightlyOnce({ runId });
       return { institutions: loaded.entries.length, runId, status: r.terminalStatus };
+    },
+    connectPlaidStart: () => connectors.plaidLinkStart(),
+    async connectPlaidComplete(o) {
+      const ex = await connectors.plaidExchange({
+        ...(o.linkToken !== undefined ? { linkToken: o.linkToken } : {}),
+        ...(o.publicToken !== undefined ? { publicToken: o.publicToken } : {}),
+      });
+      let institutionId = o.institutionId ?? null;
+      if (institutionId === null) {
+        const entry = addInstitutionEntry(dataDir, { name: o.name ?? "Bank (Plaid)", adapter: "plaid", options: plaidEntryOptions() });
+        institutionId = entry.institution_id;
+      } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "plaid")) {
+        throw new Error(`${institutionId} is not a Plaid connection`);
+      }
+      storeSecret(PLAID_SERVICE, `access_token:${institutionId}`, ex.accessToken);
+      if (ex.itemId !== null) updateInstitutionOptions(dataDir, institutionId, { item_id: ex.itemId });
+      loaded = reloadRegistry();
+      const run = await refreshInstitution(institutionId);
+      return { institution_id: institutionId, ...run };
+    },
+    ebListBanks: (country) => connectors.ebListBanks(country),
+    connectEbStart(o) {
+      return connectors.ebAuthStart({
+        name: o.name ?? "Bank (Enable Banking)",
+        ...(o.institutionId !== undefined ? { institutionId: o.institutionId } : {}),
+        country: o.country,
+        bank: o.bank,
+        ...(o.redirectUrl !== undefined ? { redirectUrl: o.redirectUrl } : {}),
+      });
+    },
+    async connectEbComplete(o) {
+      const pending = connectors.ebPending(o.state);
+      if (pending === null) throw new Error("unknown or expired connect attempt -- start the bank connection again");
+      const s = await connectors.ebSessionCreate(o.code);
+      let institutionId = pending.institutionId;
+      if (institutionId === null) {
+        const entry = addInstitutionEntry(dataDir, {
+          name: pending.name,
+          adapter: "enablebanking",
+          options: {
+            aspsp: pending.aspsp,
+            ...(connectorCfg.ebBaseUrl !== undefined ? { base_url: connectorCfg.ebBaseUrl } : {}),
+            ...(s.validUntil !== null ? { valid_until: s.validUntil } : {}),
+          },
+        });
+        institutionId = entry.institution_id;
+      } else {
+        if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "enablebanking")) {
+          throw new Error(`${institutionId} is not an Enable Banking connection`);
+        }
+        updateInstitutionOptions(dataDir, institutionId, { ...(s.validUntil !== null ? { valid_until: s.validUntil } : {}) });
+      }
+      storeSecret(ENABLEBANKING_SERVICE, `session:${institutionId}`, s.sessionId);
+      loaded = reloadRegistry();
+      const run = await refreshInstitution(institutionId);
+      return { institution_id: institutionId, consent_until: s.validUntil, ...run };
     },
     async runNightly(o = {}) {
       return runNightlyOnce(o);
