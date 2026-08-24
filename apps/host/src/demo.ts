@@ -12,8 +12,38 @@ import { defaultInbox } from "@fin/institutions";
 const ASOF1 = "2026-08-22T00:00:00.000Z";
 const ASOF2 = "2026-08-23T00:00:00.000Z";
 
+/**
+ * Demo tax profile (Phase 2): fictional rates, chosen with a fictional
+ * accountant. The reserve is the demo savings account, so the tax
+ * calendar's coverage checks read the same ledger the nightly fills.
+ */
+export function seedTaxProfile(dataDir: string): string | null {
+  const file = path.join(dataDir, "tax-profile.json");
+  if (fs.existsSync(file)) return null;
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      {
+        tax_year: 2026,
+        ordinary_rate: "0.24",
+        ltcg_rate: "0.15",
+        prior_year_tax: "18500",
+        prior_year_agi_over_150k: false,
+        withholding_annual: "12000",
+        reserve_account: "acct.demobank.savings",
+        prestage_lead_days: 30,
+      },
+      null,
+      2,
+    ),
+  );
+  return file;
+}
+
 export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
   const written: string[] = [];
+  const profile = seedTaxProfile(dataDir);
+  if (profile !== null) written.push(profile);
   const registry = path.join(dataDir, "institutions.json");
   if (!fs.existsSync(registry)) {
     fs.writeFileSync(

@@ -7,6 +7,10 @@
 //   fin-host queue   [--data DIR]                          print the exception queue
 //   fin-host resolve [--data DIR] <finding_id> <decision> [note]
 //   fin-host runs    [--data DIR]
+//   fin-host tax        [--data DIR]                       tax calendar status (profile, gates, obligations)
+//   fin-host tax-start  [--data DIR] [--year Y]            launch the standing tax-year run (use under `serve` normally)
+//   fin-host tax-check  [--data DIR] --q N --stage pre|due run one manual tax check now
+//   fin-host tax-skip   [--data DIR] --q N --stage pre|due [note]  skip a deadline gate (journaled)
 //
 // Default data dir: ~/Library/Application Support/FinInterchange (macOS) or $FIN_DATA_DIR.
 
@@ -121,6 +125,54 @@ async function main(argv: string[]): Promise<number> {
       app.close();
       return 0;
     }
+    case "tax": {
+      const app = createApp({ dataDir });
+      console.log(JSON.stringify(await app.taxStatus(), null, 2));
+      app.close();
+      return 0;
+    }
+    case "tax-start": {
+      // Starts the standing run and keeps the process alive so the timers
+      // are armed; under normal operation `serve` resumes and drives it.
+      const app = createApp({ dataDir });
+      const year = flags["year"] !== undefined ? Number(flags["year"]) : undefined;
+      const r = await app.startTaxYear(year !== undefined ? { year } : {});
+      console.log(JSON.stringify({ started: r.runId }, null, 2));
+      console.log("standing run is live in THIS process; Ctrl+C parks it (deadline gates survive restart)");
+      await new Promise<void>((resolve) => {
+        process.on("SIGINT", () => resolve());
+        process.on("SIGTERM", () => resolve());
+      });
+      app.close();
+      return 0;
+    }
+    case "tax-check": {
+      const q = Number(flags["q"] ?? flags["quarter"]);
+      const stage = flags["stage"];
+      if (!(q >= 1 && q <= 4) || (stage !== "pre" && stage !== "due")) {
+        console.error("usage: fin-host tax-check --q <1-4> --stage <pre|due>");
+        return 2;
+      }
+      const app = createApp({ dataDir });
+      const r = await app.runTaxCheck({ quarter: q as 1 | 2 | 3 | 4, stage });
+      const est = r.outputs["est_check"] as { figures?: unknown; reserve_ok?: boolean; blocked?: string[] } | undefined;
+      console.log(JSON.stringify({ runId: r.runId, status: r.terminalStatus, reserve_ok: est?.reserve_ok ?? null, blocked: est?.blocked ?? [], figures: est?.figures ?? null }, null, 2));
+      app.close();
+      return r.terminalStatus === "completed" ? 0 : 1;
+    }
+    case "tax-skip": {
+      const q = Number(flags["q"] ?? flags["quarter"]);
+      const stage = flags["stage"];
+      if (!(q >= 1 && q <= 4) || (stage !== "pre" && stage !== "due")) {
+        console.error("usage: fin-host tax-skip --q <1-4> --stage <pre|due> [note]");
+        return 2;
+      }
+      const app = createApp({ dataDir });
+      const r = await app.skipTaxDeadline({ quarter: q as 1 | 2 | 3 | 4, stage, note: rest.join(" "), decidedBy: process.env["USER"] ?? "operator" });
+      console.log(JSON.stringify(r, null, 2));
+      app.close();
+      return 0;
+    }
     case "serve": {
       const app = createApp({ dataDir });
       const resumed = await app.resumeInFlight();
@@ -136,7 +188,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      console.log("fin-host <init|nightly|queue|resolve|runs|serve> [--data DIR] ...");
+      console.log("fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|serve> [--data DIR] ...");
       return cmd === "help" ? 0 : 2;
   }
 }

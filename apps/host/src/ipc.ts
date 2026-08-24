@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
-import { ResolutionDecision } from "@fin/contracts";
+import { ResolutionDecision, TaxStage } from "@fin/contracts";
 import { type } from "arktype";
 
 import type { App } from "./app";
@@ -26,6 +26,10 @@ const ResolveBody = type({
   "note?": "string",
   "decided_by?": "string",
 });
+
+const TaxYearBody = type({ "year?": "number.integer >= 1990" });
+const TaxCheckBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage });
+const TaxSkipBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage, "note?": "string" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -66,6 +70,31 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/batches") return json(app.ledger.listBatches());
         if (p === "/api/institutions") return json(app.institutions().entries);
         if (p === "/api/runs") return json(await app.listRuns());
+        if (p === "/api/obligations") return json(views.obligations(app.ledger));
+        if (p === "/api/tax") return json(await app.taxStatus());
+        if (p === "/api/tax-year" && req.method === "POST") {
+          const body = TaxYearBody(await req.json().catch(() => ({})));
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.startTaxYear(body.year !== undefined ? { year: body.year } : {}), 202);
+        }
+        if (p === "/api/tax/check" && req.method === "POST") {
+          const body = TaxCheckBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          const r = await app.runTaxCheck({ quarter: body.quarter as 1 | 2 | 3 | 4, stage: body.stage });
+          return json({ runId: r.runId, status: r.terminalStatus });
+        }
+        if (p === "/api/tax/skip" && req.method === "POST") {
+          const body = TaxSkipBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(
+            await app.skipTaxDeadline({
+              quarter: body.quarter as 1 | 2 | 3 | 4,
+              stage: body.stage,
+              ...(body.note !== undefined ? { note: body.note } : {}),
+              decidedBy: operator,
+            }),
+          );
+        }
 
         let m = /^\/api\/fact\/([A-Za-z0-9_.:-]+)$/.exec(p);
         if (m !== null) {
