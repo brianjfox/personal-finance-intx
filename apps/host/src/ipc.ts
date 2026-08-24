@@ -49,6 +49,7 @@ const RemoveAccountBody = type({ account_id: "string > 0" });
 const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "string > 0", "link_token?": "string > 0", "public_token?": "string > 0" });
 const EbStartBody = type({ "name?": "string > 0", "institution_id?": "string > 0", country: /^[A-Z]{2}$/, bank: "string > 0", "redirect_url?": "string > 0" });
 const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
+const OpenBody = type({ url: /^https:\/\/[^\s]+$/ });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -95,6 +96,15 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json(app.addInstitution(body), 201);
         }
         if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
+        // The GUI runs inside the Tauri webview, where window.open() to an
+        // external site is blocked -- the host opens the default browser.
+        if (p === "/api/open" && req.method === "POST") {
+          const body = OpenBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+          const proc = Bun.spawn([cmd, body.url], { stdout: "ignore", stderr: "ignore" });
+          return json({ opened: (await proc.exited) === 0 });
+        }
         if (p === "/api/connect/plaid/start" && req.method === "POST") return json(await app.connectPlaidStart());
         if (p === "/api/connect/plaid/complete" && req.method === "POST") {
           const body = PlaidCompleteBody(await req.json().catch(() => ({})));

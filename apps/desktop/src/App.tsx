@@ -258,9 +258,23 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
   );
 }
 
+/**
+ * A link the webview can't open itself: the host opens the default
+ * browser, and the address stays visible as a copyable fallback.
+ */
+function ExternalLinkNote({ url }: { url: string }) {
+  return (
+    <div className="small muted" style={{ marginTop: 6, wordBreak: "break-all" }}>
+      Your browser should have opened. If not, copy this address into it:{" "}
+      <code style={{ userSelect: "all" }}>{url}</code>
+    </div>
+  );
+}
+
 /** Plaid Hosted Link: open the bank login in the browser, then finish here. */
 function PlaidConnect({ name, institutionId, onDone }: { name: string; institutionId: string | null; onDone: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const start = async () => {
@@ -269,7 +283,11 @@ function PlaidConnect({ name, institutionId, onDone }: { name: string; instituti
     try {
       const r = await api.plaidStart();
       setLinkToken(r.link_token);
-      if (r.hosted_link_url !== null) window.open(r.hosted_link_url, "_blank");
+      if (r.hosted_link_url === null) {
+        throw new Error("Plaid didn't return a Hosted Link address -- check that Hosted Link is enabled for your Plaid account.");
+      }
+      setLinkUrl(r.hosted_link_url);
+      await api.openExternal(r.hosted_link_url);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -305,6 +323,7 @@ function PlaidConnect({ name, institutionId, onDone }: { name: string; instituti
           {busy === "finish" ? "fetching your accounts…" : "2 · I've finished — fetch my accounts"}
         </button>
       </div>
+      {linkUrl !== null && <ExternalLinkNote url={linkUrl} />}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
@@ -316,6 +335,7 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
   const [banks, setBanks] = useState<Array<{ name: string; country: string }>>([]);
   const [bank, setBank] = useState(preset?.name ?? "");
   const [state, setState] = useState<string | null>(null);
+  const [consentUrl, setConsentUrl] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -345,7 +365,8 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
         bank,
       });
       setState(r.state);
-      window.open(r.url, "_blank");
+      setConsentUrl(r.url);
+      await api.openExternal(r.url);
     });
   const finish = () =>
     act("finish", async () => {
@@ -373,6 +394,7 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
           {busy === "start" ? "opening…" : "Open the bank's consent page"}
         </button>
       </div>
+      {consentUrl !== null && <ExternalLinkNote url={consentUrl} />}
       <div className="actions" style={{ marginTop: 6 }}>
         <input
           style={{ flex: 1 }}
