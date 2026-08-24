@@ -50,9 +50,11 @@ The shell reads it at spawn and passes it to the host's environment; the
 GUI process never sees key material, nothing writes it to disk, and
 revocation is deleting that one Keychain item. Without it, everything
 deterministic still works — only chat and model-drafted proposals need
-it. Institution access remains read-only file drops; when API connectors
-arrive, their read-only tokens follow the same Keychain pattern and the
-withdrawal scope must not exist on the key — absent, not unused.
+it. Institution access is read-only: file drops, plus the Plaid and Enable
+Banking connectors, whose read-only tokens follow the same Keychain
+pattern (services `fin-plaid` / `fin-enablebanking`; see
+docs/CONNECTORS.md). The withdrawal scope does not exist on any of these
+credentials — absent, not unused.
 
 ## Signing and distribution (§7.4)
 
