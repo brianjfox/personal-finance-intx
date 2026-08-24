@@ -44,6 +44,7 @@ export function App() {
         ))}
       </nav>
       <main>
+        <FirstRun tick={tick} />
         {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
         {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
         {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
@@ -55,6 +56,37 @@ export function App() {
         {page === "documents" && <Documents tick={tick} />}
       </main>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
+    </div>
+  );
+}
+
+// First-run wizard-lite (BUILD_PLAN §7.2): until an institution exists
+// and a nightly has run, say exactly what to do next.
+function FirstRun({ tick }: { tick: number }) {
+  const [state, setState] = useState<{ dataDir: string; institutions: number; facts: boolean } | null>(null);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [h, inst, nw] = await Promise.all([api.health(), api.institutions(), api.netWorth().catch(() => null)]);
+        setState({ dataDir: h.dataDir, institutions: inst.length, facts: (nw?.lines.length ?? 0) > 0 });
+      } catch {
+        setState(null);
+      }
+    })();
+  }, [tick]);
+  if (state === null || (state.institutions > 0 && state.facts)) return null;
+  return (
+    <div className="banner">
+      <b>Welcome.</b>{" "}
+      {state.institutions === 0 ? (
+        <>
+          Connect an institution read-only: list it in <code>{state.dataDir}/institutions.json</code> and drop an export into{" "}
+          <code>{state.dataDir}/institutions/&lt;id&gt;/inbox/</code> (JSON snapshot, or CSV with a column map). Or seed the
+          fictional demo: <code>fin-host init --demo 1</code>.
+        </>
+      ) : (
+        <>Institutions are configured — run the first reconciliation from the Nightly runs page.</>
+      )}
     </div>
   );
 }
@@ -750,12 +782,30 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
 
 function Documents({ tick }: { tick: number }) {
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [exported, setExported] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     api.documents().then(setDocs).catch(() => setDocs([]));
   }, [tick]);
+  const doExport = async () => {
+    setBusy(true);
+    try {
+      const r = await api.exportBreakGlass();
+      setExported(`${r.dir} (${r.files} files, ${r.documents} documents) -- open index.html there; print OPERATING-GUIDE.pdf`);
+    } catch (e) {
+      setExported(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
       <h2>Document vault</h2>
+      <p>
+        <button disabled={busy} onClick={() => void doExport()}>{busy ? "exporting…" : "Break-glass export"}</button>
+        <span className="small muted"> everything as CSV + PDF + originals, readable with no software from this project (deck slide 21)</span>
+      </p>
+      {exported !== null && <div className="banner">{exported}</div>}
       <table>
         <thead><tr><th>File</th><th>Kind</th><th>Source</th><th className="num">Bytes</th><th>Ingested</th><th>sha256</th></tr></thead>
         <tbody>

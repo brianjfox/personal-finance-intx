@@ -1,0 +1,16 @@
+[package]
+name = "financial-interchange"
+version = "0.1.0"
+description = "Household Financial Interchange - the Tauri shell around fin-host"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+# NOTE: no `strip = true` here -- on this macOS, stripping corrupts the
+# proc-macro dylibs' LINKEDIT ("mis-aligned LINKEDIT string pool") and
+# dyld refuses to load them mid-build.

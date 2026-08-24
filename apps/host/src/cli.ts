@@ -17,6 +17,7 @@
 //   fin-host decide     [--data DIR] <rec_id> approve|reject [--qty N] [--limit N] [note...]
 //   fin-host instructions [--data DIR]                     prepared (never sent) instructions
 //   fin-host revoke     [--data DIR] <instruction_id> [note...]
+//   fin-host export     [--data DIR] [--out DIR]            break-glass export: CSVs + documents + operating guide
 //   fin-host estate-audit [--data DIR]                     sync estate.json + hygiene audit
 //   fin-host scenario   [--data DIR] --subject S --date YYYY-MM-DD [--price N --basis N --depreciation N]
 //   fin-host projection [--data DIR] --years N [--seed S]
@@ -301,6 +302,14 @@ async function main(argv: string[]): Promise<number> {
       app.close();
       return 0;
     }
+    case "export": {
+      const app = createApp({ dataDir });
+      const r = app.exportBreakGlass(flags["out"] !== undefined ? { outDir: flags["out"] } : {});
+      console.log(JSON.stringify({ dir: r.dir, files: r.files.length, documents: r.documents }, null, 2));
+      console.log(`open ${r.dir}/index.html -- print OPERATING-GUIDE.pdf and keep it with the estate papers`);
+      app.close();
+      return 0;
+    }
     case "serve": {
       const app = createApp({ dataDir });
       const resumed = await app.resumeInFlight();
@@ -317,7 +326,7 @@ async function main(argv: string[]): Promise<number> {
     }
     default:
       console.log(
-        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|propose|approvals|decide|instructions|revoke|serve> [--data DIR] ...",
+        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|propose|approvals|decide|instructions|revoke|export|serve> [--data DIR] ...",
       );
       return cmd === "help" ? 0 : 2;
   }

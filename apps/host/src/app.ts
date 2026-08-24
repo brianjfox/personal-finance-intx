@@ -66,6 +66,7 @@ import type { Agent, AgentDefinition, BaseEnv } from "@intx/agent";
 import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
+import { runBreakGlassExport, type BreakGlassResult } from "./export/break-glass";
 import { anthropicSourceFromEnv, createFinStepInvoker, createFsHost, type FsHost } from "./fs-host/index";
 
 export interface AppOptions {
@@ -191,6 +192,8 @@ export interface App {
   listPreparedInstructions(): InstructionRow[];
   /** Revocable until sent -- and in Phase 4 nothing is ever sent. */
   revokeInstruction(opts: { instructionId: string; by?: string; note?: string }): { replayed: boolean };
+  /** The break-glass export (slide 21): CSVs, documents, the operating guide. */
+  exportBreakGlass(opts?: { outDir?: string }): BreakGlassResult;
   close(): void;
 }
 
@@ -649,6 +652,17 @@ export function createApp(opts: AppOptions): App {
     },
     listPreparedInstructions() {
       return listInstructions(ledger);
+    },
+    exportBreakGlass(o = {}) {
+      return runBreakGlassExport({
+        ledger,
+        vault,
+        dataDir,
+        outDir: o.outDir ?? path.join(dataDir, "exports"),
+        now: clock(),
+        estateFile: estateFile(),
+        operator: process.env["USER"] ?? "operator",
+      });
     },
     revokeInstruction(o) {
       const at = clock().toISOString();

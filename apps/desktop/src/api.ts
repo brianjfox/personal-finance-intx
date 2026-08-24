@@ -130,6 +130,9 @@ export const api = {
   decide: (recId: string, decision: "approve" | "reject", bound: { max_quantity?: string | null; limit_price?: string | null }, note: string) =>
     post<{ runId: string; signalId: string }>(`/api/recommendation/${recId}/decide`, { decision, bound, note }),
   revoke: (insId: string, note: string) => post<{ replayed: boolean }>(`/api/instruction/${insId}/revoke`, { note }),
+  exportBreakGlass: () => post<{ dir: string; files: number; documents: number }>("/api/export"),
+  health: () => get<{ ok: boolean; dataDir: string }>("/api/health"),
+  institutions: () => get<Array<{ institution_id: string; name: string; adapter: string }>>("/api/institutions"),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {
