@@ -1,0 +1,14 @@
+{
+  "name": "@fin/agents",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The advisory tier's model-backed agents (deck slide 8): Strategist and Estate Planner -- defineAgent definitions with scoped tool sets; the models narrate and propose, deterministic code computes",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@fin/contracts": "workspace:*",
+    "@fin/tools": "workspace:*",
+    "@intx/agent": "0.3.0"
+  }
+}
