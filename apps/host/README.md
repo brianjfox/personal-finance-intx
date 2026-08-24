@@ -17,8 +17,11 @@ src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, st
                      finding, tax calendar (status/check/skip), obligations
 src/cli.ts           fin-host init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|
                      chat|estate-audit|scenario|projection|propose|approvals|decide|
-                     instructions|revoke|serve
-src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes + a demo tax profile
+                     instructions|revoke|export|serve
+src/demo.ts          seedDemo(): fictional institutions as jsondrop inboxes + demo tax/estate/plan config
+src/export/
+  break-glass.ts     the slide-21 export: CSVs + vault originals + index.html + the operating guide
+  pdf.ts             dependency-free PDF 1.4 writer for OPERATING-GUIDE.pdf
 src/fs-host/
   paths.ts           data-dir layout + atomic write helper
   repo-store.ts      RepoStore: runs/<runId>/events.jsonl, atomic batch rewrite
