@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Financial Interchange",
+  "version": "0.1.0",
+  "identifier": "com.brianjfox.fininterchange",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "externalBin": ["binaries/fin-host"],
+    "resources": { "../dist": "gui" },
+    "icon": ["icons/icon.icns"],
+    "category": "Finance",
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "entitlements.plist",
+      "hardenedRuntime": true
+    }
+  }
+}
