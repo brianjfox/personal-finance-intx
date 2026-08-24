@@ -11,6 +11,10 @@
 //   fin-host tax-start  [--data DIR] [--year Y]            launch the standing tax-year run (use under `serve` normally)
 //   fin-host tax-check  [--data DIR] --q N --stage pre|due run one manual tax check now
 //   fin-host tax-skip   [--data DIR] --q N --stage pre|due [note]  skip a deadline gate (journaled)
+//   fin-host chat       [--data DIR] [--agent strategist|estate_planner] <message...>   (needs ANTHROPIC_API_KEY)
+//   fin-host estate-audit [--data DIR]                     sync estate.json + hygiene audit
+//   fin-host scenario   [--data DIR] --subject S --date YYYY-MM-DD [--price N --basis N --depreciation N]
+//   fin-host projection [--data DIR] --years N [--seed S]
 //
 // Default data dir: ~/Library/Application Support/FinInterchange (macOS) or $FIN_DATA_DIR.
 
@@ -173,6 +177,63 @@ async function main(argv: string[]): Promise<number> {
       app.close();
       return 0;
     }
+    case "chat": {
+      const message = rest.join(" ").trim();
+      if (message === "") {
+        console.error('usage: fin-host chat [--agent strategist|estate_planner] "<message>"');
+        return 2;
+      }
+      const agent = flags["agent"] === "estate_planner" ? "estate_planner" : "strategist";
+      const app = createApp({ dataDir });
+      await app.resumeInFlight();
+      const r = await app.sendChat({ agent, text: message, wait: true });
+      const turn = r.turn;
+      console.log(turn?.reply ?? "(no reply)");
+      for (const e of turn?.evidence ?? []) {
+        console.log(`\n[evidence: ${e.tool}] facts: ${e.fact_ids.slice(0, 6).join(", ")}${e.fact_ids.length > 6 ? ", ..." : ""}`);
+      }
+      if ((turn?.journal_ids.length ?? 0) > 0) console.log(`\n[journaled: ${(turn?.journal_ids ?? []).join(", ")}]`);
+      app.close();
+      // The standing chat run stays parked on disk; this process exits.
+      process.exit(0);
+    }
+    case "estate-audit": {
+      const app = createApp({ dataDir });
+      const r = await app.runEstateAudit();
+      console.log(JSON.stringify({ runId: r.runId, status: r.terminalStatus, audit: r.outputs["audit_estate"] ?? null }, null, 2));
+      const status = app.estateStatus();
+      console.log(JSON.stringify({ openEstateFindings: status.openFindings, entities: status.entities.length, titling: status.titling.length }, null, 2));
+      app.close();
+      return r.terminalStatus === "completed" ? 0 : 1;
+    }
+    case "scenario": {
+      const subject = flags["subject"];
+      const date = flags["date"];
+      if (subject === undefined || date === undefined) {
+        console.error("usage: fin-host scenario --subject <acct.subject> --date YYYY-MM-DD [--price N --basis N --depreciation N]");
+        return 2;
+      }
+      const app = createApp({ dataDir });
+      const r = app.runScenarioNow({
+        kind: "sell_asset",
+        subject,
+        sale_date: date,
+        ...(flags["price"] !== undefined ? { sale_price: flags["price"] } : {}),
+        ...(flags["basis"] !== undefined ? { cost_basis: flags["basis"] } : {}),
+        ...(flags["depreciation"] !== undefined ? { depreciation_taken: flags["depreciation"] } : {}),
+      });
+      console.log(JSON.stringify(r, null, 2));
+      app.close();
+      return 0;
+    }
+    case "projection": {
+      const years = Number(flags["years"] ?? "10");
+      const app = createApp({ dataDir });
+      const r = app.runProjectionNow({ years, ...(flags["seed"] !== undefined ? { seed: flags["seed"] } : {}) });
+      console.log(JSON.stringify(r, null, 2));
+      app.close();
+      return 0;
+    }
     case "serve": {
       const app = createApp({ dataDir });
       const resumed = await app.resumeInFlight();
@@ -188,7 +249,9 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      console.log("fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|serve> [--data DIR] ...");
+      console.log(
+        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|serve> [--data DIR] ...",
+      );
       return cmd === "help" ? 0 : 2;
   }
 }

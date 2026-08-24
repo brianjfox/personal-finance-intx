@@ -17,6 +17,7 @@ import {
   type ActionInvoker,
   type LoopFnRegistry,
   type RunResult,
+  type StepInvoker,
   type WorkflowAuthorizeFn,
   type WorkflowDefinition,
   type WorkflowEvent,
@@ -39,6 +40,8 @@ export interface FsHostOptions {
   dataDir: string;
   /** Action handler registry: `action({ handler })` refs resolve here. */
   actions: Record<string, ActionHandler>;
+  /** Model-backed `step` invoker (Phase 3). Absent -> steps fail loudly. */
+  invokeStep?: StepInvoker;
   /** Loop `while`/`carry` registry. */
   loopFns?: LoopFnRegistry;
   /** Workflow-level authorize. Defaults to allow-all; Phase 1 wires @intx/authz. */
@@ -137,11 +140,13 @@ export function createFsHost(opts: FsHostOptions): FsHost {
         blobs,
         directors,
         authorize,
-        invokeStep: async ({ agent }) => {
-          throw new Error(
-            `fs-host: model-backed step ${agent.id} is not supported yet (Phase 3)`,
-          );
-        },
+        invokeStep:
+          opts.invokeStep ??
+          (async ({ agent }) => {
+            throw new Error(
+              `fs-host: model-backed step ${agent.id} has no step invoker wired (pass FsHostOptions.invokeStep)`,
+            );
+          }),
         invokeAction,
         effects,
         spawnChild: async ({ definitionRef }) => {

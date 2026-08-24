@@ -11,13 +11,27 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { buildActions, quarterSpec, type ActionContext } from "@fin/actions";
+import {
+  buildActions,
+  monteCarlo,
+  quarterSpec,
+  resolveProjectionInputs,
+  runScenario,
+  type ActionContext,
+} from "@fin/actions";
 import {
   assertType,
+  EstateFile,
   newId,
   TAX_QUARTERS,
   TaxProfile,
+  type ChatAgent,
+  type ChatTurn,
   type Principal,
+  type ProjectionRequest,
+  type ProjectionResult,
+  type ScenarioRequest,
+  type ScenarioResult,
   type TaxQuarter,
   type TaxStage,
 } from "@fin/contracts";
@@ -27,8 +41,13 @@ import { createPolicyAuthorize, type PolicyDecision } from "@fin/policy";
 import { createVault, type Vault } from "@fin/vault";
 import {
   allStepPrincipals,
+  buildChatWorkflow,
   buildTaxYearWorkflow,
+  CHAT_WORKFLOWS,
+  chatWorkflowSpec,
   deadlineSignal,
+  ESTATE_AUDIT_ID,
+  estateAuditWorkflow,
   nightlyWorkflow,
   skipSignalId,
   stepOutcomes,
@@ -37,9 +56,11 @@ import {
   type FireAtOverrides,
   type StepOutcome,
 } from "@fin/workflows";
+import type { Agent, AgentDefinition, BaseEnv } from "@intx/agent";
+import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
-import { createFsHost, type FsHost } from "./fs-host/index";
+import { anthropicSourceFromEnv, createFinStepInvoker, createFsHost, type FsHost } from "./fs-host/index";
 
 export interface AppOptions {
   dataDir: string;
@@ -47,6 +68,12 @@ export interface AppOptions {
   /** Override the registry (tests). */
   adapters?: InstitutionAdapter[];
   pollMs?: number;
+  /** Test seam: a scripted agent instead of the real reactor+model. */
+  agentFactory?: (def: AgentDefinition<BaseEnv>, env: BaseEnv) => Promise<Agent>;
+  /** Test seam: the inference source resolver (default: Anthropic from env). */
+  inferenceSource?: () => InferenceSource;
+  /** Model the chat definitions name (default FIN_MODEL or claude-sonnet-5). */
+  model?: string;
 }
 
 export interface RunSummary {
@@ -113,7 +140,34 @@ export interface App {
   /** Deliver the operator's skip signal for a deadline gate (durable inbox; works while parked). */
   skipTaxDeadline(opts: { quarter: TaxQuarter; stage: TaxStage; note?: string; decidedBy?: string }): Promise<{ runId: string; signalId: string }>;
   taxStatus(): Promise<TaxStatus>;
+  /** The operator's estate plan from `<dataDir>/estate.json`, or null. */
+  estateFile(): EstateFile | null;
+  /** Run the estate hygiene audit (sync estate.json into registry facts, then plan-vs-reality checks). */
+  runEstateAudit(): Promise<RunResult>;
+  estateStatus(): EstateStatus;
+  /** Deterministic sell-asset scenario -- no model involved. */
+  runScenarioNow(req: ScenarioRequest): ScenarioResult;
+  /** Deterministic Monte Carlo -- no model involved. */
+  runProjectionNow(req: ProjectionRequest): ProjectionResult;
+  /**
+   * Send a message to an advisory agent's standing chat run (started
+   * lazily on the first message). With `wait`, resolves with the
+   * recorded ChatTurn; otherwise returns the message id to poll for.
+   */
+  sendChat(opts: { agent: ChatAgent; text: string; wait?: boolean; timeoutMs?: number }): Promise<{ message_id: string; turn: ChatTurn | null }>;
+  /** The recorded conversation, oldest first. */
+  chatTranscript(agent: ChatAgent): ChatTurn[];
+  activeChatRun(agent: ChatAgent): Promise<{ runId: string } | null>;
   close(): void;
+}
+
+export interface EstateStatus {
+  configured: boolean;
+  entities: Array<{ subject: string; fact_id: string; payload: unknown }>;
+  titling: Array<{ subject: string; fact_id: string; payload: unknown }>;
+  plan: EstateFile["plan"] | null;
+  openFindings: number;
+  lastAudit: unknown;
 }
 
 export function createApp(opts: AppOptions): App {
@@ -130,8 +184,14 @@ export function createApp(opts: AppOptions): App {
     if (!fs.existsSync(taxProfilePath)) return null;
     return assertType(TaxProfile, JSON.parse(fs.readFileSync(taxProfilePath, "utf8")), "tax-profile.json");
   };
-  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile };
+  const estateFilePath = path.join(dataDir, "estate.json");
+  const estateFile = (): EstateFile | null => {
+    if (!fs.existsSync(estateFilePath)) return null;
+    return assertType(EstateFile, JSON.parse(fs.readFileSync(estateFilePath, "utf8")), "estate.json");
+  };
+  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile };
   const actions = buildActions(actx);
+  const model = opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
 
   // Every policy decision lands in the access log; denials are loud.
   const onDecision = (d: PolicyDecision): void => {
@@ -147,9 +207,28 @@ export function createApp(opts: AppOptions): App {
   };
   const authorize = createPolicyAuthorize({ stepPrincipals: allStepPrincipals(), onDecision });
 
+  // Model-backed steps (Phase 3): every completed chat turn lands in the
+  // outbox as a typed ChatTurn, idempotent by message id.
+  const invokeStep = createFinStepInvoker({
+    dataDir,
+    actx,
+    authorize,
+    source: opts.inferenceSource ?? anthropicSourceFromEnv,
+    onTurn: (turn) => {
+      ledger.emitEvent({
+        id: `chat:${turn.agent}:${turn.message_id}`,
+        kind: "chat.turn",
+        subject: `chat.${turn.agent}`,
+        payload: turn,
+      });
+    },
+    ...(opts.agentFactory !== undefined ? { agentFactory: opts.agentFactory } : {}),
+  });
+
   const host = createFsHost({
     dataDir,
     actions,
+    invokeStep,
     authorize,
     clock,
     ...(opts.pollMs !== undefined ? { pollMs: opts.pollMs } : {}),
@@ -162,9 +241,15 @@ export function createApp(opts: AppOptions): App {
     const m = /^taxyear(\d{4})_/.exec(runId);
     return m === null ? null : Number(m[1]);
   };
+  const chatSpecOf = (runId: string) => CHAT_WORKFLOWS.find((s) => runId.startsWith(`${s.runIdPrefix}_`)) ?? null;
+  /** Runs that live indefinitely: driven without awaiting, resumed as running. */
+  const isStandingRun = (runId: string): boolean => taxYearOf(runId) !== null || chatSpecOf(runId) !== null;
   function workflowOf(runId: string): string {
     if (runId.startsWith("nightly")) return nightlyWorkflow.id;
     if (runId.startsWith("taxcheck")) return taxCheckWorkflow.id;
+    if (runId.startsWith("estateaudit")) return ESTATE_AUDIT_ID;
+    const chat = chatSpecOf(runId);
+    if (chat !== null) return chat.workflowId;
     const year = taxYearOf(runId);
     if (year !== null) return taxYearWorkflowId(year);
     return "unknown";
@@ -172,6 +257,9 @@ export function createApp(opts: AppOptions): App {
   function definitionFor(runId: string): WorkflowDefinition | null {
     if (runId.startsWith("nightly")) return nightlyWorkflow;
     if (runId.startsWith("taxcheck")) return taxCheckWorkflow;
+    if (runId.startsWith("estateaudit")) return estateAuditWorkflow;
+    const chat = chatSpecOf(runId);
+    if (chat !== null) return buildChatWorkflow(chat.agent, model).definition;
     const year = taxYearOf(runId);
     if (year !== null) {
       // Rebuilding with the current clock is safe: gates already parked
@@ -242,10 +330,10 @@ export function createApp(opts: AppOptions): App {
         const s = await summarize(runId);
         if (s.status !== "running") continue;
         const def = definitionFor(runId) ?? nightlyWorkflow;
-        if (taxYearOf(runId) !== null) {
-          // A standing run: start driving it (parked gates re-arm their
-          // timers) and report it as running -- it may stay parked for
-          // months and must not block startup.
+        if (isStandingRun(runId)) {
+          // A standing run (tax year, chat): start driving it (parked
+          // gates re-arm) and report it as running -- it may stay parked
+          // for months and must not block startup.
           drive(def, runId);
           out.push({ ...s, status: "running" });
           continue;
@@ -404,8 +492,101 @@ export function createApp(opts: AppOptions): App {
         quarters,
       };
     },
+    estateFile,
+    async runEstateAudit() {
+      const runId = `estateaudit_${newId("r").slice(2)}`;
+      return host.run(estateAuditWorkflow, { runId, triggerPayload: { run_key: runId } }).complete;
+    },
+    estateStatus() {
+      const estate = estateFile();
+      const entities = ledger.asOf({ kind: "entity" }).map((f) => ({ subject: f.subject, fact_id: f.id, payload: f.payload }));
+      const titling = ledger.asOf({ kind: "titling" }).map((f) => ({ subject: f.subject, fact_id: f.id, payload: f.payload }));
+      const estateCodes = new Set(["titling_gap", "beneficiary_mismatch", "estate_doc_missing", "executor_gap", "advisory_note"]);
+      const openFindings = ledger.openFindings({ requiresHuman: true }).filter((f) => estateCodes.has(f.code)).length;
+      const lastAudit = ledger
+        .eventsSince(0, 10_000)
+        .filter((e) => e.kind === "estate.audited")
+        .at(-1) ?? null;
+      return { configured: estate !== null, entities, titling, plan: estate?.plan ?? null, openFindings, lastAudit };
+    },
+    runScenarioNow(req) {
+      return runScenario({ ledger, taxProfile: taxProfile(), estateFile: estateFile(), now: clock() }, req);
+    },
+    runProjectionNow(req) {
+      const nw = views.netWorth(ledger);
+      const inputs = resolveProjectionInputs(req, { startValue: nw.net_worth, evidence: nw.lines.flatMap((l) => l.fact_ids) }, clock().toISOString());
+      return monteCarlo(inputs);
+    },
+    async activeChatRun(agent) {
+      const spec = chatWorkflowSpec(agent);
+      for (const runId of host.listRuns()) {
+        if (!runId.startsWith(`${spec.runIdPrefix}_`)) continue;
+        const s = await summarize(runId);
+        if (s.status === "running") return { runId };
+      }
+      return null;
+    },
+    async sendChat(o) {
+      const spec = chatWorkflowSpec(o.agent);
+      const messageId = newId("msg");
+      const active = await this.activeChatRun(o.agent);
+      if (active === null) {
+        const runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
+        drive(buildChatWorkflow(o.agent, model).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
+      } else {
+        // Deliver on the step's CURRENT input channel: the reserved
+        // signal name of the newest input park not yet consumed. While a
+        // turn is in flight there is no open channel -- poll until the
+        // re-arm parks it (or time out as "busy").
+        const channel = await openInputChannel(active.runId, spec.stepId, o.timeoutMs ?? 30_000);
+        host.deliver(active.runId, channel, { text: o.text, message_id: messageId }, messageId);
+      }
+      if (o.wait === false) return { message_id: messageId, turn: null };
+      const turn = await waitForTurn(o.agent, messageId, o.timeoutMs ?? 240_000);
+      return { message_id: messageId, turn };
+    },
+    chatTranscript(agent) {
+      return ledger
+        .eventsSince(0, 10_000)
+        .filter((e) => e.kind === "chat.turn" && e.subject === `chat.${agent}`)
+        .map((e) => e.payload as ChatTurn);
+    },
     close() {
       ledger.close();
     },
   };
+
+  async function openInputChannel(runId: string, stepId: string, timeoutMs: number): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const events = await host.readLog(runId);
+      const received = new Set<string>();
+      const awaited: string[] = [];
+      for (const e of events) {
+        if (e.kind === "SignalReceived") received.add((e as { signalName: string }).signalName);
+        if (e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === stepId && (e as { parkKind?: string }).parkKind === "input") {
+          awaited.push((e as { signalName: string }).signalName);
+        }
+      }
+      const open = awaited.filter((n) => !received.has(n)).at(-1);
+      if (open !== undefined) return open;
+      if (Date.now() > deadline) {
+        throw new Error(`chat: ${runId} has no open input channel (a turn is still in flight); try again shortly`);
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+
+  async function waitForTurn(agent: ChatAgent, messageId: string, timeoutMs: number): Promise<ChatTurn> {
+    const evtId = `chat:${agent}:${messageId}`;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const hit = ledger
+        .eventsSince(0, 10_000)
+        .find((e) => e.kind === "chat.turn" && e.id === evtId);
+      if (hit !== undefined) return hit.payload as ChatTurn;
+      if (Date.now() > deadline) throw new Error(`chat: no reply for ${messageId} within ${String(timeoutMs)}ms; the turn may still be running -- poll the transcript`);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
 }
