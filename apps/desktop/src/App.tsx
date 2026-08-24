@@ -26,7 +26,7 @@ export function App() {
         <h1>Interchange · Household</h1>
         {(
           [
-            ["queue", "Exceptions", queue.length],
+            ["queue", "Queue", queue.length],
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
             ["tax", "Tax calendar", null],
@@ -133,6 +133,8 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
   );
 }
 
+// The home screen (deck slide 19): approvals first, exceptions below.
+// Chat is a tool inside the product, not the product.
 function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
   const [items, setItems] = useState<Finding[]>([]);
   useEffect(() => {
@@ -140,11 +142,138 @@ function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () 
   }, [tick]);
   return (
     <>
+      <ApprovalsSection tick={tick} onChanged={onChanged} openFact={openFact} />
       <h2>Exception queue</h2>
       {items.length === 0 && <p className="muted">Nothing needs you. Every account reconciled clean.</p>}
       {items.map((f) => (
         <QueueItem key={f.id} f={f} onChanged={onChanged} openFact={openFact} />
       ))}
+      <InstructionsSection tick={tick} onChanged={onChanged} />
+    </>
+  );
+}
+
+// Phase 4: the approval queue. Scoped to one proposal id, bounded,
+// expiring; auditor-cleared before it ever reaches you.
+function ApprovalsSection({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [queue, setQueue] = useState<import("./api").QueuedApproval[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.approvals().then(setQueue).catch(() => setQueue([]));
+  }, [tick]);
+  const propose = async () => {
+    setBusy(true);
+    try {
+      await api.propose();
+      onChanged();
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <h2>Approval queue</h2>
+      <p>
+        <button disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
+        <span className="small muted"> drift vs the written plan · auditor re-runs every figure · execution stays disabled</span>
+      </p>
+      {queue.length === 0 && <p className="muted">No proposals await your signature.</p>}
+      {queue.map((q) => (
+        <ApprovalItem key={q.recommendation.id} q={q} onChanged={onChanged} openFact={openFact} />
+      ))}
+    </>
+  );
+}
+
+function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApproval; onChanged: () => void; openFact: (id: string) => void }) {
+  const rec = q.recommendation;
+  const [qty, setQty] = useState(rec.action.quantity ?? "");
+  const [limit, setLimit] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const decide = async (decision: "approve" | "reject") => {
+    setBusy(true);
+    try {
+      await api.decide(rec.id, decision, { max_quantity: qty || null, limit_price: limit || null }, note);
+      onChanged();
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="queue-item">
+      <div className="head">
+        <span className="pill info">proposal</span>
+        <span className="code">
+          {rec.action.verb} {rec.action.quantity} {rec.action.instrument} · ~{money(rec.action.amount?.amount ?? null)}
+        </span>
+        <span className="muted small">
+          {rec.subject} · Auditor: cleared (attempt {q.verdict.attempt}) · expires {when(rec.expires)}
+        </span>
+      </div>
+      <div className="summary">{rec.thesis}</div>
+      <div className="small muted">
+        {rec.action.detail} · confidence {(rec.confidence * 100).toFixed(0)}%
+        {(rec.tax_lots ?? []).length > 0 && <> · lots: {(rec.tax_lots ?? []).map((l) => `${l.lot_id} (${l.treatment})`).join(", ")}</>}
+      </div>
+      <div className="small" style={{ marginTop: 4 }}>
+        evidence:{" "}
+        {rec.evidence.slice(0, 6).map((id) => (
+          <FactLink key={id} id={id} openFact={openFact}><span className="muted">{id.slice(0, 12)}… </span></FactLink>
+        ))}
+        {rec.evidence.length > 6 && <span className="muted">(+{rec.evidence.length - 6})</span>}
+      </div>
+      <div className="actions">
+        <input style={{ width: 90 }} title="max quantity" value={qty} onChange={(e) => setQty(e.target.value)} />
+        <input style={{ width: 90 }} placeholder="limit price" value={limit} onChange={(e) => setLimit(e.target.value)} />
+        <input placeholder="note (why)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <button disabled={busy} onClick={() => void decide("approve")}>Approve (scoped, expiring)</button>
+        <button disabled={busy} className="secondary" onClick={() => void decide("reject")}>Reject</button>
+      </div>
+    </div>
+  );
+}
+
+// Prepared -- never sent. Place any order yourself; revoke here any time.
+function InstructionsSection({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+  const [rows, setRows] = useState<import("./api").InstructionRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.instructions().then(setRows).catch(() => setRows([]));
+  }, [tick]);
+  if (rows.length === 0) return null;
+  const revoke = async (id: string) => {
+    setBusy(true);
+    try {
+      await api.revoke(id, "revoked from the queue");
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <h2>Prepared orders</h2>
+      <p className="small muted">Execution is disabled: these are prepared, never sent. Place them yourself; the nightly reconciles the fill.</p>
+      <table>
+        <thead><tr><th>Instruction</th><th>Order</th><th>Bound</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+        <tbody>
+          {rows.map((i) => (
+            <tr key={i.id}>
+              <td className="small">{i.id}</td>
+              <td>{i.action.verb} {i.action.instrument}</td>
+              <td className="small">≤ {i.bound.max_quantity ?? "?"} {i.bound.limit_price != null ? `@ limit ${i.bound.limit_price}` : ""}</td>
+              <td><span className={`pill ${i.current_status === "prepared" ? "info" : "medium"}`}>{i.current_status}</span></td>
+              <td className="small">{when(i.expires)}</td>
+              <td>{i.current_status === "prepared" && <button disabled={busy} className="secondary" onClick={() => void revoke(i.id)}>Revoke</button>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </>
   );
 }
