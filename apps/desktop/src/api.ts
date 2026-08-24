@@ -91,6 +91,19 @@ export interface InstructionRow {
   issued_at: string; expires: string; status: string; current_status: string;
 }
 
+export interface InstitutionAccountRow {
+  account_id: string; name: string; type: string; currency: string;
+  value: string | null; observed_at: string | null; closed: boolean;
+}
+export interface InstitutionOverview {
+  institution_id: string; name: string; adapter: string; enabled: boolean; managed: boolean;
+  accounts: InstitutionAccountRow[]; problems: string[];
+}
+export interface InstitutionsOverview { institutions: InstitutionOverview[]; hasFacts: boolean }
+export interface ManagedAccount {
+  account_id: string; name: string; type: string; currency: string; value: string; updated_at: string; closed_at?: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
@@ -132,7 +145,24 @@ export const api = {
   revoke: (insId: string, note: string) => post<{ replayed: boolean }>(`/api/instruction/${insId}/revoke`, { note }),
   exportBreakGlass: () => post<{ dir: string; files: number; documents: number }>("/api/export"),
   health: () => get<{ ok: boolean; dataDir: string }>("/api/health"),
-  institutions: () => get<Array<{ institution_id: string; name: string; adapter: string }>>("/api/institutions"),
+  institutions: () => get<Array<{ institution_id: string; name: string; adapter: string; enabled?: boolean }>>("/api/institutions"),
+  institutionsOverview: () => get<InstitutionsOverview>("/api/institutions-overview"),
+  addInstitution: (name: string, mode: "managed" | "files") =>
+    post<{ institution_id: string; name: string; adapter: string }>("/api/institutions", { name, mode }),
+  deleteInstitution: (id: string) => post<{ removed: boolean }>(`/api/institution/${id}/delete`),
+  setInstitutionEnabled: (id: string, enabled: boolean) => post<{ changed: boolean }>(`/api/institution/${id}/enabled`, { enabled }),
+  refreshInstitution: (id: string) => post<{ runId: string; status: string }>(`/api/institution/${id}/refresh`),
+  uploadInstitutionFile: async (id: string, filename: string, bytes: ArrayBuffer) => {
+    const r = await fetch(`/api/institution/${id}/upload?filename=${encodeURIComponent(filename)}`, { method: "POST", body: bytes });
+    if (!r.ok) throw new Error(`upload: ${r.status} ${await r.text()}`);
+    return (await r.json()) as { filename: string; runId: string; status: string; problems: string[] };
+  },
+  managedAccounts: (id: string) => get<ManagedAccount[]>(`/api/institution/${id}/accounts`),
+  saveManagedAccount: (id: string, input: { account_id?: string; name: string; type: string; currency?: string; value: string }) =>
+    post<{ account: ManagedAccount; runId: string; status: string }>(`/api/institution/${id}/account`, input),
+  removeManagedAccount: (id: string, accountId: string) =>
+    post<{ runId: string; status: string }>(`/api/institution/${id}/remove-account`, { account_id: accountId }),
+  seedDemo: () => post<{ institutions: number; runId: string; status: string }>("/api/demo"),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {
