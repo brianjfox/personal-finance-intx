@@ -37,7 +37,15 @@ import {
   type TaxQuarter,
   type TaxStage,
 } from "@fin/contracts";
-import { loadInstitutions, type InstitutionAdapter, type LoadedInstitutions } from "@fin/institutions";
+import {
+  addInstitutionEntry,
+  loadInstitutions,
+  removeInstitutionEntry,
+  setInstitutionEnabled as setEnabledInRegistry,
+  type InstitutionAdapter,
+  type InstitutionEntry,
+  type LoadedInstitutions,
+} from "@fin/institutions";
 import { approvalQueue, listInstructions, markInstruction, openLedger, verdictsFor, views, type Ledger, type QueuedApproval, type InstructionRow } from "@fin/ledger";
 import { createPolicyAuthorize, type PolicyDecision } from "@fin/policy";
 import { createVault, type Vault } from "@fin/vault";
@@ -66,8 +74,18 @@ import type { Agent, AgentDefinition, BaseEnv } from "@intx/agent";
 import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
+import { seedDemo } from "./demo";
 import { runBreakGlassExport, type BreakGlassResult } from "./export/break-glass";
 import { anthropicSourceFromEnv, createFinStepInvoker, createFsHost, type FsHost } from "./fs-host/index";
+import {
+  closeManagedAccount,
+  initManagedInstitution,
+  isManaged,
+  readManagedAccounts,
+  upsertManagedAccount,
+  type ManagedAccount,
+  type UpsertManagedInput,
+} from "./managed";
 
 export interface AppOptions {
   dataDir: string;
@@ -126,6 +144,30 @@ export interface App {
   readonly host: FsHost;
   institutions(): LoadedInstitutions;
   reloadInstitutions(): LoadedInstitutions;
+  /** Everything the Institutions page shows: registry entries joined with ledger accounts and open fetch problems. */
+  institutionsOverview(): InstitutionsOverview;
+  /**
+   * Create a connection from the GUI. `managed` = the operator types
+   * values into forms (the host writes the snapshots); `files` = export
+   * files are uploaded into the inbox. Both are jsondrop underneath.
+   */
+  addInstitution(input: { name: string; mode: "managed" | "files" }): InstitutionEntry;
+  /** Remove a connection from the registry. Ledger history and inbox files stay -- nothing is erased. */
+  removeInstitution(institutionId: string): boolean;
+  /** Pause/resume a connection without losing its configuration or history. */
+  setInstitutionEnabled(institutionId: string, enabled: boolean): boolean;
+  /** Store an uploaded export file into the institution's inbox; call `refreshInstitution` after. */
+  storeInstitutionFile(institutionId: string, filename: string, bytes: Uint8Array): { filename: string };
+  /** Reconcile one institution now (a nightly scoped to it). */
+  refreshInstitution(institutionId: string): Promise<{ runId: string; status: string }>;
+  /** The managed (typed-in) accounts of a managed institution. */
+  managedAccounts(institutionId: string): ManagedAccount[];
+  /** Add or update a managed account, then reconcile that institution. */
+  saveManagedAccount(institutionId: string, input: UpsertManagedInput): Promise<{ account: ManagedAccount; runId: string; status: string }>;
+  /** Remove a managed account: it is observed at 0 (history stays), then reconciled. */
+  removeManagedAccount(institutionId: string, accountId: string): Promise<{ runId: string; status: string }>;
+  /** One click of made-up data: seed the fictional household and run the first reconciliation. */
+  seedDemoData(): Promise<{ institutions: number; runId: string; status: string }>;
   /** Start (or resume) a nightly run. Resolves when the run is terminal. */
   runNightly(opts?: { runId?: string; institutions?: string[] }): Promise<RunResult>;
   /** Resume every non-terminal run on disk (startup). */
@@ -195,6 +237,34 @@ export interface App {
   /** The break-glass export (slide 21): CSVs, documents, the operating guide. */
   exportBreakGlass(opts?: { outDir?: string }): BreakGlassResult;
   close(): void;
+}
+
+export interface InstitutionAccountRow {
+  account_id: string;
+  name: string;
+  type: string;
+  currency: string;
+  /** Latest ledger value (net-worth line), or the typed-in value when no nightly has run yet. */
+  value: string | null;
+  observed_at: string | null;
+  closed: boolean;
+}
+
+export interface InstitutionOverview {
+  institution_id: string;
+  name: string;
+  adapter: InstitutionEntry["adapter"];
+  enabled: boolean;
+  managed: boolean;
+  accounts: InstitutionAccountRow[];
+  /** Open `fetch_failed` findings for this institution, in plain words. */
+  problems: string[];
+}
+
+export interface InstitutionsOverview {
+  institutions: InstitutionOverview[];
+  /** True once the ledger holds any account line at all. */
+  hasFacts: boolean;
 }
 
 export interface EstateStatus {
@@ -350,6 +420,22 @@ export function createApp(opts: AppOptions): App {
     return p;
   }
 
+  function runNightlyOnce(o: { runId?: string; institutions?: string[] } = {}): Promise<RunResult> {
+    const runId = o.runId ?? newId("nightly");
+    const run = host.run(nightlyWorkflow, {
+      runId,
+      triggerPayload: { run_key: runId, ...(o.institutions !== undefined ? { institutions: o.institutions } : {}) },
+    });
+    return run.complete;
+  }
+
+  /** Reconcile one institution and report the run plainly (used after every GUI edit/upload). */
+  async function refreshInstitution(institutionId: string): Promise<{ runId: string; status: string }> {
+    const runId = newId("nightly");
+    const r = await runNightlyOnce({ runId, institutions: [institutionId] });
+    return { runId, status: r.terminalStatus };
+  }
+
   return {
     dataDir,
     ledger,
@@ -360,13 +446,114 @@ export function createApp(opts: AppOptions): App {
       loaded = loadInstitutions(dataDir);
       return loaded;
     },
-    async runNightly(o = {}) {
-      const runId = o.runId ?? newId("nightly");
-      const run = host.run(nightlyWorkflow, {
-        runId,
-        triggerPayload: { run_key: runId, ...(o.institutions !== undefined ? { institutions: o.institutions } : {}) },
+    institutionsOverview() {
+      const accts = views.accounts(ledger);
+      const nw = views.netWorth(ledger);
+      const lineByAccount = new Map(nw.lines.map((l) => [l.account_id, l]));
+      const open = ledger.openFindings();
+      const institutions = loaded.entries.map((e) => {
+        const managed = isManaged(e);
+        const managedList = managed ? readManagedAccounts(dataDir, e.institution_id) : [];
+        const closedIds = new Set(managedList.filter((a) => a.closed_at !== undefined).map((a) => a.account_id));
+        const rows: InstitutionAccountRow[] = accts
+          .filter((a) => a.institution_id === e.institution_id)
+          .map((a) => {
+            const line = lineByAccount.get(a.account_id);
+            return {
+              account_id: a.account_id,
+              name: a.name,
+              type: a.type,
+              currency: a.currency,
+              value: line?.value ?? null,
+              observed_at: line?.observed_at ?? a.observed_at,
+              closed: closedIds.has(a.account_id),
+            };
+          });
+        // Managed accounts typed in but not yet reconciled into the ledger.
+        for (const m of managedList) {
+          if (!rows.some((r) => r.account_id === m.account_id)) {
+            rows.push({
+              account_id: m.account_id,
+              name: m.name,
+              type: m.type,
+              currency: m.currency,
+              value: m.closed_at !== undefined ? "0" : m.value,
+              observed_at: null,
+              closed: m.closed_at !== undefined,
+            });
+          }
+        }
+        const problems = open.filter((f) => f.code === "fetch_failed" && f.subject === e.institution_id).map((f) => f.summary);
+        return {
+          institution_id: e.institution_id,
+          name: e.name,
+          adapter: e.adapter,
+          enabled: e.enabled !== false,
+          managed,
+          accounts: rows,
+          problems,
+        };
       });
-      return run.complete;
+      return { institutions, hasFacts: nw.lines.length > 0 };
+    },
+    addInstitution(input) {
+      const entry = addInstitutionEntry(dataDir, {
+        name: input.name,
+        adapter: "jsondrop",
+        ...(input.mode === "managed" ? { options: { managed: true } } : {}),
+      });
+      if (input.mode === "managed") initManagedInstitution(dataDir, entry.institution_id, clock());
+      loaded = loadInstitutions(dataDir);
+      return entry;
+    },
+    removeInstitution(institutionId) {
+      const removed = removeInstitutionEntry(dataDir, institutionId);
+      if (removed) loaded = loadInstitutions(dataDir);
+      return removed;
+    },
+    setInstitutionEnabled(institutionId, enabled) {
+      const changed = setEnabledInRegistry(dataDir, institutionId, enabled);
+      if (changed) loaded = loadInstitutions(dataDir);
+      return changed;
+    },
+    storeInstitutionFile(institutionId, filename, bytes) {
+      if (!loaded.entries.some((e) => e.institution_id === institutionId)) {
+        throw new Error(`unknown institution ${institutionId}`);
+      }
+      const inbox = path.join(dataDir, "institutions", institutionId.replace(/^inst\./, ""), "inbox");
+      fs.mkdirSync(inbox, { recursive: true });
+      const base = path.basename(filename).replace(/[^A-Za-z0-9._-]+/g, "_") || "upload.json";
+      // Prefix with the upload time so the newest upload wins jsondrop's name ordering.
+      const stored = `${clock().toISOString().replace(/[:.]/g, "-")}-${base}`;
+      fs.writeFileSync(path.join(inbox, stored), bytes);
+      return { filename: stored };
+    },
+    refreshInstitution,
+    managedAccounts(institutionId) {
+      return readManagedAccounts(dataDir, institutionId);
+    },
+    async saveManagedAccount(institutionId, input) {
+      const entry = loaded.entries.find((e) => e.institution_id === institutionId);
+      if (entry === undefined || !isManaged(entry)) throw new Error(`${institutionId} is not a managed institution`);
+      const account = upsertManagedAccount(dataDir, institutionId, input, clock());
+      const run = await refreshInstitution(institutionId);
+      return { account, ...run };
+    },
+    async removeManagedAccount(institutionId, accountId) {
+      if (!closeManagedAccount(dataDir, institutionId, accountId, clock())) {
+        throw new Error(`no open managed account ${accountId} at ${institutionId}`);
+      }
+      return refreshInstitution(institutionId);
+    },
+    async seedDemoData() {
+      seedDemo(dataDir, 1);
+      loaded = loadInstitutions(dataDir);
+      const runId = newId("nightly");
+      const r = await runNightlyOnce({ runId });
+      return { institutions: loaded.entries.length, runId, status: r.terminalStatus };
+    },
+    async runNightly(o = {}) {
+      return runNightlyOnce(o);
     },
     async resumeInFlight() {
       const out: RunSummary[] = [];

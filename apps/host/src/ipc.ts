@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
-import { ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
+import { AccountType, ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
 import { type } from "arktype";
 
 import type { App } from "./app";
@@ -36,6 +36,16 @@ const DecideBody = type({
   "bound?": type({ "max_quantity?": "string | null", "limit_price?": "string | null" }),
   "note?": "string",
 });
+const AddInstitutionBody = type({ name: "string > 0", mode: "'managed' | 'files'" });
+const EnabledBody = type({ enabled: "boolean" });
+const ManagedAccountBody = type({
+  "account_id?": "string",
+  name: "string > 0",
+  type: AccountType,
+  "currency?": /^[A-Z0-9]{2,10}$/,
+  value: /^-?\d+(\.\d+)?$/,
+});
+const RemoveAccountBody = type({ account_id: "string > 0" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -74,7 +84,51 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/access-log") return json(app.ledger.listAccess(Number(q.get("limit") ?? 200)));
         if (p === "/api/events") return json(app.ledger.eventsSince(Number(q.get("since") ?? 0)));
         if (p === "/api/batches") return json(app.ledger.listBatches());
-        if (p === "/api/institutions") return json(app.institutions().entries);
+        if (p === "/api/institutions" && req.method === "GET") return json(app.institutions().entries);
+        if (p === "/api/institutions-overview") return json(app.institutionsOverview());
+        if (p === "/api/institutions" && req.method === "POST") {
+          const body = AddInstitutionBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.addInstitution(body), 201);
+        }
+        if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
+        const instMatch = /^\/api\/institution\/([A-Za-z0-9_.-]+)\/(delete|enabled|refresh|upload|accounts|account|remove-account)$/.exec(p);
+        if (instMatch !== null) {
+          const instId = instMatch[1] as string;
+          const sub = instMatch[2] as string;
+          if (sub === "accounts" && req.method === "GET") return json(app.managedAccounts(instId));
+          if (req.method === "POST") {
+            if (sub === "delete") return json({ removed: app.removeInstitution(instId) });
+            if (sub === "refresh") return json(await app.refreshInstitution(instId));
+            if (sub === "enabled") {
+              const body = EnabledBody(await req.json());
+              if (body instanceof type.errors) return json({ error: body.summary }, 400);
+              return json({ changed: app.setInstitutionEnabled(instId, body.enabled) });
+            }
+            if (sub === "upload") {
+              const filename = q.get("filename") ?? "upload.json";
+              const bytes = new Uint8Array(await req.arrayBuffer());
+              if (bytes.length === 0) return json({ error: "empty file" }, 400);
+              const stored = app.storeInstitutionFile(instId, filename, bytes);
+              const run = await app.refreshInstitution(instId);
+              const problems = app.ledger
+                .openFindings({ subject: instId })
+                .filter((f) => f.code === "fetch_failed")
+                .map((f) => f.summary);
+              return json({ ...stored, ...run, problems });
+            }
+            if (sub === "account") {
+              const body = ManagedAccountBody(await req.json());
+              if (body instanceof type.errors) return json({ error: body.summary }, 400);
+              return json(await app.saveManagedAccount(instId, body));
+            }
+            if (sub === "remove-account") {
+              const body = RemoveAccountBody(await req.json());
+              if (body instanceof type.errors) return json({ error: body.summary }, 400);
+              return json(await app.removeManagedAccount(instId, body.account_id));
+            }
+          }
+        }
         if (p === "/api/runs") return json(await app.listRuns());
         if (p === "/api/obligations") return json(views.obligations(app.ledger));
         if (p === "/api/tax") return json(await app.taxStatus());

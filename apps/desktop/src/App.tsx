@@ -5,20 +5,27 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
+import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "positions" | "institutions" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
   const [queue, setQueue] = useState<Finding[]>([]);
+  const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
   const [factId, setFactId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     api.queue().then(setQueue).catch(() => setQueue([]));
+    api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
   }, [tick]);
+
+  // Nothing at all yet: the welcome screen takes over (except when the
+  // user is already on the Institutions page connecting something).
+  const nothingYet = overview !== null && overview.institutions.length === 0 && !overview.hasFacts;
+  const takeover = nothingYet && page !== "institutions";
 
   return (
     <div className="app">
@@ -29,6 +36,7 @@ export function App() {
             ["queue", "Queue", queue.length],
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
+            ["institutions", "Institutions", null],
             ["tax", "Tax calendar", null],
             ["strategy", "Strategy", null],
             ["estate", "Estate", null],
@@ -44,49 +52,421 @@ export function App() {
         ))}
       </nav>
       <main>
-        <FirstRun tick={tick} />
-        {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
-        {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
-        {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
-        {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
-        {page === "strategy" && <ChatPage openFact={setFactId} />}
-        {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
-        {page === "journal" && <JournalPage tick={tick} openFact={setFactId} />}
-        {page === "runs" && <Runs tick={tick} onChanged={refresh} />}
-        {page === "documents" && <Documents tick={tick} />}
+        {takeover ? (
+          <Welcome onConnect={() => setPage("institutions")} onChanged={refresh} />
+        ) : (
+          <>
+            {!nothingYet && <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />}
+            {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
+            {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
+            {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
+            {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
+            {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
+            {page === "strategy" && <ChatPage openFact={setFactId} />}
+            {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
+            {page === "journal" && <JournalPage tick={tick} openFact={setFactId} />}
+            {page === "runs" && <Runs tick={tick} onChanged={refresh} />}
+            {page === "documents" && <Documents tick={tick} />}
+          </>
+        )}
       </main>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
     </div>
   );
 }
 
-// First-run wizard-lite (BUILD_PLAN §7.2): until an institution exists
-// and a nightly has run, say exactly what to do next.
-function FirstRun({ tick }: { tick: number }) {
-  const [state, setState] = useState<{ dataDir: string; institutions: number; facts: boolean } | null>(null);
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [h, inst, nw] = await Promise.all([api.health(), api.institutions(), api.netWorth().catch(() => null)]);
-        setState({ dataDir: h.dataDir, institutions: inst.length, facts: (nw?.lines.length ?? 0) > 0 });
-      } catch {
-        setState(null);
-      }
-    })();
-  }, [tick]);
-  if (state === null || (state.institutions > 0 && state.facts)) return null;
+// The very first screen: absolutely no data yet, two ways to begin.
+function Welcome({ onConnect, onChanged }: { onConnect: () => void; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const demo = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.seedDemo();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="welcome">
+      <h2>Welcome</h2>
+      <p>Currently, there are no institutions connected, and there's no other data for us to work with.</p>
+      {busy ? (
+        <p className="muted">Setting up a made-up household and fetching its numbers… this takes a few seconds.</p>
+      ) : (
+        <div className="welcome-actions">
+          <button onClick={onConnect}>Click here to start connecting your institutions</button>
+          <button className="secondary" onClick={() => void demo()}>Click here to start with a bunch of made up data</button>
+        </div>
+      )}
+      <p className="small muted">
+        Everything here is read-only: connections can look at your accounts, never touch them. The made-up data is clearly
+        fictional and can be thrown away by deleting its institutions.
+      </p>
+      {error !== null && <div className="banner">{error}</div>}
+    </div>
+  );
+}
+
+// Institutions exist but the first numbers haven't been fetched yet.
+function NoNumbersYet({ overview, onChanged, goInstitutions }: { overview: InstitutionsOverview | null; onChanged: () => void; goInstitutions: () => void }) {
+  const [busy, setBusy] = useState(false);
+  if (overview === null || overview.hasFacts || overview.institutions.length === 0) return null;
+  const fetchNow = async () => {
+    setBusy(true);
+    try {
+      await api.nightly();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="banner">
-      <b>Welcome.</b>{" "}
-      {state.institutions === 0 ? (
-        <>
-          Connect an institution read-only: list it in <code>{state.dataDir}/institutions.json</code> and drop an export into{" "}
-          <code>{state.dataDir}/institutions/&lt;id&gt;/inbox/</code> (JSON snapshot, or CSV with a column map). Or seed the
-          fictional demo: <code>fin-host init --demo 1</code>.
-        </>
+      <b>Almost there.</b> Your institutions are set up, but no numbers have come in yet.{" "}
+      {busy ? (
+        <span className="muted">Fetching your numbers…</span>
       ) : (
-        <>Institutions are configured — run the first reconciliation from the Nightly runs page.</>
+        <>
+          <button onClick={() => void fetchNow()}>Fetch the numbers now</button>{" "}
+          <button className="secondary" onClick={goInstitutions}>Manage institutions</button>
+        </>
       )}
+    </div>
+  );
+}
+
+// --- Institutions: connect, pause, delete, and keep values current ---
+// No JSON, no files in the home directory: forms and uploads only.
+
+const ACCOUNT_TYPE_OPTIONS: ReadonlyArray<readonly [string, string]> = [
+  ["checking", "Checking"],
+  ["savings", "Savings"],
+  ["brokerage", "Investment (brokerage)"],
+  ["ira", "Retirement — IRA"],
+  ["401k", "Retirement — 401(k)"],
+  ["hsa", "Health savings (HSA)"],
+  ["crypto", "Crypto"],
+  ["credit_card", "Credit card"],
+  ["mortgage", "Mortgage"],
+  ["loan", "Loan"],
+  ["other", "Property or other"],
+];
+const typeLabel = (t: string): string => ACCOUNT_TYPE_OPTIONS.find(([v]) => v === t)?.[1] ?? t;
+const OWED_TYPES = new Set(["credit_card", "mortgage", "loan", "heloc"]);
+
+/** "$1,234.56" -> "1234.56"; returns null when it isn't a plain amount. */
+function cleanAmount(raw: string): string | null {
+  const s = raw.replace(/[$,\s]/g, "");
+  return /^-?\d+(\.\d+)?$/.test(s) ? s : null;
+}
+
+function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+  const [ob, setOb] = useState<InstitutionsOverview | null>(null);
+  const [adding, setAdding] = useState(false);
+  useEffect(() => {
+    api.institutionsOverview().then(setOb).catch(() => setOb(null));
+  }, [tick]);
+  if (ob === null) return <p className="muted">Host unreachable.</p>;
+  const none = ob.institutions.length === 0;
+  return (
+    <>
+      <h2>Institutions</h2>
+      <p className="small muted">
+        Connections are read-only: nothing here can move money or change your accounts. Deleting a connection only stops
+        updates — everything already recorded stays in your history.
+      </p>
+      {none && <p>No institutions are connected yet. Let's add your first one.</p>}
+      {none || adding ? (
+        <AddInstitutionForm
+          onDone={() => {
+            setAdding(false);
+            onChanged();
+          }}
+          onCancel={none ? null : () => setAdding(false)}
+        />
+      ) : (
+        <p>
+          <button onClick={() => setAdding(true)}>Connect another institution</button>
+        </p>
+      )}
+      {ob.institutions.map((i) => (
+        <InstitutionCard key={i.institution_id} inst={i} onChanged={onChanged} />
+      ))}
+    </>
+  );
+}
+
+function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"managed" | "files">("managed");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    if (name.trim() === "") {
+      setError("Give the institution a name — e.g. \"Chase\" or \"Our house\".");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addInstitution(name.trim(), mode);
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="queue-item">
+      <div className="head"><b>Connect an institution</b></div>
+      <div className="actions" style={{ marginTop: 8 }}>
+        <input
+          style={{ flex: 1, maxWidth: 320 }}
+          placeholder="Name — e.g. Chase, Fidelity, Our house"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <label style={{ display: "block", marginBottom: 6 }}>
+          <input type="radio" checked={mode === "managed"} onChange={() => setMode("managed")} />{" "}
+          I'll type the numbers in myself
+          <div className="small muted" style={{ marginLeft: 20 }}>
+            Best for property, cash, and anything without downloadable statements. You can update the values any time.
+          </div>
+        </label>
+        <label style={{ display: "block" }}>
+          <input type="radio" checked={mode === "files"} onChange={() => setMode("files")} />{" "}
+          I'll upload files downloaded from the institution's website
+          <div className="small muted" style={{ marginLeft: 20 }}>
+            Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.
+          </div>
+        </label>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button disabled={busy} onClick={() => void add()}>{busy ? "adding…" : "Add institution"}</button>
+        {onCancel !== null && <button className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
+function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const open = inst.accounts.filter((a) => !a.closed);
+  const closedCount = inst.accounts.length - open.length;
+  return (
+    <div className="queue-item">
+      <div className="head">
+        <b>{inst.name}</b>
+        <span className={`pill ${inst.enabled ? "low" : "medium"}`}>{inst.enabled ? "connected" : "paused"}</span>
+        <span className="pill info">{inst.managed ? "you enter the values" : "file uploads"}</span>
+        <span className="muted small">{inst.institution_id}</span>
+      </div>
+      {inst.problems.map((prob, i) => (
+        <div key={i} className="banner" style={{ marginTop: 8 }}>{prob}</div>
+      ))}
+      {busy === "update" ? (
+        <p className="muted">Saving and updating your numbers…</p>
+      ) : (
+        <>
+          {open.length > 0 && (
+            <table style={{ marginTop: 8 }}>
+              <thead><tr><th>Account</th><th>Type</th><th className="num">Value</th><th>Last updated</th><th></th></tr></thead>
+              <tbody>
+                {open.map((a) => (
+                  <tr key={a.account_id}>
+                    <td>{a.name}</td>
+                    <td className="small">{typeLabel(a.type)}</td>
+                    <td className="num">
+                      {a.value === null ? <span className="muted">not fetched yet</span> : money(a.value, a.currency)}
+                      {OWED_TYPES.has(a.type) && a.value !== null ? <span className="small muted"> owed</span> : null}
+                    </td>
+                    <td className="small">{when(a.observed_at)}</td>
+                    <td>
+                      {inst.managed && (
+                        <button
+                          className="secondary"
+                          disabled={busy !== null}
+                          onClick={() => void act("update", () => api.removeManagedAccount(inst.institution_id, a.account_id))}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
+          {inst.managed && (
+            <ManagedAccountEditor
+              inst={inst}
+              disabled={busy !== null}
+              onSave={(input) => void act("update", () => api.saveManagedAccount(inst.institution_id, input))}
+            />
+          )}
+          {!inst.managed && (
+            <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />
+          )}
+        </>
+      )}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <div className="actions" style={{ marginTop: 10 }}>
+        <button
+          className="secondary"
+          disabled={busy !== null}
+          onClick={() => void act("pause", () => api.setInstitutionEnabled(inst.institution_id, !inst.enabled))}
+        >
+          {inst.enabled ? "Pause updates" : "Resume updates"}
+        </button>
+        {confirmDelete ? (
+          <>
+            <span className="small">Delete this connection? Your history is kept; we just stop updating from it.</span>
+            <button disabled={busy !== null} onClick={() => void act("delete", () => api.deleteInstitution(inst.institution_id))}>
+              Yes, delete
+            </button>
+            <button className="secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </>
+        ) : (
+          <button className="secondary" disabled={busy !== null} onClick={() => setConfirmDelete(true)}>Delete</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One row of inputs: pick an existing account to update, or add a new one. */
+function ManagedAccountEditor({ inst, disabled, onSave }: { inst: InstitutionOverview; disabled: boolean; onSave: (input: { account_id?: string; name: string; type: string; value: string }) => void }) {
+  const open = inst.accounts.filter((a) => !a.closed);
+  const [accountId, setAccountId] = useState<string>("new");
+  const [name, setName] = useState("");
+  const [type, setType] = useState("checking");
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const existing = open.find((a) => a.account_id === accountId);
+  const pick = (id: string) => {
+    setAccountId(id);
+    const a = open.find((x) => x.account_id === id);
+    setName(a?.name ?? "");
+    setType(a?.type ?? "checking");
+    setValue(a?.value ?? "");
+    setError(null);
+  };
+  const save = () => {
+    const amount = cleanAmount(value);
+    if (name.trim() === "") {
+      setError("Name the account — e.g. \"Everyday checking\" or \"The house\".");
+      return;
+    }
+    if (amount === null) {
+      setError("Enter the value as a plain number, like 1234.56.");
+      return;
+    }
+    setError(null);
+    onSave({ ...(existing !== undefined ? { account_id: existing.account_id } : {}), name: name.trim(), type, value: amount });
+    if (existing === undefined) {
+      setName("");
+      setValue("");
+    }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>
+        {open.length > 0 ? "Update an account's value, or add another:" : "Add the first account:"}
+      </div>
+      <div className="actions">
+        {open.length > 0 && (
+          <select value={accountId} onChange={(e) => pick(e.target.value)} disabled={disabled}>
+            <option value="new">＋ New account</option>
+            {open.map((a) => (
+              <option key={a.account_id} value={a.account_id}>{a.name}</option>
+            ))}
+          </select>
+        )}
+        <input placeholder="Account name" value={name} disabled={disabled} onChange={(e) => setName(e.target.value)} />
+        <select value={type} disabled={disabled || existing !== undefined} onChange={(e) => setType(e.target.value)}>
+          {ACCOUNT_TYPE_OPTIONS.map(([v, label]) => (
+            <option key={v} value={v}>{label}</option>
+          ))}
+        </select>
+        <input
+          style={{ width: 130 }}
+          placeholder={OWED_TYPES.has(type) ? "Amount owed" : "Current value"}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+          }}
+        />
+        <button disabled={disabled} onClick={save}>{existing !== undefined ? "Save new value" : "Add account"}</button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function UploadBox({ inst, disabled, onDone }: { inst: InstitutionOverview; disabled: boolean; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const upload = async (file: File) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await api.uploadInstitutionFile(inst.institution_id, file.name, await file.arrayBuffer());
+      setResult(
+        r.problems.length > 0
+          ? `We couldn't read that file: ${r.problems.join("; ")}`
+          : "Got it — your numbers are updated.",
+      );
+      onDone();
+    } catch (e) {
+      setResult(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>
+        Upload the latest export downloaded from {inst.name}'s website. The file is kept unchanged as evidence.
+      </div>
+      <div className="actions">
+        <input
+          type="file"
+          disabled={disabled || busy}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f !== undefined) void upload(f);
+            e.target.value = "";
+          }}
+        />
+        {busy && <span className="muted small">Reading the file and updating your numbers…</span>}
+      </div>
+      {result !== null && <div className="banner" style={{ marginTop: 8 }}>{result}</div>}
     </div>
   );
 }

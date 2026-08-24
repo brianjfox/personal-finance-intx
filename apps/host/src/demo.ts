@@ -133,7 +133,15 @@ export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
   const planFile = seedPlanFile(dataDir);
   if (planFile !== null) written.push(planFile);
   const registry = path.join(dataDir, "institutions.json");
-  if (!fs.existsSync(registry)) {
+  const registryEmpty = (): boolean => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(registry, "utf8")) as { institutions?: unknown[] };
+      return (parsed.institutions ?? []).length === 0;
+    } catch {
+      return true;
+    }
+  };
+  if (!fs.existsSync(registry) || registryEmpty()) {
     fs.writeFileSync(
       registry,
       JSON.stringify(
