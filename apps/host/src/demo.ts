@@ -90,12 +90,48 @@ export function seedEstateFile(dataDir: string): string | null {
   return file;
 }
 
+/**
+ * Demo investment plan (Phase 4): a 60/40-with-band policy the demo
+ * portfolio deliberately violates (equities overweight), so `propose`
+ * has an honest drift to draft against.
+ */
+export function seedPlanFile(dataDir: string): string | null {
+  const file = path.join(dataDir, "plan.json");
+  if (fs.existsSync(file)) return null;
+  fs.writeFileSync(
+    file,
+    JSON.stringify(
+      {
+        as_of: "2026-08-01",
+        band: "0.05",
+        targets: [
+          { asset_class: "etf", weight: "0.55" },
+          { asset_class: "equity", weight: "0.05" },
+          { asset_class: "bond", weight: "0.4" },
+        ],
+        constraints: {
+          max_position_weight: "0.5",
+          do_not_sell: [],
+          max_order_value: "25000",
+          tax_cash_horizon_days: 60,
+        },
+        notes: "Fictional demo policy; chosen to leave the demo portfolio out of band.",
+      },
+      null,
+      2,
+    ),
+  );
+  return file;
+}
+
 export function seedDemo(dataDir: string, night: 1 | 2 = 1): string[] {
   const written: string[] = [];
   const profile = seedTaxProfile(dataDir);
   if (profile !== null) written.push(profile);
   const estate = seedEstateFile(dataDir);
   if (estate !== null) written.push(estate);
+  const planFile = seedPlanFile(dataDir);
+  if (planFile !== null) written.push(planFile);
   const registry = path.join(dataDir, "institutions.json");
   if (!fs.existsSync(registry)) {
     fs.writeFileSync(

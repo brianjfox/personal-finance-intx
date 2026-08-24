@@ -13,6 +13,7 @@ import path from "node:path";
 
 import {
   buildActions,
+  approvalSignalId,
   monteCarlo,
   quarterSpec,
   resolveProjectionInputs,
@@ -22,6 +23,7 @@ import {
 import {
   assertType,
   EstateFile,
+  InvestmentPlan,
   newId,
   TAX_QUARTERS,
   TaxProfile,
@@ -36,12 +38,14 @@ import {
   type TaxStage,
 } from "@fin/contracts";
 import { loadInstitutions, type InstitutionAdapter, type LoadedInstitutions } from "@fin/institutions";
-import { openLedger, views, type Ledger } from "@fin/ledger";
+import { approvalQueue, listInstructions, markInstruction, openLedger, verdictsFor, views, type Ledger, type QueuedApproval, type InstructionRow } from "@fin/ledger";
 import { createPolicyAuthorize, type PolicyDecision } from "@fin/policy";
 import { createVault, type Vault } from "@fin/vault";
 import {
   allStepPrincipals,
+  APPROVAL_SIGNAL,
   buildChatWorkflow,
+  buildProposalWorkflow,
   buildTaxYearWorkflow,
   CHAT_WORKFLOWS,
   chatWorkflowSpec,
@@ -49,6 +53,8 @@ import {
   ESTATE_AUDIT_ID,
   estateAuditWorkflow,
   nightlyWorkflow,
+  PROPOSAL_ID,
+  proposalLoopFns,
   skipSignalId,
   stepOutcomes,
   taxCheckWorkflow,
@@ -158,6 +164,33 @@ export interface App {
   /** The recorded conversation, oldest first. */
   chatTranscript(agent: ChatAgent): ChatTurn[];
   activeChatRun(agent: ChatAgent): Promise<{ runId: string } | null>;
+  /** The written investment plan from `<dataDir>/plan.json`, or null. */
+  plan(): InvestmentPlan | null;
+  /**
+   * Start a rebalance-proposal run: drift -> Market Manager draft ->
+   * Auditor -> (cleared) the approval queue. Resolves once the run is
+   * parked at the approval gate or terminal (blocked/exhausted).
+   */
+  startProposal(opts?: { timeoutMs?: number }): Promise<{ runId: string; state: "queued" | "terminal"; status: string }>;
+  /** The home screen's top half: cleared, unexpired, undecided recommendations. */
+  approvalQueue(): QueuedApproval[];
+  /**
+   * Deliver the operator's decision on a queued recommendation: scoped
+   * to that proposal id, bounded, expiring; idempotent by signal id
+   * (D-001). Works through the durable inbox while no host runs.
+   */
+  decideRecommendation(opts: {
+    recommendationId: string;
+    decision: "approve" | "reject";
+    bound?: { max_quantity?: string | null; limit_price?: string | null };
+    note?: string;
+    signedBy?: string;
+    wait?: boolean;
+    timeoutMs?: number;
+  }): Promise<{ runId: string; signalId: string }>;
+  listPreparedInstructions(): InstructionRow[];
+  /** Revocable until sent -- and in Phase 4 nothing is ever sent. */
+  revokeInstruction(opts: { instructionId: string; by?: string; note?: string }): { replayed: boolean };
   close(): void;
 }
 
@@ -189,7 +222,12 @@ export function createApp(opts: AppOptions): App {
     if (!fs.existsSync(estateFilePath)) return null;
     return assertType(EstateFile, JSON.parse(fs.readFileSync(estateFilePath, "utf8")), "estate.json");
   };
-  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile };
+  const planPath = path.join(dataDir, "plan.json");
+  const plan = (): InvestmentPlan | null => {
+    if (!fs.existsSync(planPath)) return null;
+    return assertType(InvestmentPlan, JSON.parse(fs.readFileSync(planPath, "utf8")), "plan.json");
+  };
+  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan };
   const actions = buildActions(actx);
   const model = opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
 
@@ -229,6 +267,7 @@ export function createApp(opts: AppOptions): App {
     dataDir,
     actions,
     invokeStep,
+    loopFns: proposalLoopFns,
     authorize,
     clock,
     ...(opts.pollMs !== undefined ? { pollMs: opts.pollMs } : {}),
@@ -242,12 +281,13 @@ export function createApp(opts: AppOptions): App {
     return m === null ? null : Number(m[1]);
   };
   const chatSpecOf = (runId: string) => CHAT_WORKFLOWS.find((s) => runId.startsWith(`${s.runIdPrefix}_`)) ?? null;
-  /** Runs that live indefinitely: driven without awaiting, resumed as running. */
-  const isStandingRun = (runId: string): boolean => taxYearOf(runId) !== null || chatSpecOf(runId) !== null;
+  /** Runs that live indefinitely (or for days at the approval gate): driven without awaiting, resumed as running. */
+  const isStandingRun = (runId: string): boolean => taxYearOf(runId) !== null || chatSpecOf(runId) !== null || runId.startsWith("proposal_");
   function workflowOf(runId: string): string {
     if (runId.startsWith("nightly")) return nightlyWorkflow.id;
     if (runId.startsWith("taxcheck")) return taxCheckWorkflow.id;
     if (runId.startsWith("estateaudit")) return ESTATE_AUDIT_ID;
+    if (runId.startsWith("proposal_")) return PROPOSAL_ID;
     const chat = chatSpecOf(runId);
     if (chat !== null) return chat.workflowId;
     const year = taxYearOf(runId);
@@ -258,6 +298,7 @@ export function createApp(opts: AppOptions): App {
     if (runId.startsWith("nightly")) return nightlyWorkflow;
     if (runId.startsWith("taxcheck")) return taxCheckWorkflow;
     if (runId.startsWith("estateaudit")) return estateAuditWorkflow;
+    if (runId.startsWith("proposal_")) return buildProposalWorkflow({ model }).definition;
     const chat = chatSpecOf(runId);
     if (chat !== null) return buildChatWorkflow(chat.agent, model).definition;
     const year = taxYearOf(runId);
@@ -550,6 +591,81 @@ export function createApp(opts: AppOptions): App {
         .eventsSince(0, 10_000)
         .filter((e) => e.kind === "chat.turn" && e.subject === `chat.${agent}`)
         .map((e) => e.payload as ChatTurn);
+    },
+    plan,
+    async startProposal(o = {}) {
+      if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
+      const runId = `proposal_${newId("r").slice(2)}`;
+      drive(buildProposalWorkflow({ model }).definition, runId, { run_key: runId });
+      // Resolve once the run either parks at the approval gate (queued)
+      // or settles (blocked/exhausted/failed).
+      const deadline = Date.now() + (o.timeoutMs ?? 600_000);
+      for (;;) {
+        const s = await summarize(runId);
+        if (s.status !== "running") return { runId, state: "terminal", status: s.status };
+        const events = await host.readLog(runId);
+        const parked = events.some(
+          (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
+        );
+        if (parked) return { runId, state: "queued", status: "running" };
+        const settled = events.some((e) => e.kind === "StepCompleted" && ["exhausted", "expired"].includes((e as { stepId?: string }).stepId ?? ""));
+        if (settled) return { runId, state: "terminal", status: s.status };
+        if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    },
+    approvalQueue() {
+      return approvalQueue(ledger, clock());
+    },
+    async decideRecommendation(o) {
+      // rec ids are `rec_<run_key>.<attempt>`; recover the run to signal.
+      const m = /^rec_(.+)\.\d+$/.exec(o.recommendationId);
+      if (m === null) throw new Error(`unrecognized recommendation id ${o.recommendationId}`);
+      const runId = m[1] as string;
+      if (!host.repoStore.hasRun(runId)) throw new Error(`no run ${runId} for ${o.recommendationId}`);
+      const signalId = approvalSignalId(o.recommendationId);
+      host.deliver(
+        runId,
+        APPROVAL_SIGNAL,
+        {
+          recommendation_id: o.recommendationId,
+          decision: o.decision,
+          ...(o.bound !== undefined ? { bound: o.bound } : {}),
+          signed_by: o.signedBy ?? "operator",
+          ...(o.note !== undefined ? { note: o.note } : {}),
+        },
+        signalId,
+      );
+      if (o.wait !== false) {
+        const deadline = Date.now() + (o.timeoutMs ?? 60_000);
+        for (;;) {
+          const decided = ledger.eventsSince(0, 50_000).some((e) => e.id === `${runId}:decided`);
+          if (decided) break;
+          if (Date.now() > deadline) throw new Error(`decision for ${o.recommendationId} delivered but not yet recorded; the run may be resuming`);
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
+      return { runId, signalId };
+    },
+    listPreparedInstructions() {
+      return listInstructions(ledger);
+    },
+    revokeInstruction(o) {
+      const at = clock().toISOString();
+      const by = o.by ?? "operator";
+      const r = markInstruction(ledger, { instructionId: o.instructionId, status: "revoked", by, at, ...(o.note !== undefined ? { note: o.note } : {}) });
+      if (!r.replayed) {
+        ledger.appendJournal({
+          at,
+          kind: "decision",
+          summary: `revoked instruction ${o.instructionId}${o.note ? ` -- ${o.note}` : ""}`,
+          detail: { instruction_id: o.instructionId },
+          refs: [],
+          author: by,
+        });
+        ledger.emitEvent({ id: `revoke:${o.instructionId}`, kind: "instruction.revoked", payload: { instruction_id: o.instructionId, by } });
+      }
+      return r;
     },
     close() {
       ledger.close();
