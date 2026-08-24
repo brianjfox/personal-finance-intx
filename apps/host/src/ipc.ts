@@ -31,6 +31,11 @@ const TaxYearBody = type({ "year?": "number.integer >= 1990" });
 const TaxCheckBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage });
 const TaxSkipBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage, "note?": "string" });
 const ChatBody = type({ agent: ChatAgent, text: "string > 0", "wait?": "boolean" });
+const DecideBody = type({
+  decision: "'approve' | 'reject'",
+  "bound?": type({ "max_quantity?": "string | null", "limit_price?": "string | null" }),
+  "note?": "string",
+});
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -85,6 +90,30 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json({ runId: r.runId, status: r.terminalStatus });
         }
         if (p === "/api/estate") return json(app.estateStatus());
+        if (p === "/api/approvals") return json(app.approvalQueue());
+        if (p === "/api/instructions") return json(app.listPreparedInstructions());
+        if (p === "/api/proposal" && req.method === "POST") {
+          const r = await app.startProposal();
+          return json(r, r.state === "queued" ? 200 : 202);
+        }
+        const decideMatch = /^\/api\/recommendation\/([A-Za-z0-9_.:-]+)\/decide$/.exec(p);
+        if (decideMatch !== null && req.method === "POST") {
+          const body = DecideBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          const r = await app.decideRecommendation({
+            recommendationId: decideMatch[1] as string,
+            decision: body.decision,
+            ...(body.bound !== undefined ? { bound: body.bound } : {}),
+            ...(body.note !== undefined ? { note: body.note } : {}),
+            signedBy: operator,
+          });
+          return json(r);
+        }
+        const revokeMatch = /^\/api\/instruction\/([A-Za-z0-9_.:-]+)\/revoke$/.exec(p);
+        if (revokeMatch !== null && req.method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as { note?: string };
+          return json(app.revokeInstruction({ instructionId: revokeMatch[1] as string, by: operator, ...(typeof body.note === "string" ? { note: body.note } : {}) }));
+        }
         if (p === "/api/estate/audit" && req.method === "POST") {
           const r = await app.runEstateAudit();
           return json({ runId: r.runId, status: r.terminalStatus, audit: r.outputs["audit_estate"] ?? null });

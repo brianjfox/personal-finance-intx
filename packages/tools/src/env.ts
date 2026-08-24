@@ -8,13 +8,14 @@
 // conversation and onto the recorded ChatTurn, which is what makes the
 // GUI's numbers clickable and the reply auditable.
 
-import type { ChatEvidence, EstateFile, TaxProfile } from "@fin/contracts";
+import type { ChatEvidence, EstateFile, InvestmentPlan, TaxProfile } from "@fin/contracts";
 import type { Ledger } from "@fin/ledger";
 
 export interface FinToolEnv {
   ledger: Ledger;
   taxProfile: () => TaxProfile | null;
   estateFile: () => EstateFile | null;
+  plan: () => InvestmentPlan | null;
   clock: () => Date;
   /** Record one tool result as turn evidence (figures + fact ids). */
   evidence: (e: ChatEvidence) => void;

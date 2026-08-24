@@ -74,6 +74,22 @@ export interface EstateStatus {
   lastAudit: unknown;
 }
 export interface JournalEntry { id: string; at: string; kind: string; subject?: string | null; summary: string; detail: Record<string, unknown>; refs: string[]; author: string }
+export interface Recommendation {
+  id: string; from: string; subject: string;
+  action: { verb: string; instrument?: string | null; quantity?: string | null; amount?: { amount: string; currency: string } | null; detail?: string };
+  thesis: string; evidence: string[]; as_of: string; confidence: number; requires: string[]; expires: string;
+  tax_lots?: Array<{ lot_id: string; treatment: string }>;
+}
+export interface QueuedApproval {
+  recommendation: Recommendation;
+  verdict: { cleared: boolean; attempt: number; as_of: string; blocks: Array<{ condition: string; detail: string }>; figures: Record<string, unknown> };
+  severity: string;
+}
+export interface InstructionRow {
+  id: string; approval_id: string; recommendation_id: string; subject: string;
+  action: Recommendation["action"]; bound: { max_quantity?: string | null; limit_price?: string | null; max_amount?: { amount: string; currency: string } | null };
+  issued_at: string; expires: string; status: string; current_status: string;
+}
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -108,6 +124,12 @@ export const api = {
   estate: () => get<EstateStatus>("/api/estate"),
   estateAudit: () => post<{ runId: string; status: string }>("/api/estate/audit"),
   journalFull: () => get<JournalEntry[]>("/api/journal"),
+  approvals: () => get<QueuedApproval[]>("/api/approvals"),
+  instructions: () => get<InstructionRow[]>("/api/instructions"),
+  propose: () => post<{ runId: string; state: string; status: string }>("/api/proposal"),
+  decide: (recId: string, decision: "approve" | "reject", bound: { max_quantity?: string | null; limit_price?: string | null }, note: string) =>
+    post<{ runId: string; signalId: string }>(`/api/recommendation/${recId}/decide`, { decision, bound, note }),
+  revoke: (insId: string, note: string) => post<{ replayed: boolean }>(`/api/instruction/${insId}/revoke`, { note }),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {

@@ -12,6 +12,11 @@
 //   fin-host tax-check  [--data DIR] --q N --stage pre|due run one manual tax check now
 //   fin-host tax-skip   [--data DIR] --q N --stage pre|due [note]  skip a deadline gate (journaled)
 //   fin-host chat       [--data DIR] [--agent strategist|estate_planner] <message...>   (needs ANTHROPIC_API_KEY)
+//   fin-host propose    [--data DIR]                       drift -> Market Manager -> Auditor -> approval queue (needs key)
+//   fin-host approvals  [--data DIR]                       print the approval queue
+//   fin-host decide     [--data DIR] <rec_id> approve|reject [--qty N] [--limit N] [note...]
+//   fin-host instructions [--data DIR]                     prepared (never sent) instructions
+//   fin-host revoke     [--data DIR] <instruction_id> [note...]
 //   fin-host estate-audit [--data DIR]                     sync estate.json + hygiene audit
 //   fin-host scenario   [--data DIR] --subject S --date YYYY-MM-DD [--price N --basis N --depreciation N]
 //   fin-host projection [--data DIR] --years N [--seed S]
@@ -234,6 +239,68 @@ async function main(argv: string[]): Promise<number> {
       app.close();
       return 0;
     }
+    case "propose": {
+      const app = createApp({ dataDir });
+      await app.resumeInFlight();
+      const r = await app.startProposal();
+      console.log(JSON.stringify(r, null, 2));
+      if (r.state === "queued") {
+        for (const q of app.approvalQueue()) {
+          console.log(`${q.recommendation.id}  ${q.recommendation.action.verb} ${q.recommendation.action.quantity ?? ""} ${q.recommendation.action.instrument ?? ""} @ ~${q.recommendation.action.amount?.amount ?? "?"}  expires ${q.recommendation.expires}`);
+          console.log(`    ${q.recommendation.thesis}`);
+        }
+      }
+      app.close();
+      process.exit(r.state === "queued" ? 0 : 1);
+    }
+    case "approvals": {
+      const app = createApp({ dataDir });
+      for (const q of app.approvalQueue()) {
+        console.log(`${q.recommendation.id}  ${q.recommendation.action.verb} ${q.recommendation.action.quantity ?? ""} ${q.recommendation.action.instrument ?? ""}  auditor: cleared  expires ${q.recommendation.expires}`);
+        console.log(`    ${q.recommendation.thesis}`);
+      }
+      app.close();
+      return 0;
+    }
+    case "decide": {
+      const [recId, decision, ...noteParts] = rest;
+      if (recId === undefined || (decision !== "approve" && decision !== "reject")) {
+        console.error("usage: fin-host decide <rec_id> approve|reject [--qty N] [--limit N] [note...]");
+        return 2;
+      }
+      const app = createApp({ dataDir });
+      await app.resumeInFlight();
+      const r = await app.decideRecommendation({
+        recommendationId: recId,
+        decision,
+        bound: { ...(flags["qty"] !== undefined ? { max_quantity: flags["qty"] } : {}), ...(flags["limit"] !== undefined ? { limit_price: flags["limit"] } : {}) },
+        note: noteParts.join(" "),
+        signedBy: process.env["USER"] ?? "operator",
+      });
+      console.log(JSON.stringify(r, null, 2));
+      app.close();
+      process.exit(0);
+    }
+    case "instructions": {
+      const app = createApp({ dataDir });
+      for (const i of app.listPreparedInstructions()) {
+        console.log(`${i.id}  ${i.current_status.padEnd(9)} ${i.action.verb} up to ${i.bound.max_quantity ?? "?"} ${i.action.instrument ?? ""}  expires ${i.expires}`);
+      }
+      app.close();
+      return 0;
+    }
+    case "revoke": {
+      const [insId, ...noteParts] = rest;
+      if (insId === undefined) {
+        console.error("usage: fin-host revoke <instruction_id> [note...]");
+        return 2;
+      }
+      const app = createApp({ dataDir });
+      const r = app.revokeInstruction({ instructionId: insId, by: process.env["USER"] ?? "operator", note: noteParts.join(" ") });
+      console.log(JSON.stringify(r, null, 2));
+      app.close();
+      return 0;
+    }
     case "serve": {
       const app = createApp({ dataDir });
       const resumed = await app.resumeInFlight();
@@ -250,7 +317,7 @@ async function main(argv: string[]): Promise<number> {
     }
     default:
       console.log(
-        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|serve> [--data DIR] ...",
+        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|propose|approvals|decide|instructions|revoke|serve> [--data DIR] ...",
       );
       return cmd === "help" ? 0 : 2;
   }

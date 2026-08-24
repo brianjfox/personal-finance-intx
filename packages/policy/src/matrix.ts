@@ -69,7 +69,15 @@ export const MATRIX: readonly MatrixRow[] = [
   // (the agent's reply), then parsed and recorded by the Auditor's pipeline
   // (BUILD_PLAN §8.1 bridge action) -- so the `recommendation` record is the
   // Auditor's, not the Market Manager's. The capability test enforces this.
-  { principal: "market_manager", credentials: "none", read: "positions", write: [], place_orders: "no", pii: "masked" },
+  {
+    principal: "market_manager",
+    credentials: "none",
+    read: "positions",
+    write: [],
+    tools: ["ledger_read_positions", "read_plan_targets", "compute_rebalance", "emit_proposal"],
+    place_orders: "no",
+    pii: "masked",
+  },
   {
     principal: "estate_planner",
     credentials: "none",
@@ -80,7 +88,7 @@ export const MATRIX: readonly MatrixRow[] = [
     pii: "masked",
   },
   // Tier 4 -- govern: check, gate, remember
-  { principal: "auditor", credentials: "none", read: "yes", write: [], records: ["recommendation"], place_orders: "no", pii: "masked" },
+  { principal: "auditor", credentials: "none", read: "yes", write: [], records: ["recommendation", "verdict"], place_orders: "no", pii: "masked" },
   { principal: "execution", credentials: "scoped_per_order", read: "yes", write: ["receipt"], records: ["instruction"], place_orders: "on_approval", pii: "full" },
   { principal: "security", credentials: "none", read: "yes", write: ["access_log"], place_orders: "no", pii: "full" },
   { principal: "journal", credentials: "none", read: "yes", write: ["journal"], place_orders: "no", pii: "full" },
@@ -100,7 +108,7 @@ export const WRITE_TABLES = [
   "event",
 ] as const;
 /** Governance-chain records (deck slide 12): proposals, signatures, instructions, and the operator's resolutions. */
-export const RECORD_TABLES = ["recommendation", "approval", "instruction", "resolution"] as const;
+export const RECORD_TABLES = ["recommendation", "verdict", "approval", "instruction", "resolution"] as const;
 
 export function rowFor(p: Principal): MatrixRow {
   const r = MATRIX.find((m) => m.principal === p);
@@ -119,6 +127,9 @@ export function capabilityToResource(cap: string): { resource: string; action: s
   if (cap === "ledger.write.finding") return { resource: "ledger:finding", action: "write" };
   if (cap === "ledger.emit") return { resource: "ledger:event", action: "write" };
   if (cap === "ledger.read") return { resource: "ledger:*", action: "read" };
+  if (cap === "ledger.read.positions") return { resource: "ledger:positions", action: "read" };
+  const rec = /^record\.([a-z_]+)$/.exec(cap);
+  if (rec !== null) return { resource: `record:${rec[1] ?? ""}`, action: "write" };
   const m = /^ledger\.write\.fact\.([a-z_]+)$/.exec(cap);
   if (m !== null) return { resource: `ledger:fact:${m[1]}`, action: "write" };
   if (cap === "orders.place") return { resource: "orders", action: "place" };

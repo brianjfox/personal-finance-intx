@@ -8,6 +8,16 @@ import { recordFindingsHandler } from "./ledger/record-findings";
 import { holdHandler, notifyHandler } from "./govern/notify";
 import { normalizeHandler } from "./normalize/normalize";
 import { reconcileHandler } from "./reconcile/reconcile";
+import {
+  auditIntakeHandler,
+  auditReviewHandler,
+  executionPrepareHandler,
+  governDecisionHandler,
+  governExhaustedHandler,
+  governExpiredHandler,
+  governRejectedHandler,
+  marketDriftHandler,
+} from "./market/handlers";
 import { estateAuditHandler, registrySyncHandler } from "./registry/registry";
 import {
   taxConfirmHandler,
@@ -32,6 +42,14 @@ export const ACTION_REFS = {
   taxSkip: "tax.skip",
   registrySync: "registry.sync",
   estateAudit: "estate.audit",
+  marketDrift: "mm.drift",
+  auditIntake: "audit.intake",
+  auditReview: "audit.review",
+  governDecision: "govern.decision",
+  executionPrepare: "execution.prepare",
+  governExpired: "govern.expired",
+  governRejected: "govern.rejected",
+  governExhausted: "govern.exhausted",
 } as const;
 
 export function buildActions(actx: ActionContext): Record<string, ActionHandler> {
@@ -50,6 +68,14 @@ export function buildActions(actx: ActionContext): Record<string, ActionHandler>
     [ACTION_REFS.taxSkip]: taxSkipHandler(actx),
     [ACTION_REFS.registrySync]: registrySyncHandler(actx),
     [ACTION_REFS.estateAudit]: estateAuditHandler(actx),
+    [ACTION_REFS.marketDrift]: marketDriftHandler(actx),
+    [ACTION_REFS.auditIntake]: auditIntakeHandler(actx),
+    [ACTION_REFS.auditReview]: auditReviewHandler(actx),
+    [ACTION_REFS.governDecision]: governDecisionHandler(actx),
+    [ACTION_REFS.executionPrepare]: executionPrepareHandler(actx),
+    [ACTION_REFS.governExpired]: governExpiredHandler(actx),
+    [ACTION_REFS.governRejected]: governRejectedHandler(actx),
+    [ACTION_REFS.governExhausted]: governExhaustedHandler(actx),
   };
 }
 
@@ -65,3 +91,5 @@ export * from "./tax/handlers";
 export * from "./registry/registry";
 export * from "./projections/montecarlo";
 export * from "./projections/scenario";
+export * from "./market/drift";
+export * from "./market/handlers";

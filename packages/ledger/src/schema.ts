@@ -206,6 +206,38 @@ CREATE TABLE ledger_event (
 ${APPEND_ONLY_TABLES.map(appendOnlyTriggers).join("\n")}
 `,
   },
+  {
+    version: 2,
+    name: "phase-4-governance",
+    sql: `
+-- The Auditor's deterministic verdict per recommendation attempt
+-- (slide 16). Append-only; one verdict per (recommendation, attempt).
+CREATE TABLE audit_verdict (
+  seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+  recommendation_id TEXT NOT NULL REFERENCES recommendation(id),
+  attempt           INTEGER NOT NULL,
+  cleared           INTEGER NOT NULL,
+  at                TEXT NOT NULL,
+  blocks            TEXT NOT NULL,        -- JSON AuditBlock[]
+  figures           TEXT NOT NULL,        -- JSON
+  UNIQUE(recommendation_id, attempt)
+);
+
+-- Instruction status transitions (revoked/expired) as appended events;
+-- the instruction row itself is append-only, so current status =
+-- initial row status folded with the latest event.
+CREATE TABLE instruction_event (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  instruction_id TEXT NOT NULL REFERENCES instruction(id),
+  at             TEXT NOT NULL,
+  status         TEXT NOT NULL,           -- revoked | expired
+  by             TEXT NOT NULL,
+  note           TEXT,
+  UNIQUE(instruction_id, status)
+);
+${["audit_verdict", "instruction_event"].map(appendOnlyTriggers).join("\n")}
+`,
+  },
 ];
 
 export const APPEND_ONLY = APPEND_ONLY_TABLES;
