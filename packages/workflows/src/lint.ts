@@ -19,6 +19,22 @@ export function findCancellingSleeps(def: WorkflowDefinition): string[] {
   return out;
 }
 
+/**
+ * BUILD_PLAN §8.8 / D-014: a product `awaitSignal` is a deadline or an
+ * approval parked across days -- a redeploy must never cancel it. The
+ * constructor's default is already "wait"; this catches anyone setting
+ * "cancel" deliberately.
+ */
+export function findCancellingAwaits(def: WorkflowDefinition): string[] {
+  const out: string[] = [];
+  for (const [id, p] of Object.entries(def.steps)) {
+    if (p.kind === "awaitSignal" && p.drainBehavior !== "wait") out.push(`${def.id}.${id}`);
+    const body = p.kind === "loop" ? p.body : p.kind === "onTrigger" && "inline" in p.body ? p.body.inline : null;
+    if (body !== null) out.push(...findCancellingAwaits(body));
+  }
+  return out;
+}
+
 /** Step ids must be mail-address safe (BUILD_PLAN §8.7). defineWorkflow enforces it; this is the test's mirror. */
 export const STEP_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 

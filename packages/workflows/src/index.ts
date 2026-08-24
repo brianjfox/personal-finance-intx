@@ -2,8 +2,10 @@ import type { Principal } from "@fin/contracts";
 import type { WorkflowDefinition } from "@intx/workflow";
 
 import { NIGHTLY_PRINCIPALS, nightlyWorkflow } from "./nightly";
+import { buildTaxYearWorkflow, TAX_CHECK_PRINCIPALS, taxCheckWorkflow } from "./tax-year";
 
 export * from "./nightly";
+export * from "./tax-year";
 export * from "./topology";
 export * from "./lint";
 export * from "./outcomes";
@@ -13,9 +15,22 @@ export interface RegisteredWorkflow {
   stepPrincipals: Record<string, Principal>;
 }
 
+/**
+ * The reference tax-year instance the static tests and lints walk. Hosts
+ * build their own per-year instance at launch (timeouts depend on the
+ * clock); step ids and principals are identical across instances, so this
+ * fixed anchor stands in for all of them.
+ */
+export const taxYearReference = buildTaxYearWorkflow({
+  taxYear: 2026,
+  now: new Date("2026-01-01T00:00:00.000Z"),
+});
+
 /** Every product workflow. The topology, capability and lint tests walk this list. */
 export const ALL_WORKFLOWS: readonly RegisteredWorkflow[] = [
   { definition: nightlyWorkflow, stepPrincipals: NIGHTLY_PRINCIPALS },
+  { definition: taxYearReference.definition, stepPrincipals: taxYearReference.stepPrincipals },
+  { definition: taxCheckWorkflow, stepPrincipals: TAX_CHECK_PRINCIPALS },
 ];
 
 export function workflowById(id: string): RegisteredWorkflow {
