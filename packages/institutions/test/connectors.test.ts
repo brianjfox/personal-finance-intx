@@ -49,6 +49,12 @@ const PLAID_TXNS = [
   { transaction_id: "tx-groceries", account_id: "3gE5gnRzNyfXpxK5ap", amount: 89.4, date: "2026-08-20", name: "GROCERY MART", merchant_name: "Grocery Mart", pending: false, iso_currency_code: "USD", personal_finance_category: { primary: "FOOD_AND_DRINK" } },
   { transaction_id: "tx-payroll", account_id: "3gE5gnRzNyfXpxK5ap", amount: -2500, date: "2026-08-15", name: "ACME PAYROLL", merchant_name: null, pending: false, iso_currency_code: "USD", personal_finance_category: { primary: "INCOME" } },
   { transaction_id: "tx-pending", account_id: "3gE5gnRzNyfXpxK5ap", amount: 12, date: "2026-08-23", name: "COFFEE", merchant_name: null, pending: true, iso_currency_code: "USD", personal_finance_category: null },
+  // Two REAL same-day charges from the same merchant, distinguished only by
+  // the raw descriptor (Google Workspace bills per domain). The cleaned
+  // merchant_name is identical -- using it as the description would collapse
+  // them into a false duplicate_transaction finding.
+  { transaction_id: "tx-gws-1", account_id: "3gE5gnRzNyfXpxK5ap", amount: 9.35, date: "2026-08-02", name: "GOOGLE *WS example.com", merchant_name: "Google Workspace", pending: false, iso_currency_code: "USD", personal_finance_category: { primary: "GENERAL_SERVICES" } },
+  { transaction_id: "tx-gws-2", account_id: "3gE5gnRzNyfXpxK5ap", amount: 9.35, date: "2026-08-02", name: "GOOGLE *WS other.org", merchant_name: "Google Workspace", pending: false, iso_currency_code: "USD", personal_finance_category: { primary: "GENERAL_SERVICES" } },
 ];
 const PLAID_HOLDINGS = {
   holdings: [
@@ -109,9 +115,14 @@ describe("plaid adapter (mock API)", () => {
     ]);
     // Plaid positive = outflow -> ledger negative; pending excluded.
     const tx = checking.transactions ?? [];
-    expect(tx.map((t) => t.txn_id).sort()).toEqual(["tx-groceries", "tx-payroll"]);
-    expect(tx.find((t) => t.txn_id === "tx-groceries")).toMatchObject({ amount: "-89.4", type: "debit", description: "Grocery Mart" });
+    expect(tx.map((t) => t.txn_id).sort()).toEqual(["tx-groceries", "tx-gws-1", "tx-gws-2", "tx-payroll"]);
+    expect(tx.find((t) => t.txn_id === "tx-groceries")).toMatchObject({ amount: "-89.4", type: "debit", description: "GROCERY MART" });
     expect(tx.find((t) => t.txn_id === "tx-payroll")).toMatchObject({ amount: "2500", type: "credit" });
+    // The raw descriptors keep the two same-day Google charges distinct
+    // (same date/amount/merchant), so no false duplicate finding downstream.
+    expect(tx.find((t) => t.txn_id === "tx-gws-1")?.description).toBe("Google Workspace · GOOGLE *WS example.com");
+    expect(tx.find((t) => t.txn_id === "tx-gws-2")?.description).toBe("Google Workspace · GOOGLE *WS other.org");
+    expect(tx.find((t) => t.txn_id === "tx-gws-1")?.description).not.toBe(tx.find((t) => t.txn_id === "tx-gws-2")?.description);
 
     const card = byId.get("acct.chase.creditAcct1")!;
     expect(card.type).toBe("credit_card");
@@ -132,7 +143,7 @@ describe("plaid adapter (mock API)", () => {
 
     expect(out.raw[0]?.filename).toBe("plaid-2026-08-24.json");
     const raw = JSON.parse(new TextDecoder().decode(out.raw[0]!.bytes)) as { transactions: unknown[] };
-    expect(raw.transactions).toHaveLength(3); // evidence keeps everything, pending included
+    expect(raw.transactions).toHaveLength(PLAID_TXNS.length); // evidence keeps everything, pending included
   });
 
   test("a fresh item's PRODUCT_NOT_READY on transactions does not lose the balances", async () => {

@@ -127,6 +127,20 @@ function dec(n: number): string {
   return n.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+/**
+ * The transaction description the ledger records. The raw statement
+ * descriptor is authoritative (it can carry per-charge detail like the
+ * billed domain); Plaid's cleaned merchant_name is prepended only when
+ * the raw descriptor doesn't already say it.
+ */
+export function describePlaid(t: { name: string; merchant_name?: string | null }): string {
+  const raw = t.name.trim();
+  const merchant = (t.merchant_name ?? "").trim();
+  if (raw === "") return merchant === "" ? "transaction" : merchant;
+  if (merchant === "" || raw.toLowerCase().includes(merchant.toLowerCase())) return raw;
+  return `${merchant} · ${raw}`;
+}
+
 /** Plaid errors tolerated per product: the account data still lands without that product. */
 const TOLERATED = new Set(["PRODUCT_NOT_READY", "PRODUCTS_NOT_SUPPORTED", "NO_INVESTMENT_ACCOUNTS", "NO_ACCOUNTS"]);
 
@@ -221,7 +235,12 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
             // Flip the sign: Plaid positive = outflow; the ledger's positive = inflow.
             amount: dec(-t.amount),
             type: (t.amount > 0 ? "debit" : "credit") as TransactionType,
-            description: t.merchant_name ?? t.name,
+            // The RAW statement descriptor, not Plaid's cleaned merchant_name:
+            // the raw name is what distinguishes two same-day charges from the
+            // same merchant (e.g. Google Workspace billed per domain), and the
+            // duplicate detector keys on it. Prefix the merchant only when it
+            // adds information the descriptor lacks.
+            description: describePlaid(t),
             raw_category: t.personal_finance_category?.primary ?? null,
           }));
 
