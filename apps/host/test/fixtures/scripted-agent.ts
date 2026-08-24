@@ -38,10 +38,13 @@ export function scriptedAgentFactory(): (def: AgentDefinition<BaseEnv>, env: Bas
 
     return {
       async send(content) {
-        const text = textOf(content);
         let reply: string;
         try {
-          reply = await runScript(text, call);
+          if (def.id === "market-manager") {
+            reply = await runMarketScript(inputOf(content), call);
+          } else {
+            reply = await runScript(textOf(content), call);
+          }
         } catch (cause) {
           reply = `error: ${cause instanceof Error ? cause.message : String(cause)}`;
         }
@@ -77,6 +80,31 @@ export function scriptedAgentFactory(): (def: AgentDefinition<BaseEnv>, env: Bas
   };
 }
 
+/**
+ * The Market Manager script: the step input is the drift report (plus
+ * attempt/prior on redrafts). Recompute through the REAL tools -- so
+ * policy authorizes `tool:compute_rebalance` / `tool:emit_proposal`
+ * under the market_manager principal -- pick candidate 0, and reply
+ * with exactly the canonical draft JSON, as the prompt demands.
+ */
+async function runMarketScript(
+  input: unknown,
+  call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>,
+): Promise<string> {
+  const o = (input ?? {}) as { run_key?: string; candidates?: unknown[]; attempt?: number };
+  const runKey = String(o.run_key ?? "");
+  const report = await call("compute_rebalance", { run_key: runKey });
+  const candidates = (report["candidates"] as unknown[] | undefined) ?? [];
+  if (candidates.length === 0) return "NOTHING";
+  const draft = await call("emit_proposal", {
+    run_key: runKey,
+    candidate_index: 0,
+    thesis: `attempt ${String(o.attempt ?? 1)}: rebalance toward the written plan`,
+    confidence: 0.7,
+  });
+  return JSON.stringify(draft);
+}
+
 async function runScript(text: string, call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>): Promise<string> {
   if (text === "aggregates") {
     const r = await call("ledger_read_aggregates", {});
@@ -100,6 +128,16 @@ async function runScript(text: string, call: (name: string, args: Record<string,
     return `journaled ${String(j["journal_id"])}`;
   }
   return `echo: ${text}`;
+}
+
+/** The invoker JSON-stringifies the step's input object. */
+function inputOf(content: unknown): unknown {
+  if (typeof content !== "string") return null;
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
 }
 
 /** The invoker JSON-stringifies the projected `{ text, message_id }` input. */
