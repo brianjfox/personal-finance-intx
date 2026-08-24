@@ -8,6 +8,7 @@ import { recordFindingsHandler } from "./ledger/record-findings";
 import { holdHandler, notifyHandler } from "./govern/notify";
 import { normalizeHandler } from "./normalize/normalize";
 import { reconcileHandler } from "./reconcile/reconcile";
+import { estateAuditHandler, registrySyncHandler } from "./registry/registry";
 import {
   taxConfirmHandler,
   taxEstimateHandler,
@@ -29,6 +30,8 @@ export const ACTION_REFS = {
   taxObligate: "tax.obligate",
   taxConfirm: "tax.confirm",
   taxSkip: "tax.skip",
+  registrySync: "registry.sync",
+  estateAudit: "estate.audit",
 } as const;
 
 export function buildActions(actx: ActionContext): Record<string, ActionHandler> {
@@ -45,6 +48,8 @@ export function buildActions(actx: ActionContext): Record<string, ActionHandler>
     [ACTION_REFS.taxObligate]: taxObligateHandler(actx),
     [ACTION_REFS.taxConfirm]: taxConfirmHandler(actx),
     [ACTION_REFS.taxSkip]: taxSkipHandler(actx),
+    [ACTION_REFS.registrySync]: registrySyncHandler(actx),
+    [ACTION_REFS.estateAudit]: estateAuditHandler(actx),
   };
 }
 
@@ -57,3 +62,6 @@ export * from "./ledger/record-findings";
 export * from "./govern/notify";
 export * from "./tax/math";
 export * from "./tax/handlers";
+export * from "./registry/registry";
+export * from "./projections/montecarlo";
+export * from "./projections/scenario";

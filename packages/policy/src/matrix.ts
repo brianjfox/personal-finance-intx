@@ -29,6 +29,15 @@ export interface MatrixRow {
   write: readonly string[];
   /** Governance-chain records this principal may append (recommendation, approval, instruction, resolution). Not "the ledger". */
   records?: readonly string[];
+  /**
+   * Agent tool names this principal may invoke (`tool:<name>` grants; the
+   * reactor authorizes every tool call through the same policy). Only the
+   * advisory tier holds tools; the matrix is the authority and the
+   * capability test cross-checks it against the bundles' static
+   * declarations, so a tool added to a bundle without a matrix row here
+   * is refused at runtime AND fails the test.
+   */
+  tools?: readonly string[];
   place_orders: "no" | "on_approval";
   pii: "full" | "masked";
 }
@@ -40,20 +49,36 @@ export const MATRIX: readonly MatrixRow[] = [
   { principal: "liabilities", credentials: "read_only", read: "yes", write: ["fact:obligation"], place_orders: "no", pii: "full" },
   { principal: "cash_flow", credentials: "none", read: "yes", write: ["fact:transaction"], place_orders: "no", pii: "full" },
   { principal: "document_vault", credentials: "none", read: "yes", write: ["fact:tax_document", "document"], place_orders: "no", pii: "full" },
-  { principal: "registry", credentials: "none", read: "yes", write: ["fact:entity"], place_orders: "no", pii: "full" },
+  { principal: "registry", credentials: "none", read: "yes", write: ["fact:entity", "fact:titling"], place_orders: "no", pii: "full" },
   // Tier 2 -- interpret: read-only over the ledger; compute; never fetch, never trade
   { principal: "reconciliation", credentials: "none", read: "yes", write: ["finding"], place_orders: "no", pii: "full" },
   { principal: "tax_engine", credentials: "none", read: "yes", write: ["finding"], place_orders: "no", pii: "full" },
   { principal: "risk", credentials: "none", read: "yes", write: ["finding"], place_orders: "no", pii: "full" },
   { principal: "projections", credentials: "none", read: "yes", write: [], place_orders: "no", pii: "masked" },
   // Tier 3 -- advise: propose only; no keys at all
-  { principal: "strategist", credentials: "none", read: "aggregates", write: ["journal"], place_orders: "no", pii: "masked" },
+  {
+    principal: "strategist",
+    credentials: "none",
+    read: "aggregates",
+    write: ["journal"],
+    tools: ["ledger_read_aggregates", "list_subjects", "run_projection", "run_scenario", "journal_write"],
+    place_orders: "no",
+    pii: "masked",
+  },
   // Slide 13: Market Manager "write ledger: no". Its proposals are *emitted*
   // (the agent's reply), then parsed and recorded by the Auditor's pipeline
   // (BUILD_PLAN §8.1 bridge action) -- so the `recommendation` record is the
   // Auditor's, not the Market Manager's. The capability test enforces this.
   { principal: "market_manager", credentials: "none", read: "positions", write: [], place_orders: "no", pii: "masked" },
-  { principal: "estate_planner", credentials: "none", read: "yes", write: ["finding"], place_orders: "no", pii: "masked" },
+  {
+    principal: "estate_planner",
+    credentials: "none",
+    read: "yes",
+    write: ["finding"],
+    tools: ["registry_read", "document_read", "emit_finding"],
+    place_orders: "no",
+    pii: "masked",
+  },
   // Tier 4 -- govern: check, gate, remember
   { principal: "auditor", credentials: "none", read: "yes", write: [], records: ["recommendation"], place_orders: "no", pii: "masked" },
   { principal: "execution", credentials: "scoped_per_order", read: "yes", write: ["receipt"], records: ["instruction"], place_orders: "on_approval", pii: "full" },
@@ -153,6 +178,14 @@ export function matrixGrants(): GrantRule[] {
     out.push(grant(p, "orders", "place", row.place_orders === "no" ? "deny" : "allow"));
     // pii
     out.push(grant(p, "pii:full", "read", row.pii === "full" ? "allow" : "deny"));
+    // agent tools: exactly the named tools; everything else fails closed
+    // (no matching grant -> null -> refusal), plus an explicit wildcard
+    // deny for principals that hold no tools at all.
+    if (row.tools !== undefined && row.tools.length > 0) {
+      for (const t of row.tools) out.push(grant(p, `tool:${t}`, "invoke", "allow"));
+    } else {
+      out.push(grant(p, "tool:*", "invoke", "deny"));
+    }
   }
   return out;
 }
