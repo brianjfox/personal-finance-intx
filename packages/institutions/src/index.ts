@@ -2,5 +2,8 @@ export * from "./adapter";
 export * from "./csv";
 export * from "./jsondrop";
 export * from "./csvdrop";
+export * from "./enablebanking";
 export * from "./fixture";
+export * from "./plaid";
 export * from "./registry";
+export * from "./secrets";
