@@ -59,6 +59,21 @@ export interface Obligation {
   subject: string; key: string; obligation_id: string; kind: string; description: string; account_id: string;
   amount: string | null; due: string | null; currency: string; fact_id: string; observed_at: string; supersedes: string | null; provisional: boolean;
 }
+export type ChatAgentName = "strategist" | "estate_planner";
+export interface ChatEvidence { tool: string; result: unknown; fact_ids: string[]; at: string }
+export interface ChatTurn {
+  agent: ChatAgentName; message_id: string; message: string; reply: string;
+  evidence: ChatEvidence[]; journal_ids: string[]; at: string;
+}
+export interface EstateStatus {
+  configured: boolean;
+  entities: Array<{ subject: string; fact_id: string; payload: { name?: string; kind?: string } }>;
+  titling: Array<{ subject: string; fact_id: string; payload: { owner?: string; in_trust?: string | null; beneficiaries?: Array<{ name: string; share?: string | null }>; verified_at?: string } }>;
+  plan: { titling: Array<{ account_id: string; owner: string; in_trust?: string | null; beneficiaries?: Array<{ name: string; share?: string | null }> }>; documents: Array<{ kind: string; description: string }>; executors: string[] } | null;
+  openFindings: number;
+  lastAudit: unknown;
+}
+export interface JournalEntry { id: string; at: string; kind: string; subject?: string | null; summary: string; detail: Record<string, unknown>; refs: string[]; author: string }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -88,6 +103,11 @@ export const api = {
   taxYearStart: (year?: number) => post<{ runId: string }>("/api/tax-year", year !== undefined ? { year } : {}),
   taxCheck: (quarter: number, stage: "pre" | "due") => post<{ runId: string; status: string }>("/api/tax/check", { quarter, stage }),
   taxSkip: (quarter: number, stage: "pre" | "due", note: string) => post<{ runId: string; signalId: string }>("/api/tax/skip", { quarter, stage, note }),
+  chatTranscript: (agent: ChatAgentName) => get<ChatTurn[]>(`/api/chat/${agent}`),
+  chatSend: (agent: ChatAgentName, text: string) => post<{ message_id: string; turn: ChatTurn | null }>("/api/chat", { agent, text, wait: true }),
+  estate: () => get<EstateStatus>("/api/estate"),
+  estateAudit: () => post<{ runId: string; status: string }>("/api/estate/audit"),
+  journalFull: () => get<JournalEntry[]>("/api/journal"),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {

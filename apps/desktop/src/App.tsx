@@ -5,9 +5,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, money, when, type Fact, type Finding, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
+import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "tax" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "positions" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -30,6 +30,9 @@ export function App() {
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
             ["tax", "Tax calendar", null],
+            ["strategy", "Strategy", null],
+            ["estate", "Estate", null],
+            ["journal", "Journal", null],
             ["runs", "Nightly runs", null],
             ["documents", "Documents", null],
           ] as const
@@ -45,6 +48,9 @@ export function App() {
         {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
         {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
         {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
+        {page === "strategy" && <ChatPage openFact={setFactId} />}
+        {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
+        {page === "journal" && <JournalPage tick={tick} openFact={setFactId} />}
         {page === "runs" && <Runs tick={tick} onChanged={refresh} />}
         {page === "documents" && <Documents tick={tick} />}
       </main>
@@ -371,6 +377,205 @@ function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: bo
         <button disabled={busy} className="secondary" onClick={() => act(() => api.taxSkip(q.quarter, q.pre.state === "armed" ? "pre" : "due", note))}>Skip gate</button>
       </div>
     </div>
+  );
+}
+
+// Phase 3: the Strategist chat. The model narrates; every figure comes
+// from a tool result recorded as evidence, each number clickable back to
+// its facts. Chat is a tool inside the product, not the product.
+function ChatPage({ openFact }: { openFact: (id: string) => void }) {
+  const [agent, setAgent] = useState<ChatAgentName>("strategist");
+  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    api.chatTranscript(agent).then(setTurns).catch(() => setTurns([]));
+  }, [agent]);
+  useEffect(load, [load]);
+  const send = async () => {
+    const t = text.trim();
+    if (t === "") return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.chatSend(agent, t);
+      setText("");
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <h2>
+        Strategy ·{" "}
+        <select value={agent} onChange={(e) => setAgent(e.target.value as ChatAgentName)}>
+          <option value="strategist">Strategist</option>
+          <option value="estate_planner">Estate Planner</option>
+        </select>
+      </h2>
+      <p className="small muted">
+        Advisory only: no credentials, no writes to fact tables, no orders. Figures come from deterministic tools; each reply's
+        evidence links back to dated ledger facts. Material theses land in the journal.
+      </p>
+      {turns.length === 0 && <p className="muted">No conversation yet. Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"</p>}
+      {turns.map((t) => (
+        <div key={t.message_id} className="queue-item">
+          <div className="small muted">you · {when(t.at)}</div>
+          <div style={{ marginBottom: 8 }}>{t.message}</div>
+          <div className="small muted">{t.agent}</div>
+          <div style={{ whiteSpace: "pre-wrap" }}>{t.reply}</div>
+          {t.evidence.map((e, i) => (
+            <div key={i} className="small" style={{ marginTop: 6 }}>
+              <span className="pill info">{e.tool}</span>{" "}
+              {e.fact_ids.slice(0, 8).map((id) => (
+                <FactLink key={id} id={id} openFact={openFact}>
+                  <span className="muted">{id.slice(0, 14)}… </span>
+                </FactLink>
+              ))}
+              {e.fact_ids.length > 8 && <span className="muted">(+{e.fact_ids.length - 8} facts)</span>}
+            </div>
+          ))}
+          {t.journal_ids.length > 0 && <div className="small muted">journaled: {t.journal_ids.join(", ")}</div>}
+        </div>
+      ))}
+      {error !== null && <div className="banner">{error}</div>}
+      <div className="actions">
+        <input
+          style={{ flex: 1 }}
+          placeholder={busy ? "thinking…" : "Ask anything…"}
+          value={text}
+          disabled={busy}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void send();
+          }}
+        />
+        <button disabled={busy} onClick={() => void send()}>
+          {busy ? "…" : "Send"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Phase 3: the Entity & Estate Registry -- plan on paper vs plan in reality.
+function EstatePage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [estate, setEstate] = useState<EstateStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.estate().then(setEstate).catch(() => setEstate(null));
+  }, [tick]);
+  if (estate === null) return <p className="muted">Host unreachable.</p>;
+  if (!estate.configured) {
+    return (
+      <>
+        <h2>Estate registry</h2>
+        <p className="muted">
+          No estate plan. Write <code>estate.json</code> into the data directory (entities, intended titling, expected
+          documents, executors) -- with your attorney -- and run the audit.
+        </p>
+      </>
+    );
+  }
+  const audit = async () => {
+    setBusy(true);
+    try {
+      await api.estateAudit();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const observedBySubject = new Map(estate.titling.map((t) => [t.subject, t]));
+  return (
+    <>
+      <h2>Estate registry</h2>
+      <p>
+        <button disabled={busy} onClick={() => void audit()}>{busy ? "auditing…" : "Run hygiene audit"}</button>{" "}
+        {estate.openFindings > 0 && <span className="pill high">{estate.openFindings} open estate finding(s) in the queue</span>}
+      </p>
+      <h3>Entities</h3>
+      <table>
+        <thead><tr><th>Entity</th><th>Kind</th><th>Fact</th></tr></thead>
+        <tbody>
+          {estate.entities.map((e) => (
+            <tr key={e.subject}>
+              <td>{e.payload.name ?? e.subject}<div className="small muted">{e.subject}</div></td>
+              <td>{e.payload.kind}</td>
+              <td className="small"><FactLink id={e.fact_id} openFact={openFact}>{e.fact_id.slice(0, 16)}…</FactLink></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3>Titling — plan vs paperwork</h3>
+      <table>
+        <thead><tr><th>Account</th><th>Plan</th><th>Observed (dated)</th></tr></thead>
+        <tbody>
+          {(estate.plan?.titling ?? []).map((p) => {
+            const o = observedBySubject.get(p.account_id);
+            const planStr = `${p.owner}${p.in_trust ? ` · in ${p.in_trust}` : ""}${(p.beneficiaries ?? []).length > 0 ? ` · ben: ${(p.beneficiaries ?? []).map((b) => b.name).join(", ")}` : ""}`;
+            const obsStr = o === undefined ? null : `${o.payload.owner ?? "?"}${o.payload.in_trust ? ` · in ${o.payload.in_trust}` : ""}${(o.payload.beneficiaries ?? []).length > 0 ? ` · ben: ${(o.payload.beneficiaries ?? []).map((b) => b.name).join(", ")}` : ""}`;
+            const differs = obsStr !== null && planStr !== obsStr;
+            return (
+              <tr key={p.account_id} className={differs ? "prov" : ""}>
+                <td className="small">{p.account_id}</td>
+                <td className="small">{planStr}</td>
+                <td className="small">
+                  {o === undefined ? (
+                    <span className="pill medium">no record</span>
+                  ) : (
+                    <FactLink id={o.fact_id} openFact={openFact}>{obsStr}</FactLink>
+                  )}
+                  {o?.payload.verified_at !== undefined && <span className="muted"> · verified {o.payload.verified_at}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <h3>Break-glass</h3>
+      <p className="small">
+        Executors: {(estate.plan?.executors ?? []).join(", ") || <span className="pill high">none recorded</span>} · expected
+        documents: {(estate.plan?.documents ?? []).map((d) => d.kind).join(", ") || "none"}
+      </p>
+    </>
+  );
+}
+
+// Phase 3: the Decision Journal -- what was decided, when, why.
+function JournalPage({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  useEffect(() => {
+    api.journalFull().then(setEntries).catch(() => setEntries([]));
+  }, [tick]);
+  return (
+    <>
+      <h2>Decision journal</h2>
+      <p className="small muted">Financial feedback loops are years long; memory is the only way to learn from them.</p>
+      <table>
+        <thead><tr><th>When</th><th>Kind</th><th>Author</th><th>Entry</th><th>Refs</th></tr></thead>
+        <tbody>
+          {entries.map((j) => (
+            <tr key={j.id}>
+              <td className="small">{when(j.at)}</td>
+              <td><span className={`pill ${j.kind === "decision" ? "info" : "low"}`}>{j.kind}</span></td>
+              <td className="small">{j.author}</td>
+              <td>{j.summary}</td>
+              <td className="small">
+                {j.refs.slice(0, 4).map((r) => (
+                  <FactLink key={r} id={r} openFact={openFact}><span className="muted">{r.slice(0, 12)}… </span></FactLink>
+                ))}
+                {j.refs.length > 4 && <span className="muted">(+{j.refs.length - 4})</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 
