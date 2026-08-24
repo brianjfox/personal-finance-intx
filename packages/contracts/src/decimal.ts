@@ -45,6 +45,12 @@ export function sub(a: string, b: string): Decimal {
 export function mul(a: string, b: string): Decimal {
   return formatDecimal((parseDecimal(a) * parseDecimal(b)) / ONE);
 }
+/** Divide, truncating toward zero at SCALE places. Throws on a zero divisor. */
+export function div(a: string, b: string): Decimal {
+  const y = parseDecimal(b);
+  if (y === 0n) throw new Error(`decimal division by zero: ${a} / ${b}`);
+  return formatDecimal((parseDecimal(a) * ONE) / y);
+}
 export function neg(a: string): Decimal {
   return formatDecimal(-parseDecimal(a));
 }

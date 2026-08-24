@@ -16,7 +16,8 @@ export type FindingKind = typeof FindingKind.infer;
 
 /**
  * Stable codes. The five silent errors of deck slide 10 are the first five;
- * the rest are the cheap extra checks that fall out of the same pass.
+ * then the cheap extra checks that fall out of the same pass; then the
+ * Phase 2 Tax Engine codes.
  */
 export const FINDING_CODES = [
   "internal_transfer_booked_as_income", // 1. transfer between own accounts booked as income
@@ -28,6 +29,12 @@ export const FINDING_CODES = [
   "position_balance_mismatch", //          sum(positions) != stated total
   "fetch_failed", //                       an institution did not answer
   "unknown_account", //                    an account appeared that the registry has not seen
+  // Phase 2 -- Tax Engine (deck slide 17: "nothing surprises you")
+  "estimated_tax_due", //                  a quarterly estimated payment is due: pay it from reserve
+  "reserve_shortfall", //                  the tax reserve does not cover the upcoming installment
+  "safe_harbor_shortfall", //              cumulative payments fell short of a past installment
+  "wash_sale_risk", //                     a loss sale with a replacement buy inside the 30-day window
+  "tax_estimate_blocked", //               the estimate refused to compute over provisional data
 ] as const;
 export type FindingCode = (typeof FINDING_CODES)[number];
 export const FindingCode = type.enumerated(...FINDING_CODES);
@@ -56,6 +63,24 @@ export const Finding = type({
 export type Finding = typeof Finding.infer;
 export const FindingInput = Finding.omit("id");
 export type FindingInput = typeof FindingInput.infer;
+
+/**
+ * A finding drafted by an interpretation pass before the facts it points
+ * at have ledger ids: `after_refs` are proposed-fact refs a later commit
+ * step resolves to ids, `fingerprint` is the stable identity used to
+ * suppress re-raising a known condition (deck slide 21), and `holds`
+ * says whether the finding marks its subject's night provisional.
+ * Emitted by Reconciliation (Phase 1) and the Tax Engine (Phase 2).
+ */
+export interface FindingDraft extends Omit<FindingInput, "after" | "evidence"> {
+  /** Ledger fact ids already known. */
+  evidence: string[];
+  fingerprint: string;
+  /** Refs of proposed facts (not yet committed); resolved to ids after commit. */
+  after_refs: string[];
+  /** Whether this finding holds its subject's data provisional. */
+  holds: boolean;
+}
 
 export const ResolutionDecision = type(
   "'accept_incoming' | 'keep_prior' | 'both' | 'dismiss' | 'custom'",

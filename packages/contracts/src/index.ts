@@ -7,3 +7,4 @@ export * from "./finding";
 export * from "./governance";
 export * from "./records";
 export * from "./snapshot";
+export * from "./tax";
