@@ -9,6 +9,7 @@ import {
   POSITION_ACCOUNT_TYPES,
   type AccountPayload,
   type BalancePayload,
+  type ObligationPayload,
   type PositionPayload,
 } from "@fin/contracts";
 
@@ -230,4 +231,44 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string } 
 /** Subject -> current transaction facts (one per txn key). */
 export function transactions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): StoredFact[] {
   return ledger.asOf({ kind: "transaction", ...opts });
+}
+
+export interface ObligationView {
+  subject: string;
+  key: string;
+  obligation_id: string;
+  kind: ObligationPayload["kind"];
+  description: string;
+  account_id: string;
+  amount: string | null;
+  due: string | null;
+  currency: string;
+  fact_id: string;
+  observed_at: string;
+  effective_at: string;
+  supersedes: string | null;
+  provisional: boolean;
+}
+
+/** Current obligations (one per subject/key), payment amount and due date surfaced. */
+export function obligations(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): ObligationView[] {
+  return ledger.asOf({ kind: "obligation", ...opts }).map((f) => {
+    const p = f.payload as ObligationPayload;
+    return {
+      subject: f.subject,
+      key: f.key,
+      obligation_id: p.obligation_id,
+      kind: p.kind,
+      description: p.description,
+      account_id: p.account_id,
+      amount: p.payment_amount ?? null,
+      due: p.payment_due ?? null,
+      currency: p.currency,
+      fact_id: f.id,
+      observed_at: f.observed_at,
+      effective_at: f.effective_at,
+      supersedes: f.supersedes,
+      provisional: f.provisional,
+    };
+  });
 }

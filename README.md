@@ -56,8 +56,14 @@ with a column map for `csvdrop`). The nightly takes the newest file.
   parked `awaitSignal`. Done (`phase-0/spike`).
 - Phase 1 — ledger: contracts, ledger, vault, one institution end to end,
   reconciliation, nightly with the provisional gate, GUI. Done (`phase-1/ledger`).
-- Phase 2 — time and obligations. Phase 3 — judgement. Phase 4 — action
-  (execution disabled). Phase 5 — execution, on a separate decision.
+- Phase 2 — time and obligations: the Tax Engine (annualized estimates,
+  lot-level gains, wash-sale watch, safe-harbour coverage), the standing
+  tax-year workflow with resumable deadline gates, the pre-staged reserve,
+  escalations, tax GUI. Done (`phase-2/obligations`). The estimator is not
+  tax advice; rates and the prior-year figure are operator configuration
+  (`tax-profile.json`), chosen with an accountant.
+- Phase 3 — judgement. Phase 4 — action (execution disabled). Phase 5 —
+  execution, on a separate decision.
 
 Decisions where the plan and the framework disagreed are recorded in
 `DECISIONS.md` (kept alongside this repo, outside it).

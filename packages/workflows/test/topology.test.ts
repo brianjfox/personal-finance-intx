@@ -12,6 +12,7 @@ import {
   ALL_WORKFLOWS,
   allStepPrincipals,
   findApprovalBypasses,
+  findCancellingAwaits,
   findCancellingSleeps,
   findParallelJoins,
   findUnexpiringGates,
@@ -91,6 +92,15 @@ describe("definition lints", () => {
   });
   test("D-011: no product step joins more than one dependency", () => {
     for (const w of ALL_WORKFLOWS) expect(findParallelJoins(w.definition)).toEqual([]);
+  });
+  test("D-014: no product awaitSignal is cancelled at drain -- deadlines and approvals survive a redeploy", () => {
+    for (const w of ALL_WORKFLOWS) expect(findCancellingAwaits(w.definition)).toEqual([]);
+    const w = defineWorkflow({
+      id: "baddrain",
+      trigger: { type: "manual" },
+      steps: { approve: awaitSignal({ name: "approve", timeout: 1000, onTimeout: "x", drainBehavior: "cancel" }), x: action({ handler: "noop.x", after: ["approve"] }) },
+    });
+    expect(findCancellingAwaits(w)).toEqual(["baddrain.approve"]);
   });
   test("every step has a principal, and ids are mail-address safe (§8.7)", () => {
     for (const w of ALL_WORKFLOWS) {

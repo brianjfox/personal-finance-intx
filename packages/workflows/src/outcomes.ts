@@ -49,9 +49,12 @@ export function stepOutcomes(events: readonly WorkflowEvent[]): Record<string, S
 function parseInlineSentinel(ref: string): { gateId: string; branch: string } | null {
   if (!ref.startsWith("inline:")) return null;
   try {
-    const v = JSON.parse(ref.slice("inline:".length)) as { skipped?: boolean; gateId?: string; branch?: string };
-    if (v !== null && typeof v === "object" && v.skipped === true && typeof v.gateId === "string" && typeof v.branch === "string") {
-      return { gateId: v.gateId, branch: v.branch };
+    const v = JSON.parse(ref.slice("inline:".length)) as { skipped?: boolean; gateId?: string; branch?: string; timedOut?: boolean };
+    if (v !== null && typeof v === "object" && v.skipped === true && typeof v.gateId === "string") {
+      // A gate sentinel carries `branch`; a timed awaitSignal's routing
+      // sentinel carries `timedOut` instead (the pruned side is implied).
+      if (typeof v.branch === "string") return { gateId: v.gateId, branch: v.branch };
+      if (typeof v.timedOut === "boolean") return { gateId: v.gateId, branch: v.timedOut ? "timeout" : "signal" };
     }
   } catch {
     /* not a sentinel */

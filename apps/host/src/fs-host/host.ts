@@ -27,6 +27,7 @@ import { createLoopIteration, type ActionHandler } from "@intx/workflow/runlocal
 
 import { createFsBlobSubstrate } from "./blobs";
 import { createFsEffectLedger, type FsEffectLedger } from "./effects";
+import { startChainFlusher } from "./flush";
 import { ensureDir, hostPaths, type HostPaths } from "./paths";
 import { createFsRepoStore, type FsRepoStore } from "./repo-store";
 import { createFsScheduler } from "./scheduler";
@@ -46,6 +47,8 @@ export interface FsHostOptions {
   newId?: (prefix: string) => string;
   /** Signal inbox poll interval. */
   pollMs?: number;
+  /** Pending-commit-buffer flush interval for live runs (D-017). */
+  flushMs?: number;
 }
 
 export interface RunOptions {
@@ -158,13 +161,33 @@ export function createFsHost(opts: FsHostOptions): FsHost {
       // was down is already queued when `awaitNext` is called.
       const started = channel.start();
       const fresh = !repoStore.hasRun(runOpts.runId);
-      const runOptions = fresh
-        ? { runId: runOpts.runId, triggerPayload: runOpts.triggerPayload }
-        : { runId: runOpts.runId };
 
       let inner: WorkflowRun | undefined;
-      const complete: Promise<RunResult> = started.then(() => {
-        inner = runtimeRun(definition, env, runOptions);
+      const complete: Promise<RunResult> = started.then(async () => {
+        // At the pinned framework version the runtime builds every step's
+        // SelectorContext from `options.triggerPayload` and never
+        // rehydrates it from the durable RunStarted -- so on an adopted
+        // resume, any `{ from: "trigger.payload" }` selector would throw
+        // and the step would fail. Re-supply the recorded payload from
+        // the log (D-015). RunStarted is only emitted from `pending`, so
+        // passing it for an adopted run affects nothing else.
+        let triggerPayload = runOpts.triggerPayload;
+        if (!fresh) {
+          const log = await repoStore.read(runOpts.runId);
+          const runStarted = log.find((e) => e.kind === "RunStarted") as
+            | { trigger?: { payload?: unknown } }
+            | undefined;
+          triggerPayload = runStarted?.trigger?.payload ?? runOpts.triggerPayload;
+        }
+        inner = runtimeRun(definition, env, {
+          runId: runOpts.runId,
+          ...(triggerPayload !== undefined ? { triggerPayload } : {}),
+        });
+        // A long-lived run (the standing tax year) buffers step events
+        // with no boundary to flush them; drain the buffer on an
+        // interval so a shutdown while parked never leaves completed
+        // work looking in-flight (D-017).
+        startChainFlusher(repoStore, runOpts.runId, inner.complete, opts.flushMs ?? 500);
         return inner.complete;
       });
       void complete.finally(() => channel.stop());

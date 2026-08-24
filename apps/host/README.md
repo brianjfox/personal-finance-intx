@@ -11,24 +11,31 @@ terminology collision).
 ## Layout
 
 ```
-src/app.ts           createApp(): ledger + vault + institutions + fs-host with the policy authorize
-src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, start nightly, resolve finding
-src/cli.ts           fin-host init|nightly|queue|resolve|runs|serve
-src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes (night 1 / night 2)
+src/app.ts           createApp(): ledger + vault + institutions + fs-host with the policy authorize;
+                     tax profile, standing tax-year run lifecycle, taxStatus()
+src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, start nightly, resolve
+                     finding, tax calendar (status/check/skip), obligations
+src/cli.ts           fin-host init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|serve
+src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes + a demo tax profile
 src/fs-host/
   paths.ts           data-dir layout + atomic write helper
   repo-store.ts      RepoStore: runs/<runId>/events.jsonl, atomic batch rewrite
   blobs.ts           BlobSubstrate: inline refs or content-addressed blobs/
   effects.ts         EffectLedger: effects/<sha256(key)>.json, durable on return
-  scheduler.ts       Scheduler: runlocal's in-memory scheduler over the durable store
+  scheduler.ts       Scheduler: runlocal's scheduler wrapped with long-delay chunking (the setTimeout
+                     2^31-1 ms clamp) and overdue-timer staggering (D-014/D-015)
   signal-channel.ts  SignalChannel: in-process FIFO + durable per-run inbox
-  host.ts            createFsHost(): assembles the env, run()/deliver()
+  flush.ts           periodic pending-commit-buffer flush for standing runs (D-017)
+  host.ts            createFsHost(): assembles the env, run()/deliver(); rehydrates trigger.payload
+                     on adopted resume (D-015)
 src/spike/
   toy.ts             action -> awaitSignal -> action (and a sleep variant)
   cli.ts             one process = one host = one run; JSON lines on stdout
 test/
   phase0-crash-resume.test.ts   the Phase 0 gate, against real child processes
   phase1-nightly.test.ts        Phase 1 acceptance through fin-host; SIGKILL mid-nightly
+  phase2-taxyear.test.ts        Phase 2: a deadline parked in a timed awaitSignal survives SIGKILL
+                                and fires after restart; skips delivered while down; long-timer clamp
 ```
 
 Data directory (`~/Library/Application Support/FinInterchange/` in the
@@ -43,6 +50,7 @@ app; any path in tests):
 <dataDir>/vault/<sha256>.<ext>         original documents
 <dataDir>/institutions.json            institution registry
 <dataDir>/institutions/<id>/inbox/     file-drop inboxes
+<dataDir>/tax-profile.json             the operator's tax profile (rates, prior-year tax, reserve account)
 ```
 
 ## Run the Phase 0 gate by hand

@@ -2,7 +2,7 @@
 // string ref (BUILD_PLAN §8.5) so the workflow definition stays hashable;
 // the registry is built once per host from this context.
 
-import type { Principal } from "@fin/contracts";
+import type { Principal, TaxProfile } from "@fin/contracts";
 import type { InstitutionAdapter } from "@fin/institutions";
 import type { Ledger } from "@fin/ledger";
 import type { Vault } from "@fin/vault";
@@ -15,6 +15,8 @@ export interface ActionContext {
   clock: () => Date;
   /** Reconciliation thresholds. */
   thresholds?: Partial<Thresholds>;
+  /** The operator's tax profile (Phase 2). Null/absent -> tax checks fail loudly. */
+  taxProfile?: () => TaxProfile | null;
 }
 
 export interface Thresholds {
@@ -35,6 +37,7 @@ export type ActionHandler = (input: unknown, ctx: EffectContext, signal: AbortSi
 export const CAP = {
   institutionRead: "institution.read",
   vaultWrite: "vault.write",
+  ledgerRead: "ledger.read",
   ledgerWriteFact: (kind: string) => `ledger.write.fact.${kind}`,
   ledgerWriteFinding: "ledger.write.finding",
   ledgerEmit: "ledger.emit",

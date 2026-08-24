@@ -31,6 +31,34 @@ export interface RunSummary {
   runId: string; workflow: string; status: string; startedAt: string | null; endedAt: string | null;
   steps: Record<string, { status: string; gateId?: string; branch?: string; message?: string }>;
 }
+export interface TaxStageStatus { state: "pending" | "armed" | "ran" | "skipped" | "failed"; fire_at: string | null; covered: boolean | null }
+export interface TaxEstimatePayload {
+  quarter: number; stage: string; as_of: string; due: string; blocked: string[];
+  figures: {
+    ordinary_income: string; st_gains: string; lt_gains: string; basis_incomplete: boolean;
+    annualization_factor: string; annualized_tax: string; safe_harbor_cap: string;
+    required_cum: string; payments_cum: string; installment_due: string;
+  } | null;
+  reserve: { account: string; balance: string | null; required: string; shortfall: string } | null;
+  reserve_ok: boolean;
+  wash_sales: Array<{ symbol: string; sale_txn_id: string; sale_date: string; loss: string; disallowed_estimate: string }>;
+  evidence: string[];
+}
+export interface TaxQuarterStatus {
+  quarter: number; due: string; period_end: string;
+  pre: TaxStageStatus; due_stage: TaxStageStatus;
+  obligation: { fact_id: string; amount: string | null; due: string | null; observed_at: string; superseded: boolean } | null;
+  estimate: TaxEstimatePayload | null;
+}
+export interface TaxStatus {
+  profile: { tax_year: number; reserve_account: string; ordinary_rate: string; ltcg_rate: string; prior_year_tax: string; withholding_annual: string } | null;
+  year: number | null; runId: string | null; runStatus: string | null;
+  quarters: TaxQuarterStatus[];
+}
+export interface Obligation {
+  subject: string; key: string; obligation_id: string; kind: string; description: string; account_id: string;
+  amount: string | null; due: string | null; currency: string; fact_id: string; observed_at: string; supersedes: string | null; provisional: boolean;
+}
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -55,6 +83,11 @@ export const api = {
   nightly: () => post<{ runId: string; status: string }>("/api/nightly?wait=1"),
   documents: () => get<Doc[]>("/api/documents"),
   journal: () => get<Array<{ id: string; at: string; kind: string; summary: string; author: string; refs: string[] }>>("/api/journal"),
+  tax: () => get<TaxStatus>("/api/tax"),
+  obligations: () => get<Obligation[]>("/api/obligations"),
+  taxYearStart: (year?: number) => post<{ runId: string }>("/api/tax-year", year !== undefined ? { year } : {}),
+  taxCheck: (quarter: number, stage: "pre" | "due") => post<{ runId: string; status: string }>("/api/tax/check", { quarter, stage }),
+  taxSkip: (quarter: number, stage: "pre" | "due", note: string) => post<{ runId: string; signalId: string }>("/api/tax/skip", { quarter, stage, note }),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {

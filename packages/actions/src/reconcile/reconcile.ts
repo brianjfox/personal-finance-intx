@@ -20,7 +20,7 @@ import {
   decimal,
   type BalancePayload,
   type FindingCode,
-  type FindingInput,
+  type FindingDraft,
   type FindingKind,
   type LotPayload,
   type PositionPayload,
@@ -33,22 +33,9 @@ import type { Ledger, StoredFact } from "@fin/ledger";
 import { DEFAULT_THRESHOLDS, type ActionContext, type ActionHandler, type Thresholds } from "../context";
 import type { NormalizeOutput, ProposedFact } from "../normalize/normalize";
 
-export interface FindingDraft extends Omit<FindingInput, "after" | "evidence"> {
-  /** Ledger fact ids already known. */
-  evidence: string[];
-  /**
-   * Stable identity of the condition (code + subject + the detail that
-   * defines it). A finding whose fingerprint already exists in the ledger
-   * -- open, or for gap-like codes ever -- is not re-emitted night after
-   * night: "if the approval queue is long and boring, you will rubber-stamp
-   * it" (deck slide 21). Stored in `detail.fingerprint`.
-   */
-  fingerprint: string;
-  /** Refs of proposed facts (tonight's); resolved to ids after commit. */
-  after_refs: string[];
-  /** Whether this finding holds its subject's data provisional. */
-  holds: boolean;
-}
+// The draft shape moved to `@fin/contracts` in Phase 2 (the Tax Engine
+// drafts the same shape); re-exported here so Phase 1 imports still hold.
+export type { FindingDraft } from "@fin/contracts";
 
 export interface ReconcileOutput {
   run_key: string;
@@ -104,7 +91,12 @@ const DEDUPE_FOREVER: ReadonlySet<FindingCode> = new Set([
   "internal_transfer_booked_as_income",
 ]);
 
-function suppressKnown(drafts: FindingDraft[], ledger: Ledger): FindingDraft[] {
+/**
+ * Drop drafts whose condition the ledger already knows: forever-deduped
+ * codes by any prior finding with the fingerprint, the rest only while a
+ * finding with the fingerprint is still open. Shared with the Tax Engine.
+ */
+export function suppressKnown(drafts: FindingDraft[], ledger: Ledger): FindingDraft[] {
   const known = new Set<string>();
   const openOnly = new Set<string>();
   for (const f of ledger.allFindings(5000)) {
