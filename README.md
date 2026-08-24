@@ -62,8 +62,16 @@ with a column map for `csvdrop`). The nightly takes the newest file.
   escalations, tax GUI. Done (`phase-2/obligations`). The estimator is not
   tax advice; rates and the prior-year figure are operator configuration
   (`tax-profile.json`), chosen with an accountant.
-- Phase 3 — judgement. Phase 4 — action (execution disabled). Phase 5 —
-  execution, on a separate decision.
+- Phase 3 — judgement: the Strategist chat (a standing unbounded agent
+  step; figures only ever from deterministic tools, every number
+  clickable to facts, theses journaled), seeded Monte Carlo + sell-asset
+  scenario engines, the Entity & Estate Registry with its plan-vs-reality
+  hygiene audit, the Estate Planner. Done (`phase-3/judgement`). The
+  advisory agents need `ANTHROPIC_API_KEY` (and optionally `FIN_MODEL`);
+  everything else, including scenarios and projections, runs without a
+  model.
+- Phase 4 — action (execution disabled). Phase 5 — execution, on a
+  separate decision.
 
 Decisions where the plan and the framework disagreed are recorded in
 `DECISIONS.md` (kept alongside this repo, outside it).
