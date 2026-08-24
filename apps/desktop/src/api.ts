@@ -98,6 +98,7 @@ export interface InstitutionAccountRow {
 export interface InstitutionOverview {
   institution_id: string; name: string; adapter: string; enabled: boolean; managed: boolean;
   accounts: InstitutionAccountRow[]; problems: string[];
+  consent_until: string | null; aspsp: { name: string; country: string } | null;
 }
 export interface InstitutionsOverview { institutions: InstitutionOverview[]; hasFacts: boolean }
 export interface ManagedAccount {
@@ -163,6 +164,14 @@ export const api = {
   removeManagedAccount: (id: string, accountId: string) =>
     post<{ runId: string; status: string }>(`/api/institution/${id}/remove-account`, { account_id: accountId }),
   seedDemo: () => post<{ institutions: number; runId: string; status: string }>("/api/demo"),
+  plaidStart: () => post<{ link_token: string; hosted_link_url: string | null }>("/api/connect/plaid/start"),
+  plaidComplete: (input: { name?: string; institution_id?: string; link_token?: string; public_token?: string }) =>
+    post<{ institution_id: string; runId: string; status: string }>("/api/connect/plaid/complete", input),
+  ebBanks: (country: string) => get<Array<{ name: string; country: string }>>(`/api/connect/eb/banks?country=${encodeURIComponent(country)}`),
+  ebStart: (input: { name?: string; institution_id?: string; country: string; bank: string; redirect_url?: string }) =>
+    post<{ url: string; state: string }>("/api/connect/eb/start", input),
+  ebComplete: (input: { state: string; code: string }) =>
+    post<{ institution_id: string; consent_until: string | null; runId: string; status: string }>("/api/connect/eb/complete", input),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {
