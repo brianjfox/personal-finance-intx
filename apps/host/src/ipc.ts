@@ -90,6 +90,10 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json({ runId: r.runId, status: r.terminalStatus });
         }
         if (p === "/api/estate") return json(app.estateStatus());
+        if (p === "/api/export" && req.method === "POST") {
+          const r = app.exportBreakGlass();
+          return json({ dir: r.dir, files: r.files.length, documents: r.documents });
+        }
         if (p === "/api/approvals") return json(app.approvalQueue());
         if (p === "/api/instructions") return json(app.listPreparedInstructions());
         if (p === "/api/proposal" && req.method === "POST") {
