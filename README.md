@@ -1,0 +1,63 @@
+# Household Financial Interchange
+
+A bench of specialist agents, one shared ledger, and a human gate on
+everything that moves money — built on the Corbits/Faremeter Interchange
+agentic OS (`@intx/*`, pinned `0.3.0`). See `docs/BUILD_PLAN.md` for the
+plan and `docs/financial-interchange-hub.pdf` for the deck this implements.
+
+Track A (BUILD_PLAN §2): an embedded filesystem host (`fin-host`), no hub,
+no Postgres, no network listener beyond localhost. What is lost without the
+hub — multi-tenant grant storage, hub-managed credential push, Ed25519
+identity issuance, the admin UI — is not load-bearing for one household on
+one machine; the trust-boundary matrix is enforced locally with
+`@intx/authz`.
+
+## Layout
+
+```
+packages/contracts     typed messages (Fact, Finding, Recommendation, Approval, Instruction, Receipt, ...)  ArkType
+packages/ledger        append-only, bitemporal SQLite fact store; as-of queries; one writer per kind
+packages/vault         document vault: content-addressed originals, the evidence every fact points at
+packages/institutions  institution adapters -> InstitutionSnapshot (jsondrop, csvdrop, fixture) + registry
+packages/actions       deterministic handlers: fetch, normalise, reconcile (the five silent errors), commit, notify/hold
+packages/policy        the slide-13 trust-boundary matrix as @intx/authz grants; step -> principal authorize
+packages/workflows     defineWorkflow definitions (nightly reconcile with the provisional gate); topology walker; lints
+apps/host              fin-host: fs-host WorkflowRuntimeEnv, app assembly, localhost IPC, CLI, demo seed
+apps/desktop           the GUI (React, bundled by bun, served by fin-host); Tauri shell comes later
+```
+
+## Run it
+
+```bash
+bun install
+bun test                       # every package
+bunx tsc -b --noEmit           # typecheck
+
+# demo: two FICTIONAL institutions, night 1 then night 2 (with injected breaks)
+cd apps/host
+bun src/cli.ts init    --data /tmp/fin --demo 1
+bun src/cli.ts nightly --data /tmp/fin
+bun src/cli.ts init    --data /tmp/fin --demo 2
+bun src/cli.ts nightly --data /tmp/fin
+bun src/cli.ts queue   --data /tmp/fin
+
+# GUI
+(cd ../desktop && bun run build)
+bun src/cli.ts serve   --data /tmp/fin --port 7777     # open http://127.0.0.1:7777/
+```
+
+Real use: list your institutions in `<dataDir>/institutions.json` and drop
+exports into `<dataDir>/institutions/<id>/inbox/` (snapshot JSON, or CSVs
+with a column map for `csvdrop`). The nightly takes the newest file.
+
+## Phases
+
+- Phase 0 — spike: filesystem `WorkflowRuntimeEnv`, crash-resume across a
+  parked `awaitSignal`. Done (`phase-0/spike`).
+- Phase 1 — ledger: contracts, ledger, vault, one institution end to end,
+  reconciliation, nightly with the provisional gate, GUI. Done (`phase-1/ledger`).
+- Phase 2 — time and obligations. Phase 3 — judgement. Phase 4 — action
+  (execution disabled). Phase 5 — execution, on a separate decision.
+
+Decisions where the plan and the framework disagreed are recorded in
+`DECISIONS.md` (kept alongside this repo, outside it).

@@ -1,4 +1,29 @@
 {
   "files": [],
-  "references": [{ "path": "apps/host" }]
+  "references": [
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/ledger"
+    },
+    {
+      "path": "packages/vault"
+    },
+    {
+      "path": "packages/institutions"
+    },
+    {
+      "path": "packages/actions"
+    },
+    {
+      "path": "packages/policy"
+    },
+    {
+      "path": "packages/workflows"
+    },
+    {
+      "path": "apps/host"
+    }
+  ]
 }

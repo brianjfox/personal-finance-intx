@@ -1,0 +1,10 @@
+{
+  "name": "@fin/ledger",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The household ledger: append-only, bitemporal, provenance-mandatory SQLite fact store with as-of queries and one-writer enforcement",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": { "@fin/contracts": "workspace:*", "arktype": "2.1.29" }
+}

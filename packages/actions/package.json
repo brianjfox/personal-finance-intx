@@ -1,0 +1,17 @@
+{
+  "name": "@fin/actions",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Deterministic action handlers: ingest, normalise, reconcile, commit, notify. No model anywhere in this package.",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@fin/contracts": "workspace:*",
+    "@fin/institutions": "workspace:*",
+    "@fin/ledger": "workspace:*",
+    "@fin/vault": "workspace:*",
+    "@intx/workflow": "0.3.0",
+    "arktype": "2.1.29"
+  }
+}

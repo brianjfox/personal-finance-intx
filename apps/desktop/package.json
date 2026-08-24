@@ -1,0 +1,19 @@
+{
+  "name": "@fin/desktop",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The GUI: approval/exception queue, net worth, positions, with every number clickable back to fact -> source document -> observed date. Served by fin-host; the Tauri shell wraps this later.",
+  "scripts": {
+    "build": "bun build ./src/index.html --outdir dist --minify",
+    "dev": "bun ./src/index.html"
+  },
+  "dependencies": {
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9"
+  }
+}

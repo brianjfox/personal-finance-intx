@@ -11,6 +11,10 @@ terminology collision).
 ## Layout
 
 ```
+src/app.ts           createApp(): ledger + vault + institutions + fs-host with the policy authorize
+src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, start nightly, resolve finding
+src/cli.ts           fin-host init|nightly|queue|resolve|runs|serve
+src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes (night 1 / night 2)
 src/fs-host/
   paths.ts           data-dir layout + atomic write helper
   repo-store.ts      RepoStore: runs/<runId>/events.jsonl, atomic batch rewrite
@@ -24,6 +28,7 @@ src/spike/
   cli.ts             one process = one host = one run; JSON lines on stdout
 test/
   phase0-crash-resume.test.ts   the Phase 0 gate, against real child processes
+  phase1-nightly.test.ts        Phase 1 acceptance through fin-host; SIGKILL mid-nightly
 ```
 
 Data directory (`~/Library/Application Support/FinInterchange/` in the
@@ -34,6 +39,10 @@ app; any path in tests):
 <dataDir>/runs/<runId>/inbox/*.json    signals delivered to the run
 <dataDir>/blobs/<sha256>.json          spilled step outputs
 <dataDir>/effects/<sha256>.json        exactly-once effect records
+<dataDir>/ledger.db                    the household ledger (SQLite, WAL)
+<dataDir>/vault/<sha256>.<ext>         original documents
+<dataDir>/institutions.json            institution registry
+<dataDir>/institutions/<id>/inbox/     file-drop inboxes
 ```
 
 ## Run the Phase 0 gate by hand
@@ -74,8 +83,9 @@ bun test
 
 ## Not yet wired (fails loudly, by contract)
 
-- Model-backed `step` (Phase 3; needs a step invoker).
-- `childWorkflow`, `onTrigger` (Phase 3).
-- `@intx/authz`-backed `authorize` (Phase 1; allow-all today).
+- Model-backed `step` (Phase 3; `createWorkflowStepInvoker` per D-010).
+- `childWorkflow`, `onTrigger` (Phase 3; `createInMemorySpawnChild` per D-010).
 - Resume of a `sleep` left `awaiting-timer` -- not supported by the
   runtime at the pinned framework version. See `DECISIONS.md` D-006.
+- An `action` left in flight at a crash is settled as failed on resume
+  (at-most-once); the nightly is idempotent and is simply re-run. D-012.

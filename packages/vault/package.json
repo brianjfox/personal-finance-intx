@@ -1,0 +1,10 @@
+{
+  "name": "@fin/vault",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Document Vault: content-addressed storage of original documents, the evidence every fact points back to",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": { "@fin/contracts": "workspace:*", "@fin/ledger": "workspace:*" }
+}
