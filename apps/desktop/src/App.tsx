@@ -329,6 +329,16 @@ function PlaidConnect({ name, institutionId, onDone }: { name: string; instituti
   );
 }
 
+/** The countries Enable Banking covers (EU/EEA + UK), by name. */
+const EB_COUNTRIES: ReadonlyArray<readonly [string, string]> = [
+  ["AT", "Austria"], ["BE", "Belgium"], ["BG", "Bulgaria"], ["HR", "Croatia"], ["CY", "Cyprus"],
+  ["CZ", "Czechia"], ["DK", "Denmark"], ["EE", "Estonia"], ["FI", "Finland"], ["FR", "France"],
+  ["DE", "Germany"], ["GR", "Greece"], ["HU", "Hungary"], ["IS", "Iceland"], ["IE", "Ireland"],
+  ["IT", "Italy"], ["LV", "Latvia"], ["LT", "Lithuania"], ["LU", "Luxembourg"], ["MT", "Malta"],
+  ["NL", "Netherlands"], ["NO", "Norway"], ["PL", "Poland"], ["PT", "Portugal"], ["RO", "Romania"],
+  ["SK", "Slovakia"], ["SI", "Slovenia"], ["ES", "Spain"], ["SE", "Sweden"], ["GB", "United Kingdom"],
+];
+
 /** Enable Banking: pick the bank, consent on its page, paste the code from the redirect. */
 function EbConnect({ name, institutionId, preset, onDone }: { name: string; institutionId: string | null; preset: { name: string; country: string } | null; onDone: () => void }) {
   const [country, setCountry] = useState(preset?.country ?? "");
@@ -379,8 +389,13 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
   return (
     <div style={{ marginTop: 8 }}>
       <div className="actions">
-        <input style={{ width: 90 }} placeholder="Country (DE)" value={country} onChange={(e) => setCountry(e.target.value)} maxLength={2} />
-        <button disabled={busy !== null || country.trim().length !== 2} onClick={() => void findBanks()}>
+        <select value={country} onChange={(e) => setCountry(e.target.value)}>
+          <option value="">Choose a country…</option>
+          {EB_COUNTRIES.map(([code, label]) => (
+            <option key={code} value={code}>{label}</option>
+          ))}
+        </select>
+        <button disabled={busy !== null || country === ""} onClick={() => void findBanks()}>
           {busy === "banks" ? "looking…" : "Find banks"}
         </button>
         {banks.length > 0 && (

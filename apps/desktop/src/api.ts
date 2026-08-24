@@ -107,12 +107,31 @@ export interface ManagedAccount {
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) {
+    // Host errors carry a plain-words message; show it, not just the status.
+    const body = await r.text().catch(() => "");
+    let detail = body;
+    try {
+      detail = String((JSON.parse(body) as { error?: string }).error ?? body);
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(detail !== "" ? detail : `${path}: ${r.status}`);
+  }
   return (await r.json()) as T;
 }
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    let detail = text;
+    try {
+      detail = String((JSON.parse(text) as { error?: string }).error ?? text);
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(detail !== "" ? detail : `${path}: ${r.status}`);
+  }
   return (await r.json()) as T;
 }
 
