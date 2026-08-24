@@ -8,6 +8,13 @@ import { recordFindingsHandler } from "./ledger/record-findings";
 import { holdHandler, notifyHandler } from "./govern/notify";
 import { normalizeHandler } from "./normalize/normalize";
 import { reconcileHandler } from "./reconcile/reconcile";
+import {
+  taxConfirmHandler,
+  taxEstimateHandler,
+  taxObligateHandler,
+  taxRecordHandler,
+  taxSkipHandler,
+} from "./tax/handlers";
 
 export const ACTION_REFS = {
   fetch: "ingest.fetch",
@@ -17,6 +24,11 @@ export const ACTION_REFS = {
   recordFindings: "ledger.record_findings",
   notify: "govern.notify",
   hold: "govern.hold",
+  taxEstimate: "tax.estimate",
+  taxRecord: "tax.record",
+  taxObligate: "tax.obligate",
+  taxConfirm: "tax.confirm",
+  taxSkip: "tax.skip",
 } as const;
 
 export function buildActions(actx: ActionContext): Record<string, ActionHandler> {
@@ -28,6 +40,11 @@ export function buildActions(actx: ActionContext): Record<string, ActionHandler>
     [ACTION_REFS.recordFindings]: recordFindingsHandler(actx),
     [ACTION_REFS.notify]: notifyHandler(actx),
     [ACTION_REFS.hold]: holdHandler(actx),
+    [ACTION_REFS.taxEstimate]: taxEstimateHandler(actx),
+    [ACTION_REFS.taxRecord]: taxRecordHandler(actx),
+    [ACTION_REFS.taxObligate]: taxObligateHandler(actx),
+    [ACTION_REFS.taxConfirm]: taxConfirmHandler(actx),
+    [ACTION_REFS.taxSkip]: taxSkipHandler(actx),
   };
 }
 
@@ -38,3 +55,5 @@ export * from "./reconcile/reconcile";
 export * from "./ledger/commit";
 export * from "./ledger/record-findings";
 export * from "./govern/notify";
+export * from "./tax/math";
+export * from "./tax/handlers";
