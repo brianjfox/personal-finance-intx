@@ -11,3 +11,4 @@ export * from "./tax";
 export * from "./estate";
 export * from "./projections";
 export * from "./chat";
+export * from "./plan";
