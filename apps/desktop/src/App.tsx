@@ -203,7 +203,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
 
 function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<"managed" | "files">("managed");
+  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb">("managed");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
@@ -214,7 +214,7 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
     setBusy(true);
     setError(null);
     try {
-      await api.addInstitution(name.trim(), mode);
+      await api.addInstitution(name.trim(), mode as "managed" | "files");
       onDone();
     } catch (e) {
       setError(String(e));
@@ -222,6 +222,12 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
       setBusy(false);
     }
   };
+  const radio = (m: typeof mode, label: string, hint: string) => (
+    <label style={{ display: "block", marginBottom: 6 }}>
+      <input type="radio" checked={mode === m} onChange={() => setMode(m)} /> {label}
+      <div className="small muted" style={{ marginLeft: 20 }}>{hint}</div>
+    </label>
+  );
   return (
     <div className="queue-item">
       <div className="head"><b>Connect an institution</b></div>
@@ -234,26 +240,151 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
         />
       </div>
       <div style={{ marginTop: 8 }}>
-        <label style={{ display: "block", marginBottom: 6 }}>
-          <input type="radio" checked={mode === "managed"} onChange={() => setMode("managed")} />{" "}
-          I'll type the numbers in myself
-          <div className="small muted" style={{ marginLeft: 20 }}>
-            Best for property, cash, and anything without downloadable statements. You can update the values any time.
-          </div>
-        </label>
-        <label style={{ display: "block" }}>
-          <input type="radio" checked={mode === "files"} onChange={() => setMode("files")} />{" "}
-          I'll upload files downloaded from the institution's website
-          <div className="small muted" style={{ marginLeft: 20 }}>
-            Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.
-          </div>
-        </label>
+        {radio("managed", "I'll type the numbers in myself", "Best for property, cash, and anything without downloadable statements. You can update the values any time.")}
+        {radio("files", "I'll upload files downloaded from the institution's website", "Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.")}
+        {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys set up once.")}
+        {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key set up once.")}
       </div>
+      {mode === "plaid" && <PlaidConnect name={name} institutionId={null} onDone={onDone} />}
+      {mode === "eb" && <EbConnect name={name} institutionId={null} preset={null} onDone={onDone} />}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <div className="actions" style={{ marginTop: 8 }}>
-        <button disabled={busy} onClick={() => void add()}>{busy ? "adding…" : "Add institution"}</button>
+        {(mode === "managed" || mode === "files") && (
+          <button disabled={busy} onClick={() => void add()}>{busy ? "adding…" : "Add institution"}</button>
+        )}
         {onCancel !== null && <button className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>}
       </div>
+    </div>
+  );
+}
+
+/** Plaid Hosted Link: open the bank login in the browser, then finish here. */
+function PlaidConnect({ name, institutionId, onDone }: { name: string; institutionId: string | null; onDone: () => void }) {
+  const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const start = async () => {
+    setBusy("start");
+    setError(null);
+    try {
+      const r = await api.plaidStart();
+      setLinkToken(r.link_token);
+      if (r.hosted_link_url !== null) window.open(r.hosted_link_url, "_blank");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const finish = async () => {
+    if (institutionId === null && name.trim() === "") {
+      setError("Give the connection a name first — e.g. \"Chase\".");
+      return;
+    }
+    setBusy("finish");
+    setError(null);
+    try {
+      await api.plaidComplete({
+        ...(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() }),
+        ...(linkToken !== null ? { link_token: linkToken } : {}),
+      });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="actions">
+        <button disabled={busy !== null} onClick={() => void start()}>
+          {busy === "start" ? "opening…" : "1 · Open your bank's secure login"}
+        </button>
+        <button disabled={busy !== null || linkToken === null} onClick={() => void finish()}>
+          {busy === "finish" ? "fetching your accounts…" : "2 · I've finished — fetch my accounts"}
+        </button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+/** Enable Banking: pick the bank, consent on its page, paste the code from the redirect. */
+function EbConnect({ name, institutionId, preset, onDone }: { name: string; institutionId: string | null; preset: { name: string; country: string } | null; onDone: () => void }) {
+  const [country, setCountry] = useState(preset?.country ?? "");
+  const [banks, setBanks] = useState<Array<{ name: string; country: string }>>([]);
+  const [bank, setBank] = useState(preset?.name ?? "");
+  const [state, setState] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (label: string, fn: () => Promise<void>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const findBanks = () =>
+    act("banks", async () => {
+      const list = await api.ebBanks(country.trim().toUpperCase());
+      setBanks(list);
+      if (list.length > 0 && !list.some((b) => b.name === bank)) setBank(list[0]!.name);
+    });
+  const start = () =>
+    act("start", async () => {
+      if (institutionId === null && name.trim() === "") throw new Error("Give the connection a name first.");
+      const r = await api.ebStart({
+        ...(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() }),
+        country: country.trim().toUpperCase(),
+        bank,
+      });
+      setState(r.state);
+      window.open(r.url, "_blank");
+    });
+  const finish = () =>
+    act("finish", async () => {
+      if (state === null) throw new Error("Open the bank's consent page first.");
+      const c = /[?&]code=([^&#\s]+)/.exec(code.trim())?.[1] ?? code.trim();
+      if (c === "") throw new Error("Paste the code (or the whole address) from the page the bank sent you to.");
+      await api.ebComplete({ state, code: decodeURIComponent(c) });
+      onDone();
+    });
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="actions">
+        <input style={{ width: 90 }} placeholder="Country (DE)" value={country} onChange={(e) => setCountry(e.target.value)} maxLength={2} />
+        <button disabled={busy !== null || country.trim().length !== 2} onClick={() => void findBanks()}>
+          {busy === "banks" ? "looking…" : "Find banks"}
+        </button>
+        {banks.length > 0 && (
+          <select value={bank} onChange={(e) => setBank(e.target.value)}>
+            {banks.map((b) => (
+              <option key={b.name} value={b.name}>{b.name}</option>
+            ))}
+          </select>
+        )}
+        <button disabled={busy !== null || bank === ""} onClick={() => void start()}>
+          {busy === "start" ? "opening…" : "Open the bank's consent page"}
+        </button>
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input
+          style={{ flex: 1 }}
+          placeholder="Paste the code (or the whole address) the bank redirected you to"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+        />
+        <button disabled={busy !== null || state === null} onClick={() => void finish()}>
+          {busy === "finish" ? "fetching your accounts…" : "Finish"}
+        </button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
 }
@@ -328,8 +459,16 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
               onSave={(input) => void act("update", () => api.saveManagedAccount(inst.institution_id, input))}
             />
           )}
-          {!inst.managed && (
+          {!inst.managed && inst.adapter !== "plaid" && inst.adapter !== "enablebanking" && (
             <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />
+          )}
+          {(inst.adapter === "plaid" || inst.adapter === "enablebanking") && (
+            <ConnectorStatus
+              inst={inst}
+              disabled={busy !== null}
+              onUpdate={() => void act("update", () => api.refreshInstitution(inst.institution_id))}
+              onChanged={onChanged}
+            />
           )}
         </>
       )}
@@ -354,6 +493,39 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
           <button className="secondary" disabled={busy !== null} onClick={() => setConfirmDelete(true)}>Delete</button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Connector institutions: automatic read-only updates, consent status, and the reconnect flow. */
+function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: InstitutionOverview; disabled: boolean; onUpdate: () => void; onChanged: () => void }) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const days =
+    inst.consent_until === null ? null : Math.floor((new Date(inst.consent_until).getTime() - Date.now()) / 86_400_000);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small muted">
+        Connected automatically — this app only ever has read-only access; it cannot move money.
+        {inst.consent_until !== null && (
+          <>
+            {" "}Bank permission valid until {when(inst.consent_until)}
+            {days !== null && days < 0 && <span className="pill critical"> expired — reconnect below</span>}
+            {days !== null && days >= 0 && days <= 14 && <span className="pill high"> {days} day{days === 1 ? "" : "s"} left</span>}
+          </>
+        )}
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button className="secondary" disabled={disabled} onClick={onUpdate}>Update now</button>
+        <button className="secondary" disabled={disabled} onClick={() => setReconnecting((r) => !r)}>
+          {reconnecting ? "Hide reconnect" : "Reconnect"}
+        </button>
+      </div>
+      {reconnecting && inst.adapter === "plaid" && (
+        <PlaidConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
+      )}
+      {reconnecting && inst.adapter === "enablebanking" && (
+        <EbConnect name={inst.name} institutionId={inst.institution_id} preset={inst.aspsp} onDone={() => { setReconnecting(false); onChanged(); }} />
+      )}
     </div>
   );
 }

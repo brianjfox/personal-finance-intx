@@ -58,6 +58,11 @@ adapters over `<dataDir>/institutions.json` + per-institution inboxes, so
 the old hand-edited registry and drop-folder path (snapshot JSON, or CSVs
 with a `csvdrop` column map) still works for scripts and aggregators.
 
+Live bank connections: **Plaid** (US/Canada, Chase included) and
+**Enable Banking** (European banks under PSD2) connect from the same GUI
+form — read-only by construction, tokens in the macOS Keychain, raw API
+responses kept as vault evidence. Setup and testing: `docs/CONNECTORS.md`.
+
 ## Phases
 
 - Phase 0 — spike: filesystem `WorkflowRuntimeEnv`, crash-resume across a

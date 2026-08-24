@@ -9,12 +9,15 @@ import { type } from "arktype";
 
 import type { InstitutionAdapter } from "./adapter";
 import { csvDropAdapter, type CsvDropOptions } from "./csvdrop";
+import { enableBankingAdapter } from "./enablebanking";
 import { jsonDropAdapter } from "./jsondrop";
+import { plaidAdapter, PLAID_BASE_URLS } from "./plaid";
+import type { SecretStore } from "./secrets";
 
 export const InstitutionEntry = type({
   institution_id: /^inst\.[A-Za-z0-9_-]+$/,
   name: "string",
-  adapter: "'jsondrop' | 'csvdrop'",
+  adapter: "'jsondrop' | 'csvdrop' | 'plaid' | 'enablebanking'",
   /** `false` pauses the connection: the entry stays listed but no adapter is built. */
   "enabled?": "boolean",
   "options?": "Record<string, unknown>",
@@ -29,12 +32,12 @@ export interface LoadedInstitutions {
   adapters: InstitutionAdapter[];
 }
 
-/** Build adapters from a registry file. Relative dirs resolve against `dataDir`. */
-export function loadInstitutions(dataDir: string, file = path.join(dataDir, "institutions.json")): LoadedInstitutions {
+/** Build adapters from a registry file. Relative dirs resolve against `dataDir`; connector credentials come from `secrets` (default: env + Keychain). */
+export function loadInstitutions(dataDir: string, file = path.join(dataDir, "institutions.json"), secrets?: SecretStore): LoadedInstitutions {
   if (!fs.existsSync(file)) return { entries: [], adapters: [] };
   const parsed = InstitutionsFile(JSON.parse(fs.readFileSync(file, "utf8")));
   if (parsed instanceof type.errors) throw new Error(`${file}: ${parsed.summary}`);
-  const adapters = parsed.institutions.filter((e) => e.enabled !== false).map((e) => buildAdapter(dataDir, e));
+  const adapters = parsed.institutions.filter((e) => e.enabled !== false).map((e) => buildAdapter(dataDir, e, secrets));
   return { entries: parsed.institutions, adapters };
 }
 
@@ -98,6 +101,17 @@ export function removeInstitutionEntry(dataDir: string, institutionId: string): 
   return true;
 }
 
+/** Merge fields into an entry's options (connector reconnects: new consent expiry, etc.). */
+export function updateInstitutionOptions(dataDir: string, institutionId: string, patch: Record<string, unknown>): boolean {
+  const file = path.join(dataDir, "institutions.json");
+  const reg = readRegistry(file);
+  const entry = reg.institutions.find((e) => e.institution_id === institutionId);
+  if (entry === undefined) return false;
+  entry.options = { ...entry.options, ...patch };
+  writeRegistry(file, reg);
+  return true;
+}
+
 /** Pause (`false`) or resume (`true`) a connection without losing its configuration. */
 export function setInstitutionEnabled(dataDir: string, institutionId: string, enabled: boolean): boolean {
   const file = path.join(dataDir, "institutions.json");
@@ -110,14 +124,33 @@ export function setInstitutionEnabled(dataDir: string, institutionId: string, en
   return true;
 }
 
-export function buildAdapter(dataDir: string, e: InstitutionEntry): InstitutionAdapter {
+export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: SecretStore): InstitutionAdapter {
   const o = e.options ?? {};
   const dir = typeof o["dir"] === "string" ? path.resolve(dataDir, o["dir"]) : defaultInbox(dataDir, e.institution_id);
+  const str = (k: string): string | undefined => (typeof o[k] === "string" ? (o[k] as string) : undefined);
+  const num = (k: string): number | undefined => (typeof o[k] === "number" ? (o[k] as number) : undefined);
   switch (e.adapter) {
     case "jsondrop":
       return jsonDropAdapter({ institution_id: e.institution_id, dir });
     case "csvdrop":
       return csvDropAdapter({ ...(o as unknown as CsvDropOptions), institution_id: e.institution_id, dir });
+    case "plaid": {
+      const env = str("environment");
+      return plaidAdapter({
+        institution_id: e.institution_id,
+        ...(env !== undefined && env in PLAID_BASE_URLS ? { environment: env as keyof typeof PLAID_BASE_URLS } : {}),
+        ...(str("base_url") !== undefined ? { base_url: str("base_url") as string } : {}),
+        ...(num("lookback_days") !== undefined ? { lookback_days: num("lookback_days") as number } : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+      });
+    }
+    case "enablebanking":
+      return enableBankingAdapter({
+        institution_id: e.institution_id,
+        ...(str("base_url") !== undefined ? { base_url: str("base_url") as string } : {}),
+        ...(num("lookback_days") !== undefined ? { lookback_days: num("lookback_days") as number } : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+      });
   }
 }
 

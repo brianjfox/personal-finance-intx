@@ -46,6 +46,9 @@ const ManagedAccountBody = type({
   value: /^-?\d+(\.\d+)?$/,
 });
 const RemoveAccountBody = type({ account_id: "string > 0" });
+const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "string > 0", "link_token?": "string > 0", "public_token?": "string > 0" });
+const EbStartBody = type({ "name?": "string > 0", "institution_id?": "string > 0", country: /^[A-Z]{2}$/, bank: "string > 0", "redirect_url?": "string > 0" });
+const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -92,6 +95,42 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json(app.addInstitution(body), 201);
         }
         if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
+        if (p === "/api/connect/plaid/start" && req.method === "POST") return json(await app.connectPlaidStart());
+        if (p === "/api/connect/plaid/complete" && req.method === "POST") {
+          const body = PlaidCompleteBody(await req.json().catch(() => ({})));
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(
+            await app.connectPlaidComplete({
+              ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}),
+              ...(body.link_token !== undefined ? { linkToken: body.link_token } : {}),
+              ...(body.public_token !== undefined ? { publicToken: body.public_token } : {}),
+            }),
+          );
+        }
+        if (p === "/api/connect/eb/banks") {
+          const country = (q.get("country") ?? "").toUpperCase();
+          if (!/^[A-Z]{2}$/.test(country)) return json({ error: "country must be a two-letter code" }, 400);
+          return json(await app.ebListBanks(country));
+        }
+        if (p === "/api/connect/eb/start" && req.method === "POST") {
+          const body = EbStartBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(
+            await app.connectEbStart({
+              ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}),
+              country: body.country,
+              bank: body.bank,
+              ...(body.redirect_url !== undefined ? { redirectUrl: body.redirect_url } : {}),
+            }),
+          );
+        }
+        if (p === "/api/connect/eb/complete" && req.method === "POST") {
+          const body = EbCompleteBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.connectEbComplete({ state: body.state, code: body.code }));
+        }
         const instMatch = /^\/api\/institution\/([A-Za-z0-9_.-]+)\/(delete|enabled|refresh|upload|accounts|account|remove-account)$/.exec(p);
         if (instMatch !== null) {
           const instId = instMatch[1] as string;
