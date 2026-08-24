@@ -16,7 +16,8 @@ src/app.ts           createApp(): ledger + vault + institutions + fs-host with t
 src/ipc.ts           localhost HTTP/JSON for the GUI: views, fact drill-down, start nightly, resolve
                      finding, tax calendar (status/check/skip), obligations
 src/cli.ts           fin-host init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|
-                     chat|estate-audit|scenario|projection|serve
+                     chat|estate-audit|scenario|projection|propose|approvals|decide|
+                     instructions|revoke|serve
 src/demo.ts          seedDemo(): two fictional institutions as jsondrop inboxes + a demo tax profile
 src/fs-host/
   paths.ts           data-dir layout + atomic write helper
@@ -43,6 +44,9 @@ test/
   phase3-chat.test.ts           Phase 3: the slide-19 acceptance over a scripted agent -- real tools,
                                 policy, evidence, journal, transcript; crash-resume mid-conversation
   phase3-chat-live.test.ts      the same question against the real model (needs ANTHROPIC_API_KEY)
+  phase4-proposal.test.ts       Phase 4: propose -> audit -> queue; the decision through the durable
+                                inbox across real process restarts; prepared-never-sent; revoke
+  phase4-proposal-live.test.ts  the real Market Manager against real drift (needs ANTHROPIC_API_KEY)
 ```
 
 Data directory (`~/Library/Application Support/FinInterchange/` in the
@@ -59,6 +63,7 @@ app; any path in tests):
 <dataDir>/institutions/<id>/inbox/     file-drop inboxes
 <dataDir>/tax-profile.json             the operator's tax profile (rates, prior-year tax, reserve account)
 <dataDir>/estate.json                  the estate plan (intended titling, documents, executors) + observed titling
+<dataDir>/plan.json                    the written investment plan (targets, band, constraints)
 <dataDir>/context/<agentId>/           an advisory agent's git-backed context + audit trail (bin/audit reads it)
 ```
 
