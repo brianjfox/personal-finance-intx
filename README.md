@@ -46,9 +46,17 @@ bun src/cli.ts queue   --data /tmp/fin
 bun src/cli.ts serve   --data /tmp/fin --port 7777     # open http://127.0.0.1:7777/
 ```
 
-Real use: list your institutions in `<dataDir>/institutions.json` and drop
-exports into `<dataDir>/institutions/<id>/inbox/` (snapshot JSON, or CSVs
-with a column map for `csvdrop`). The nightly takes the newest file.
+Real use: connect institutions from the GUI's **Institutions** page — no
+file editing required. On a completely empty household the app opens on a
+welcome screen with two buttons: start connecting institutions, or seed
+the fictional demo. A connection is either *managed* (you type values
+into forms; the host writes dated snapshot files) or *file uploads*
+(exports downloaded from the institution's website, uploaded in the GUI).
+Connections can be paused, resumed, and deleted — deleting stops updates
+but never erases history. Under the hood both kinds are `jsondrop`
+adapters over `<dataDir>/institutions.json` + per-institution inboxes, so
+the old hand-edited registry and drop-folder path (snapshot JSON, or CSVs
+with a `csvdrop` column map) still works for scripts and aggregators.
 
 ## Phases
 
