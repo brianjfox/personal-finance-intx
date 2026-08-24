@@ -8,3 +8,6 @@ export * from "./governance";
 export * from "./records";
 export * from "./snapshot";
 export * from "./tax";
+export * from "./estate";
+export * from "./projections";
+export * from "./chat";

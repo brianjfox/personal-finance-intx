@@ -35,6 +35,12 @@ export const FINDING_CODES = [
   "safe_harbor_shortfall", //              cumulative payments fell short of a past installment
   "wash_sale_risk", //                     a loss sale with a replacement buy inside the 30-day window
   "tax_estimate_blocked", //               the estimate refused to compute over provisional data
+  // Phase 3 -- Estate hygiene (deck slide 8: plan on paper vs plan in reality)
+  "titling_gap", //                        an account with no titling record, or plan/ledger disagree on existence
+  "beneficiary_mismatch", //               observed titling/beneficiaries differ from the estate plan
+  "estate_doc_missing", //                 a document the plan expects (will, trust, POA) is not in the vault
+  "executor_gap", //                       no executor or digital-access path recorded -- break-glass fails
+  "advisory_note", //                      a model-flagged concern, cited to facts; never a computed figure
 ] as const;
 export type FindingCode = (typeof FINDING_CODES)[number];
 export const FindingCode = type.enumerated(...FINDING_CODES);
