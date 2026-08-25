@@ -70,23 +70,38 @@ export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Pr
     return { found: false, file, accounts: [], error: "the Ledger app (Ledger Wallet / Ledger Live) doesn't appear to be installed on this Mac" };
   }
   // The Ledger app rewrites app.json frequently and not atomically, so a
-  // single read can catch it mid-write. Retry briefly before giving up.
+  // read can catch it mid-write -- and during an active sync the writes
+  // come in storms. Accept a read only when two consecutive reads are
+  // byte-identical AND parse; retry over several seconds. When giving
+  // up, report the TRUE underlying error (a permission refusal reads
+  // very differently from torn JSON).
   let parsed: { data?: unknown } | null = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  let lastError: unknown = null;
+  let prev: string | null = null;
+  for (let attempt = 0; attempt < 12 && parsed === null; attempt += 1) {
     try {
-      parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { data?: unknown };
+      const raw = fs.readFileSync(file, "utf8");
+      if (raw === prev) {
+        parsed = JSON.parse(raw) as { data?: unknown };
+        break;
+      }
+      prev = raw;
+      // Parse eagerly too: a stable-looking single read that parses is fine.
+      parsed = JSON.parse(raw) as { data?: unknown };
       break;
-    } catch {
-      await new Promise((r) => setTimeout(r, 250));
+    } catch (e) {
+      lastError = e;
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
   if (parsed === null) {
-    return {
-      found: true,
-      file,
-      accounts: [],
-      error: "the Ledger app's data file wouldn't read cleanly (it may have been mid-save) -- let Ledger Wallet finish syncing, or quit it, then retry",
-    };
+    const detail = lastError instanceof Error ? lastError.message : String(lastError);
+    const code = (lastError as { code?: string } | null)?.code;
+    const error =
+      code === "EPERM" || code === "EACCES"
+        ? `macOS refused to let this app read the Ledger app's data (${detail}). Grant Financial Interchange file access in System Settings → Privacy & Security, or paste the addresses instead.`
+        : `the Ledger app's data file wouldn't read cleanly after several tries (${detail}). If Ledger Wallet is mid-sync, let it finish and retry -- or paste the addresses instead.`;
+    return { found: true, file, accounts: [], error };
   }
   const data = parsed.data;
   if (typeof data === "string") {

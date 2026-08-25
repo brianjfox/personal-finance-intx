@@ -77,6 +77,7 @@ describe("ledger live import", () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fin-ll-")), "app.json");
     fs.writeFileSync(f, "{never valid");
     const r = await readLedgerLiveAccounts(f);
-    expect(r.error).toMatch(/mid-save|wouldn't read cleanly/);
+    expect(r.error).toMatch(/wouldn't read cleanly/);
+    expect(r.error).toMatch(/JSON|Unexpected/); // the true parse error is named
   }, 10_000);
 });
