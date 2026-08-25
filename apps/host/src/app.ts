@@ -721,7 +721,10 @@ export function createApp(opts: AppOptions): App {
         if (h.kind !== undefined) return { kind: h.kind, value: h.value.trim(), ...(h.label !== undefined ? { label: h.label } : {}) };
         const d = detectWalletHolding(h.value);
         if (!d.ok) throw new Error(`${h.value.trim().slice(0, 16)}…: ${d.reason}`);
-        return { kind: d.kind, value: h.value.trim(), ...(h.label !== undefined ? { label: h.label } : {}) };
+        // d.value is what to store: for a pasted Ledger Live account
+        // object it is the extracted address, not the JSON blob.
+        const label = h.label ?? d.label;
+        return { kind: d.kind, value: d.value, ...(label !== undefined ? { label } : {}) };
       });
       const entry = addInstitutionEntry(dataDir, {
         name: o.name ?? "Self-custody wallet",

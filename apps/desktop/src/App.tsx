@@ -417,7 +417,19 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
     }
     try {
       const d = await api.walletDetect(value);
-      setRow(i, d.ok ? { chain: d.chain, note: d.note ?? null, problem: null } : { chain: null, note: null, problem: d.reason });
+      if (d.ok) {
+        setRow(i, {
+          chain: d.chain,
+          note: d.note ?? null,
+          problem: null,
+          // A pasted Ledger Live account object collapses to its address,
+          // and brings its account name along as the label.
+          ...(d.value !== value.trim() ? { value: d.value } : {}),
+          ...(d.label !== undefined && rows[i]?.label.trim() === "" ? { label: d.label } : {}),
+        });
+      } else {
+        setRow(i, { chain: null, note: null, problem: d.reason });
+      }
     } catch {
       setRow(i, { chain: null, note: null, problem: null });
     }

@@ -197,7 +197,7 @@ export const api = {
   connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
   walletDetect: (value: string) =>
-    get<{ ok: true; kind: string; chain: string; note?: string } | { ok: false; reason: string }>(
+    get<{ ok: true; kind: string; chain: string; value: string; note?: string; label?: string } | { ok: false; reason: string }>(
       `/api/wallet/detect?value=${encodeURIComponent(value)}`,
     ),
 };

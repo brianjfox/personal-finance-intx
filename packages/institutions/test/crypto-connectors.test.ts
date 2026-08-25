@@ -242,3 +242,44 @@ describe("wallet address detection", () => {
     expect(bad("hello world")).toMatch(/couldn't recognize/);
   });
 });
+
+describe("ledger live account JSON detection", () => {
+  const { detectWalletHolding } = require("../src/wallet-detect") as typeof import("../src/wallet-detect");
+
+  test("an Ethereum account object collapses to its 0x address (the operator's exact shape)", () => {
+    const pasted = JSON.stringify({
+      xpub: "0x1dBAD5E4a7e29D122a9Ec7a3728688b1C953fe28",
+      index: 0,
+      freshAddressPath: "44'/60'/0'/0/0",
+      id: "js:2:ethereum:0x1dBAD5E4a7e29D122a9Ec7a3728688b1C953fe28:",
+      blockHeight: 25830921,
+    });
+    const d = detectWalletHolding(pasted);
+    expect(d).toMatchObject({ ok: true, kind: "eth_address", chain: "Ethereum", value: "0x1dBAD5E4a7e29D122a9Ec7a3728688b1C953fe28" });
+  });
+
+  test("bitcoin legacy uses the xpub; segwit schemes refuse with the scheme named; other chains refuse by name", () => {
+    const xpub = "xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAu3fDVmz";
+    const legacy = detectWalletHolding(JSON.stringify({ id: `js:2:bitcoin:${xpub}:`, xpub, name: "BTC vault" }));
+    expect(legacy).toMatchObject({ ok: true, kind: "btc_xpub", value: xpub, label: "BTC vault" });
+
+    const segwit = detectWalletHolding(JSON.stringify({ id: `js:2:bitcoin:${xpub}:native_segwit`, xpub }));
+    expect(segwit.ok).toBe(false);
+    if (!segwit.ok) expect(segwit.reason).toMatch(/native segwit/);
+
+    const sol = detectWalletHolding(JSON.stringify({ id: "js:2:solana:9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM:", freshAddress: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM" }));
+    expect(sol).toMatchObject({ ok: true, kind: "sol_address", value: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM" });
+
+    const doge = detectWalletHolding(JSON.stringify({ id: "js:2:dogecoin:DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L:", xpub: "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L" }));
+    expect(doge.ok).toBe(false);
+    if (!doge.ok) expect(doge.reason).toMatch(/dogecoin/);
+
+    const fullExport = detectWalletHolding(JSON.stringify({ data: { accounts: [{}, {}] } }));
+    expect(fullExport.ok).toBe(false);
+    if (!fullExport.ok) expect(fullExport.reason).toMatch(/one account object/);
+
+    const broken = detectWalletHolding("{not json");
+    expect(broken.ok).toBe(false);
+    if (!broken.ok) expect(broken.reason).toMatch(/doesn't parse/);
+  });
+});
