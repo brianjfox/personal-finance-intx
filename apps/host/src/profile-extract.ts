@@ -103,30 +103,74 @@ export async function extractProfilePatch(opts: ExtractOptions): Promise<Profile
     opts.current !== null ? `Current profile (tax id withheld): ${JSON.stringify(redactProfile(opts.current))}` : "Current profile: none yet.",
   ].join("\n");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 45_000);
-  let resp: Response;
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 90_000);
+  let raw: unknown;
   try {
-    resp = await doFetch(`${source.baseURL}/v1/messages`, {
-      method: "POST",
-      headers: { "x-api-key": source.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: opts.model ?? source.model,
-        max_tokens: 1024,
-        system,
-        messages: [{ role: "user", content: opts.text }],
-        tools: [{ name: "fill_profile", description: "Report the extracted profile fields.", input_schema: TOOL_SCHEMA }],
-        tool_choice: { type: "tool", name: "fill_profile" },
-      }),
-      signal: controller.signal,
-    });
+    if (source.provider === "anthropic") {
+      const resp = await doFetch(`${source.baseURL}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": source.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: opts.model ?? source.model,
+          max_tokens: 1024,
+          system,
+          messages: [{ role: "user", content: opts.text }],
+          tools: [{ name: "fill_profile", description: "Report the extracted profile fields.", input_schema: TOOL_SCHEMA }],
+          tool_choice: { type: "tool", name: "fill_profile" },
+        }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) throw new Error(`the model call failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
+      const body = (await resp.json()) as { content?: Array<{ type: string; name?: string; input?: unknown }> };
+      const call = (body.content ?? []).find((c) => c.type === "tool_use" && c.name === "fill_profile");
+      if (call === undefined) throw new Error("the model didn't return profile fields -- try rephrasing");
+      raw = call.input;
+    } else {
+      // A local / OpenAI-compatible engine (Apple MLX via mlx_lm.server,
+      // LM Studio, ...): Chat Completions with a forced function call.
+      // Some local models ignore tool_choice and answer with JSON prose;
+      // accept that too before giving up.
+      const resp = await doFetch(`${source.baseURL}/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${source.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: opts.model ?? source.model,
+          max_tokens: 1024,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: opts.text },
+          ],
+          tools: [{ type: "function", function: { name: "fill_profile", description: "Report the extracted profile fields.", parameters: TOOL_SCHEMA } }],
+          tool_choice: { type: "function", function: { name: "fill_profile" } },
+        }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) throw new Error(`the local model call failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
+      const body = (await resp.json()) as { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }> };
+      const msg = body.choices?.[0]?.message;
+      const call = (msg?.tool_calls ?? []).find((c) => c.function?.name === "fill_profile");
+      if (call?.function?.arguments !== undefined) {
+        try {
+          raw = JSON.parse(call.function.arguments);
+        } catch {
+          throw new Error("the local model returned malformed tool arguments -- try again, or use a tool-capable model");
+        }
+      } else if (typeof msg?.content === "string") {
+        const m = /\{[\s\S]*\}/.exec(msg.content);
+        if (m === null) throw new Error("the local model didn't return structured fields -- it may not support tool calling; try a tool-capable model (e.g. a recent Qwen or Llama)");
+        try {
+          raw = JSON.parse(m[0]);
+        } catch {
+          throw new Error("the local model's reply wasn't valid JSON -- try again, or use a tool-capable model");
+        }
+      } else {
+        throw new Error("the local model returned nothing usable -- check the server and model name on the Credentials page");
+      }
+    }
   } finally {
     clearTimeout(timer);
   }
-  if (!resp.ok) throw new Error(`the model call failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
-  const body = (await resp.json()) as { content?: Array<{ type: string; name?: string; input?: unknown }> };
-  const call = (body.content ?? []).find((c) => c.type === "tool_use" && c.name === "fill_profile");
-  if (call === undefined) throw new Error("the model didn't return profile fields -- try rephrasing");
-  const patch = ProfilePatch(scrub(call.input));
+  const patch = ProfilePatch(scrub(raw));
   if (patch instanceof type.errors) throw new Error(`couldn't understand the model's reply (${patch.summary}) -- try rephrasing`);
   return patch;
 }

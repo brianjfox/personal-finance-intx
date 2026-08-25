@@ -84,6 +84,7 @@ const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'
 const TokensDeleteBody = type({ institution_id: "string > 0" });
 const ProfileBody = HouseholdProfile.and(type({ "clear_ssn?": "boolean" }));
 const ExtractBody = type({ text: "string > 0" });
+const InferenceBody = type({ engine: "'anthropic' | 'local'", "base_url?": "string", "model?": "string" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -201,6 +202,13 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(await app.extractProfile(body.text));
         }
+        if (p === "/api/inference" && req.method === "GET") return json(app.getInferenceSettings());
+        if (p === "/api/inference" && req.method === "POST") {
+          const body = InferenceBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.setInferenceSettings(body));
+        }
+        if (p === "/api/inference/test" && req.method === "POST") return json(await app.testInference());
         if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
         if (p === "/api/credentials/set" && req.method === "POST") {
           const body = CredentialSetBody(await req.json());

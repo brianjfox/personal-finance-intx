@@ -87,6 +87,7 @@ import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
 import { createConnectors, type ConnectorConfig } from "./connect";
+import { localSource, readInferenceSettings, testInference, writeInferenceSettings, type InferenceSettings } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
 import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
 import {
@@ -224,6 +225,12 @@ export interface App {
   connectKraken(opts: { name?: string; institutionId?: string; apiKey: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** The account list the Ledger app (Ledger Wallet / Ledger Live) keeps on this machine (local read only; nothing is sent anywhere). */
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
+  /** Which AI engine answers: Anthropic's cloud, or a local OpenAI-compatible server (Apple MLX, LM Studio). */
+  getInferenceSettings(): InferenceSettings;
+  /** Switch engines; validated (local http only to loopback). Applies to the next turn -- no restart. */
+  setInferenceSettings(settings: InferenceSettings): InferenceSettings;
+  /** One tiny round-trip to the configured engine, for the GUI's Test button. */
+  testInference(): Promise<{ ok: boolean; detail: string }>;
   /** The household profile, redacted: the tax id never leaves the host (last four digits only). */
   getProfile(): (ReturnType<typeof redactProfile> & { configured: true }) | { configured: false };
   /** Free-text -> proposed profile fields (model-assisted; the GUI merges into the unsaved form for review). */
@@ -426,7 +433,16 @@ export function createApp(opts: AppOptions): App {
   };
   const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
   const actions = buildActions(actx);
-  const model = opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
+  const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
+  // Local engine -> its model name; Anthropic -> the configured Claude model.
+  const model_ = (): string => {
+    const s = inferenceSettings();
+    return s.engine === "local" ? (s.model as string) : (opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5");
+  };
+  const resolveSource = (): InferenceSource => {
+    const s = inferenceSettings();
+    return s.engine === "local" ? localSource(s as InferenceSettings & { engine: "local" }) : anthropicSourceFromEnv();
+  };
 
   // Every policy decision lands in the access log; denials are loud.
   const onDecision = (d: PolicyDecision): void => {
@@ -448,7 +464,7 @@ export function createApp(opts: AppOptions): App {
     dataDir,
     actx,
     authorize,
-    source: opts.inferenceSource ?? anthropicSourceFromEnv,
+    source: opts.inferenceSource ?? resolveSource,
     onTurn: (turn) => {
       ledger.emitEvent({
         id: `chat:${turn.agent}:${turn.message_id}`,
@@ -495,9 +511,9 @@ export function createApp(opts: AppOptions): App {
     if (runId.startsWith("nightly")) return nightlyWorkflow;
     if (runId.startsWith("taxcheck")) return taxCheckWorkflow;
     if (runId.startsWith("estateaudit")) return estateAuditWorkflow;
-    if (runId.startsWith("proposal_")) return buildProposalWorkflow({ model }).definition;
+    if (runId.startsWith("proposal_")) return buildProposalWorkflow({ model: model_() }).definition;
     const chat = chatSpecOf(runId);
-    if (chat !== null) return buildChatWorkflow(chat.agent, model).definition;
+    if (chat !== null) return buildChatWorkflow(chat.agent, model_()).definition;
     const year = taxYearOf(runId);
     if (year !== null) {
       // Rebuilding with the current clock is safe: gates already parked
@@ -642,6 +658,20 @@ export function createApp(opts: AppOptions): App {
       return removed;
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
+    getInferenceSettings() {
+      return inferenceSettings();
+    },
+    setInferenceSettings(settings) {
+      return writeInferenceSettings(dataDir, settings);
+    },
+    async testInference() {
+      try {
+        const source = opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSource();
+        return await testInference(source);
+      } catch (e) {
+        return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+      }
+    },
     getProfile() {
       const p = profile();
       if (p === null) return { configured: false as const };
@@ -649,8 +679,8 @@ export function createApp(opts: AppOptions): App {
     },
     extractProfile(text) {
       return extractProfilePatch({
-        source: opts.inferenceSource ?? anthropicSourceFromEnv,
-        model,
+        source: opts.inferenceSource ?? resolveSource,
+        model: model_(),
         text,
         current: profile(),
         now: clock(),
@@ -1064,7 +1094,7 @@ export function createApp(opts: AppOptions): App {
       let runId: string;
       if (active === null) {
         runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
-        drive(buildChatWorkflow(o.agent, model).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
+        drive(buildChatWorkflow(o.agent, model_()).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
       } else {
         runId = active.runId;
         // Deliver on the step's CURRENT input channel: the reserved
@@ -1088,7 +1118,7 @@ export function createApp(opts: AppOptions): App {
     async startProposal(o = {}) {
       if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
       const runId = `proposal_${newId("r").slice(2)}`;
-      drive(buildProposalWorkflow({ model }).definition, runId, { run_key: runId });
+      drive(buildProposalWorkflow({ model: model_() }).definition, runId, { run_key: runId });
       // Resolve once the run either parks at the approval gate (queued)
       // or settles (blocked/exhausted/failed).
       const deadline = Date.now() + (o.timeoutMs ?? 600_000);
