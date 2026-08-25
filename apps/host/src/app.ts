@@ -23,7 +23,9 @@ import {
 import {
   assertType,
   EstateFile,
+  HouseholdProfile,
   InvestmentPlan,
+  redactProfile,
   newId,
   TAX_QUARTERS,
   TaxProfile,
@@ -221,6 +223,14 @@ export interface App {
   connectKraken(opts: { name?: string; institutionId?: string; apiKey: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** The account list the Ledger app (Ledger Wallet / Ledger Live) keeps on this machine (local read only; nothing is sent anywhere). */
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
+  /** The household profile, redacted: the tax id never leaves the host (last four digits only). */
+  getProfile(): (ReturnType<typeof redactProfile> & { configured: true }) | { configured: false };
+  /**
+   * Save the profile from the GUI. An empty/absent ssn keeps the stored
+   * one (the GUI never has the full id to send back); pass
+   * `clear_ssn: true` to actually remove it.
+   */
+  saveProfile(input: HouseholdProfile & { clear_ssn?: boolean }): void;
   /** The Credentials page: which keys are set (presence only -- values never leave the host). */
   credentialsStatus(): CredentialsStatus;
   /** Store a global credential (Anthropic / Plaid / Enable Banking); validated before storing; Anthropic takes effect without a restart. */
@@ -406,7 +416,12 @@ export function createApp(opts: AppOptions): App {
     if (!fs.existsSync(planPath)) return null;
     return assertType(InvestmentPlan, JSON.parse(fs.readFileSync(planPath, "utf8")), "plan.json");
   };
-  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan };
+  const profilePath = path.join(dataDir, "profile.json");
+  const profile = (): HouseholdProfile | null => {
+    if (!fs.existsSync(profilePath)) return null;
+    return assertType(HouseholdProfile, JSON.parse(fs.readFileSync(profilePath, "utf8")), "profile.json");
+  };
+  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
   const actions = buildActions(actx);
   const model = opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
 
@@ -624,6 +639,28 @@ export function createApp(opts: AppOptions): App {
       return removed;
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
+    getProfile() {
+      const p = profile();
+      if (p === null) return { configured: false as const };
+      return { configured: true as const, ...redactProfile(p) };
+    },
+    saveProfile(input) {
+      const { clear_ssn, ...rest } = input;
+      const prior = profile();
+      const next: HouseholdProfile = {
+        ...rest,
+        person: {
+          ...rest.person,
+          // The GUI only ever holds a new id or nothing: nothing keeps the stored one.
+          ssn: clear_ssn === true ? null : (rest.person.ssn != null && rest.person.ssn !== "" ? rest.person.ssn : (prior?.person.ssn ?? null)),
+        },
+        updated_at: clock().toISOString(),
+      };
+      const checked = assertType(HouseholdProfile, next, "profile.json");
+      const tmp = `${profilePath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(checked, null, 2));
+      fs.renameSync(tmp, profilePath);
+    },
     credentialsStatus() {
       return credentialsStatus(secrets, loaded.entries);
     },

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "institutions" | "credentials" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "positions" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -38,6 +38,7 @@ export function App() {
             ["positions", "Positions", null],
             ["institutions", "Institutions", null],
             ["credentials", "Credentials", null],
+            ["profile", "Profile", null],
             ["tax", "Tax calendar", null],
             ["strategy", "Strategy", null],
             ["estate", "Estate", null],
@@ -63,6 +64,7 @@ export function App() {
             {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
             {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
             {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} />}
+            {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
             {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "strategy" && <ChatPage openFact={setFactId} />}
             {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
@@ -139,6 +141,183 @@ function NoNumbersYet({ overview, onChanged, goInstitutions }: { overview: Insti
         </>
       )}
     </div>
+  );
+}
+
+// --- Profile: who you are, and the people your estate and tax plans must know about ---
+
+type Rel = { legal_name: string; relationship: string; date_of_birth: string; note: string };
+const emptyRel = (): Rel => ({ legal_name: "", relationship: "", date_of_birth: "", note: "" });
+const toRel = (r: import("./api").ProfileRelation | null | undefined): Rel => ({
+  legal_name: r?.legal_name ?? "",
+  relationship: r?.relationship ?? "",
+  date_of_birth: r?.date_of_birth ?? "",
+  note: r?.note ?? "",
+});
+const fromRel = (r: Rel): import("./api").ProfileRelation => ({
+  legal_name: r.legal_name.trim(),
+  ...(r.relationship.trim() !== "" ? { relationship: r.relationship.trim() } : {}),
+  ...(r.date_of_birth.trim() !== "" ? { date_of_birth: r.date_of_birth.trim() } : {}),
+  ...(r.note.trim() !== "" ? { note: r.note.trim() } : {}),
+});
+
+interface ProfileDraft {
+  legal_name: string; preferred_name: string; date_of_birth: string; ssn: string; ssn_last4: string | null; clear_ssn: boolean;
+  citizenship: string; country_of_residence: string; state_or_province: string; marital_status: string;
+  has_spouse: boolean; spouse: Rel; children: Rel[]; others: Rel[];
+}
+
+function draftFrom(p: import("./api").ProfileRedacted): ProfileDraft {
+  return {
+    legal_name: p.person?.legal_name ?? "",
+    preferred_name: p.person?.preferred_name ?? "",
+    date_of_birth: p.person?.date_of_birth ?? "",
+    ssn: "",
+    ssn_last4: p.person?.ssn_last4 ?? null,
+    clear_ssn: false,
+    citizenship: p.person?.citizenship ?? "",
+    country_of_residence: p.person?.country_of_residence ?? "",
+    state_or_province: p.person?.state_or_province ?? "",
+    marital_status: p.person?.marital_status ?? "",
+    has_spouse: p.spouse != null,
+    spouse: toRel(p.spouse),
+    children: (p.children ?? []).map(toRel),
+    others: (p.others ?? []).map(toRel),
+  };
+}
+
+function saveInputFrom(d: ProfileDraft): import("./api").ProfileSave {
+  return {
+    person: {
+      legal_name: d.legal_name.trim(),
+      ...(d.preferred_name.trim() !== "" ? { preferred_name: d.preferred_name.trim() } : {}),
+      ...(d.date_of_birth.trim() !== "" ? { date_of_birth: d.date_of_birth.trim() } : {}),
+      ...(d.ssn.trim() !== "" ? { ssn: d.ssn.trim() } : {}),
+      ...(d.citizenship.trim() !== "" ? { citizenship: d.citizenship.trim() } : {}),
+      ...(d.country_of_residence.trim() !== "" ? { country_of_residence: d.country_of_residence.trim() } : {}),
+      ...(d.state_or_province.trim() !== "" ? { state_or_province: d.state_or_province.trim() } : {}),
+      ...(d.marital_status !== "" ? { marital_status: d.marital_status } : {}),
+    },
+    ...(d.has_spouse && d.spouse.legal_name.trim() !== "" ? { spouse: fromRel(d.spouse) } : { spouse: null }),
+    children: d.children.filter((c) => c.legal_name.trim() !== "").map(fromRel),
+    others: d.others.filter((o) => o.legal_name.trim() !== "").map(fromRel),
+    ...(d.clear_ssn ? { clear_ssn: true } : {}),
+  };
+}
+
+function RelRow({ r, onChange, onRemove, relPlaceholder, disabled }: { r: Rel; onChange: (r: Rel) => void; onRemove: () => void; relPlaceholder: string; disabled: boolean }) {
+  return (
+    <div className="actions" style={{ marginTop: 6 }}>
+      <input style={{ flex: 1 }} placeholder="Full legal name" value={r.legal_name} disabled={disabled} onChange={(e) => onChange({ ...r, legal_name: e.target.value })} />
+      <input style={{ width: 140 }} placeholder={relPlaceholder} value={r.relationship} disabled={disabled} onChange={(e) => onChange({ ...r, relationship: e.target.value })} />
+      <input style={{ width: 130 }} placeholder="Born (YYYY-MM-DD)" value={r.date_of_birth} disabled={disabled} onChange={(e) => onChange({ ...r, date_of_birth: e.target.value })} />
+      <button className="secondary" disabled={disabled} onClick={onRemove}>Remove</button>
+    </div>
+  );
+}
+
+/** The people an estate plan must account for. Reused by the Profile page and the Estate page's wizard. */
+function PeopleEditor({ d, setD, disabled }: { d: ProfileDraft; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; disabled: boolean }) {
+  return (
+    <>
+      <h3>2 · Spouse or partner</h3>
+      <label className="small">
+        <input type="checkbox" checked={d.has_spouse} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, has_spouse: e.target.checked }))} /> I have a spouse or partner
+      </label>
+      {d.has_spouse && (
+        <div className="actions" style={{ marginTop: 6 }}>
+          <input style={{ flex: 1 }} placeholder="Spouse/partner's full legal name" value={d.spouse.legal_name} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, legal_name: e.target.value } }))} />
+          <input style={{ width: 130 }} placeholder="Born (YYYY-MM-DD)" value={d.spouse.date_of_birth} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, date_of_birth: e.target.value } }))} />
+        </div>
+      )}
+      <h3>3 · Children</h3>
+      {d.children.map((c, i) => (
+        <RelRow key={i} r={c} disabled={disabled} relPlaceholder="son / daughter / stepchild" onChange={(r) => setD((x) => ({ ...x, children: x.children.map((y, j) => (j === i ? r : y)) }))} onRemove={() => setD((x) => ({ ...x, children: x.children.filter((_, j) => j !== i) }))} />
+      ))}
+      <p><button className="secondary" disabled={disabled} onClick={() => setD((x) => ({ ...x, children: [...x.children, emptyRel()] }))}>Add a child</button></p>
+      <h3>4 · Anyone else who should appear in your will</h3>
+      <p className="small muted">Parents, siblings, godchildren, close friends, charities — anyone you may want named.</p>
+      {d.others.map((o, i) => (
+        <RelRow key={i} r={o} disabled={disabled} relPlaceholder="relationship" onChange={(r) => setD((x) => ({ ...x, others: x.others.map((y, j) => (j === i ? r : y)) }))} onRemove={() => setD((x) => ({ ...x, others: x.others.filter((_, j) => j !== i) }))} />
+      ))}
+      <p><button className="secondary" disabled={disabled} onClick={() => setD((x) => ({ ...x, others: [...x.others, emptyRel()] }))}>Add a person</button></p>
+    </>
+  );
+}
+
+function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; save: () => Promise<void>; busy: boolean; error: string | null; saved: boolean } {
+  const [d, setDraft] = useState<ProfileDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    api.profile().then((p) => setDraft(draftFrom(p))).catch(() => setDraft(null));
+  }, [tick]);
+  const setD = (fn: (x: ProfileDraft) => ProfileDraft) => {
+    setSaved(false);
+    setDraft((x) => (x === null ? x : fn(x)));
+  };
+  const save = async () => {
+    if (d === null) return;
+    if (d.legal_name.trim() === "") {
+      setError("Your full legal name is the one required field.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.profileSave(saveInputFrom(d));
+      setDraft(draftFrom(r));
+      setSaved(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { d, setD, save, busy, error, saved };
+}
+
+function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+  const { d, setD, save, busy, error, saved } = useProfileDraft(tick);
+  if (d === null) return <p className="muted">Host unreachable.</p>;
+  return (
+    <>
+      <h2>Profile</h2>
+      <p className="small muted">
+        Who you are, and the people your estate and tax planning must know about. Stored only on this Mac. The Estate
+        Planner and Strategist can read everything here <b>except your tax id</b>, which is never shown to any model.
+      </p>
+      <h3>1 · About you</h3>
+      <div className="actions"><input style={{ flex: 1 }} placeholder="Full legal name" value={d.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, legal_name: e.target.value }))} />
+        <input style={{ width: 160 }} placeholder="Preferred name" value={d.preferred_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_name: e.target.value }))} /></div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input style={{ width: 150 }} placeholder="Born (YYYY-MM-DD)" value={d.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, date_of_birth: e.target.value }))} />
+        <input style={{ flex: 1 }} type="password" placeholder={d.ssn_last4 !== null ? `Tax id / SSN on file (…${d.ssn_last4}) — type to replace` : "Tax id / SSN (optional; never shown to models)"} value={d.ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, ssn: e.target.value }))} />
+        {d.ssn_last4 !== null && (
+          <label className="small"><input type="checkbox" checked={d.clear_ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, clear_ssn: e.target.checked }))} /> remove it</label>
+        )}
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input style={{ width: 180 }} placeholder="Citizenship (country)" value={d.citizenship} disabled={busy} onChange={(e) => setD((x) => ({ ...x, citizenship: e.target.value }))} />
+        <input style={{ width: 180 }} placeholder="Country of residence" value={d.country_of_residence} disabled={busy} onChange={(e) => setD((x) => ({ ...x, country_of_residence: e.target.value }))} />
+        <input style={{ width: 160 }} placeholder="State / province" value={d.state_or_province} disabled={busy} onChange={(e) => setD((x) => ({ ...x, state_or_province: e.target.value }))} />
+        <select value={d.marital_status} disabled={busy} onChange={(e) => setD((x) => ({ ...x, marital_status: e.target.value }))}>
+          <option value="">Marital status…</option>
+          <option value="single">Single</option>
+          <option value="married">Married</option>
+          <option value="partnered">Partnered</option>
+          <option value="divorced">Divorced</option>
+          <option value="widowed">Widowed</option>
+        </select>
+      </div>
+      <PeopleEditor d={d} setD={setD} disabled={busy} />
+      {error !== null && <div className="banner">{error}</div>}
+      <div className="actions" style={{ marginTop: 10 }}>
+        <button disabled={busy} onClick={() => { void save().then(onChanged); }}>{busy ? "saving…" : "Save profile"}</button>
+        {saved && <span className="pill low">saved</span>}
+      </div>
+    </>
   );
 }
 
@@ -1750,8 +1929,8 @@ function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: bo
 // Phase 3: the Strategist chat. The model narrates; every figure comes
 // from a tool result recorded as evidence, each number clickable back to
 // its facts. Chat is a tool inside the product, not the product.
-function ChatPage({ openFact }: { openFact: (id: string) => void }) {
-  const [agent, setAgent] = useState<ChatAgentName>("strategist");
+/** One agent's transcript + a proper composer (4-6 lines, wrapping; Enter sends, Shift+Enter = new line). */
+function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact: (id: string) => void; intro?: string }) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1777,22 +1956,11 @@ function ChatPage({ openFact }: { openFact: (id: string) => void }) {
   };
   return (
     <>
-      <h2>
-        Strategy ·{" "}
-        <select value={agent} onChange={(e) => setAgent(e.target.value as ChatAgentName)}>
-          <option value="strategist">Strategist</option>
-          <option value="estate_planner">Estate Planner</option>
-        </select>
-      </h2>
-      <p className="small muted">
-        Advisory only: no credentials, no writes to fact tables, no orders. Figures come from deterministic tools; each reply's
-        evidence links back to dated ledger facts. Material theses land in the journal.
-      </p>
-      {turns.length === 0 && <p className="muted">No conversation yet. Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"</p>}
+      {turns.length === 0 && intro !== undefined && <p className="muted">{intro}</p>}
       {turns.map((t) => (
         <div key={t.message_id} className="queue-item">
           <div className="small muted">you · {when(t.at)}</div>
-          <div style={{ marginBottom: 8 }}>{t.message}</div>
+          <div style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>{t.message}</div>
           <div className="small muted">{t.agent}</div>
           <div style={{ whiteSpace: "pre-wrap" }}>{t.reply}</div>
           {t.evidence.map((e, i) => (
@@ -1810,21 +1978,50 @@ function ChatPage({ openFact }: { openFact: (id: string) => void }) {
         </div>
       ))}
       {error !== null && <div className="banner">{error}</div>}
-      <div className="actions">
-        <input
-          style={{ flex: 1 }}
-          placeholder={busy ? "thinking…" : "Ask anything…"}
+      <div className="actions" style={{ alignItems: "flex-end" }}>
+        <textarea
+          className="chat-input"
+          rows={5}
+          placeholder={busy ? "thinking…" : "Ask anything… (Enter sends, Shift+Enter for a new line)"}
           value={text}
           disabled={busy}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void send();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
           }}
         />
         <button disabled={busy} onClick={() => void send()}>
           {busy ? "…" : "Send"}
         </button>
       </div>
+    </>
+  );
+}
+
+function ChatPage({ openFact }: { openFact: (id: string) => void }) {
+  const [agent, setAgent] = useState<ChatAgentName>("strategist");
+  return (
+    <>
+      <h2>
+        Strategy ·{" "}
+        <select value={agent} onChange={(e) => setAgent(e.target.value as ChatAgentName)}>
+          <option value="strategist">Strategist</option>
+          <option value="estate_planner">Estate Planner</option>
+        </select>
+      </h2>
+      <p className="small muted">
+        Advisory only: no credentials, no writes to fact tables, no orders. Figures come from deterministic tools; each reply's
+        evidence links back to dated ledger facts. Material theses land in the journal.
+      </p>
+      <ChatPanel
+        key={agent}
+        agent={agent}
+        openFact={openFact}
+        intro={'No conversation yet. Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"'}
+      />
     </>
   );
 }
@@ -1837,14 +2034,26 @@ function EstatePage({ tick, onChanged, openFact }: { tick: number; onChanged: ()
     api.estate().then(setEstate).catch(() => setEstate(null));
   }, [tick]);
   if (estate === null) return <p className="muted">Host unreachable.</p>;
+  const wizardAndChat = (
+    <>
+      <EstateWizard tick={tick} onChanged={onChanged} />
+      <h3 style={{ marginTop: 18 }}>Ask the Estate Planner</h3>
+      <p className="small muted">
+        Advisory only. It can read your profile (never your tax id), the registry, and the document vault; concerns it
+        raises are cited findings, never silent edits.
+      </p>
+      <ChatPanel agent="estate_planner" openFact={openFact} intro={'No conversation yet. Try: "Who is missing from my will given my family situation?"'} />
+    </>
+  );
   if (!estate.configured) {
     return (
       <>
         <h2>Estate registry</h2>
         <p className="muted">
-          No estate plan. Write <code>estate.json</code> into the data directory (entities, intended titling, expected
-          documents, executors) -- with your attorney -- and run the audit.
+          No estate plan on file yet. Start with the wizard below; the registry itself (intended titling, expected
+          documents, executors) is written with your attorney into <code>estate.json</code>.
         </p>
+        {wizardAndChat}
       </>
     );
   }
@@ -1909,7 +2118,46 @@ function EstatePage({ tick, onChanged, openFact }: { tick: number; onChanged: ()
         Executors: {(estate.plan?.executors ?? []).join(", ") || <span className="pill high">none recorded</span>} · expected
         documents: {(estate.plan?.documents ?? []).map((d) => d.kind).join(", ") || "none"}
       </p>
+      {wizardAndChat}
     </>
+  );
+}
+
+/** The estate wizard: collect the people a will must account for (stored in the household profile). */
+function EstateWizard({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+  const { d, setD, save, busy, error, saved } = useProfileDraft(tick);
+  const [open, setOpen] = useState(false);
+  if (d === null) return null;
+  const people = (d.has_spouse && d.spouse.legal_name.trim() !== "" ? 1 : 0) + d.children.filter((c) => c.legal_name.trim() !== "").length + d.others.filter((o) => o.legal_name.trim() !== "").length;
+  return (
+    <div className="queue-item" style={{ marginTop: 14 }}>
+      <div className="head">
+        <b>People in your estate</b>
+        {people > 0 ? <span className="pill low">{people} recorded</span> : <span className="pill medium">not collected yet</span>}
+        <button className="secondary" onClick={() => setOpen((o) => !o)}>{open ? "Hide" : people > 0 ? "Review / edit" : "Start"}</button>
+      </div>
+      <div className="small muted">
+        An estate planner needs to know who exists before what-goes-where: spouse, children, and anyone else your will
+        should name. Saved to your Profile; the full identity details (residence, citizenship, tax id) live on the
+        Profile page.
+      </div>
+      {open && (
+        <>
+          {d.legal_name.trim() === "" && (
+            <>
+              <h3>1 · Your name</h3>
+              <div className="actions"><input style={{ flex: 1 }} placeholder="Your full legal name" value={d.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, legal_name: e.target.value }))} /></div>
+            </>
+          )}
+          <PeopleEditor d={d} setD={setD} disabled={busy} />
+          {error !== null && <div className="banner">{error}</div>}
+          <div className="actions" style={{ marginTop: 8 }}>
+            <button disabled={busy} onClick={() => { void save().then(onChanged); }}>{busy ? "saving…" : "Save"}</button>
+            {saved && <span className="pill low">saved</span>}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

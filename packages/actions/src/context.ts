@@ -2,7 +2,7 @@
 // string ref (BUILD_PLAN §8.5) so the workflow definition stays hashable;
 // the registry is built once per host from this context.
 
-import type { EstateFile, InvestmentPlan, Principal, TaxProfile } from "@fin/contracts";
+import type { EstateFile, HouseholdProfile, InvestmentPlan, Principal, TaxProfile } from "@fin/contracts";
 import type { InstitutionAdapter } from "@fin/institutions";
 import type { Ledger } from "@fin/ledger";
 import type { Vault } from "@fin/vault";
@@ -21,6 +21,8 @@ export interface ActionContext {
   estateFile?: () => EstateFile | null;
   /** The written investment plan (Phase 4). Null/absent -> proposals fail loudly. */
   plan?: () => InvestmentPlan | null;
+  /** The household profile (who the operator is; spouse/children/others). Null/absent -> agents say it's not set up. */
+  profile?: () => HouseholdProfile | null;
 }
 
 export interface Thresholds {

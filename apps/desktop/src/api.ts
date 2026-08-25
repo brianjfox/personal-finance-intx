@@ -108,6 +108,29 @@ export interface InstitutionOverview {
   consent_until: string | null; aspsp: { name: string; country: string } | null;
 }
 export interface InstitutionsOverview { institutions: InstitutionOverview[]; hasFacts: boolean }
+export interface ProfileRelation { legal_name: string; relationship?: string; date_of_birth?: string | null; note?: string }
+export interface ProfileRedacted {
+  configured: boolean;
+  person?: {
+    legal_name: string; preferred_name?: string; date_of_birth?: string | null; ssn_last4: string | null;
+    citizenship?: string; country_of_residence?: string; state_or_province?: string; marital_status?: string;
+  };
+  spouse?: ProfileRelation | null;
+  children?: ProfileRelation[];
+  others?: ProfileRelation[];
+  updated_at?: string;
+}
+export interface ProfileSave {
+  person: {
+    legal_name: string; preferred_name?: string; date_of_birth?: string | null; ssn?: string | null;
+    citizenship?: string; country_of_residence?: string; state_or_province?: string; marital_status?: string;
+  };
+  spouse?: ProfileRelation | null;
+  children: ProfileRelation[];
+  others: ProfileRelation[];
+  clear_ssn?: boolean;
+}
+
 export interface ManagedAccount {
   account_id: string; name: string; type: string; currency: string; value: string; updated_at: string; closed_at?: string;
 }
@@ -206,6 +229,8 @@ export const api = {
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/kraken", input),
   connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
+  profile: () => get<ProfileRedacted>("/api/profile"),
+  profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
   credentials: () =>
     get<{
       slots: Array<{ id: string; label: string; note: string; configured: boolean; fields: Array<{ account: string; label: string; multiline: boolean; set: boolean }> }>;

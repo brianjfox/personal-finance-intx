@@ -3,6 +3,7 @@ export * as decimal from "./decimal";
 export * from "./principals";
 export * from "./provenance";
 export * from "./fact";
+export * from "./profile";
 export * from "./finding";
 export * from "./governance";
 export * from "./records";
