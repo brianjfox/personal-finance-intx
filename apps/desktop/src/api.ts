@@ -194,8 +194,12 @@ export const api = {
     post<{ institution_id: string; consent_until: string | null; runId: string; status: string }>("/api/connect/eb/complete", input),
   connectCoinbase: (input: { name?: string; institution_id?: string; api_key_name: string; private_key: string }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/coinbase", input),
-  connectWallet: (input: { name?: string; holdings: Array<{ kind: string; value: string; label?: string }> }) =>
+  connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
+  walletDetect: (value: string) =>
+    get<{ ok: true; kind: string; chain: string; note?: string } | { ok: false; reason: string }>(
+      `/api/wallet/detect?value=${encodeURIComponent(value)}`,
+    ),
 };
 
 export function money(v: string | null | undefined, currency = "USD"): string {

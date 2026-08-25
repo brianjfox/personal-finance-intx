@@ -40,6 +40,7 @@ import {
 import {
   addInstitutionEntry,
   COINBASE_SERVICE,
+  detectWalletHolding,
   parseCoinbaseCredential,
   parseCoinbaseKey,
   defaultSecretStore,
@@ -200,8 +201,13 @@ export interface App {
    * key), and reconcile. The key is validated before it is stored.
    */
   connectCoinbase(opts: { name?: string; institutionId?: string; apiKeyName: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
-  /** Watch-only wallet (Ledger/Trezor/any): public addresses only -- structurally unable to move funds. */
-  connectWallet(opts: { name?: string; holdings: WalletHolding[] }): Promise<{ institution_id: string; runId: string; status: string }>;
+  /**
+   * Watch-only wallet (Ledger/Trezor/any): public addresses only --
+   * structurally unable to move funds. Rows without an explicit kind are
+   * chain-detected from the address syntax; unrecognized rows refuse in
+   * plain words rather than guessing.
+   */
+  connectWallet(opts: { name?: string; holdings: Array<{ value: string; label?: string; kind?: WalletHolding["kind"] }> }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** Start (or resume) a nightly run. Resolves when the run is terminal. */
   runNightly(opts?: { runId?: string; institutions?: string[] }): Promise<RunResult>;
   /** Resume every non-terminal run on disk (startup). */
@@ -711,10 +717,16 @@ export function createApp(opts: AppOptions): App {
     },
     async connectWallet(o) {
       if (o.holdings.length === 0) throw new Error("add at least one address to watch");
+      const holdings: WalletHolding[] = o.holdings.map((h) => {
+        if (h.kind !== undefined) return { kind: h.kind, value: h.value.trim(), ...(h.label !== undefined ? { label: h.label } : {}) };
+        const d = detectWalletHolding(h.value);
+        if (!d.ok) throw new Error(`${h.value.trim().slice(0, 16)}…: ${d.reason}`);
+        return { kind: d.kind, value: h.value.trim(), ...(h.label !== undefined ? { label: h.label } : {}) };
+      });
       const entry = addInstitutionEntry(dataDir, {
         name: o.name ?? "Self-custody wallet",
         adapter: "wallet",
-        options: { holdings: o.holdings, ...connectorCfg.walletApis },
+        options: { holdings, ...connectorCfg.walletApis },
       });
       loaded = reloadRegistry();
       const run = await refreshInstitution(entry.institution_id);

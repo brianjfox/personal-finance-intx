@@ -9,3 +9,4 @@ export * from "./plaid";
 export * from "./registry";
 export * from "./secrets";
 export * from "./wallet";
+export * from "./wallet-detect";

@@ -401,19 +401,27 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
   );
 }
 
-const WALLET_KIND_OPTIONS: ReadonlyArray<readonly [string, string]> = [
-  ["btc_address", "Bitcoin address"],
-  ["btc_xpub", "Bitcoin xpub (older, legacy wallets)"],
-  ["eth_address", "Ethereum address"],
-];
-
-/** Watch-only wallet: public addresses typed into rows; nothing secret involved. */
+/** Watch-only wallet: paste addresses; the chain is recognized from the address itself. */
 function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
-  const [rows, setRows] = useState<Array<{ kind: string; value: string; label: string }>>([{ kind: "btc_address", value: "", label: "" }]);
+  const [rows, setRows] = useState<Array<{ value: string; label: string; chain: string | null; problem: string | null }>>([
+    { value: "", label: "", chain: null, problem: null },
+  ]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const setRow = (i: number, patch: Partial<{ kind: string; value: string; label: string }>) =>
+  const setRow = (i: number, patch: Partial<{ value: string; label: string; chain: string | null; problem: string | null }>) =>
     setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+  const detect = async (i: number, value: string) => {
+    if (value.trim() === "") {
+      setRow(i, { chain: null, problem: null });
+      return;
+    }
+    try {
+      const d = await api.walletDetect(value);
+      setRow(i, d.ok ? { chain: d.chain, problem: null } : { chain: null, problem: d.reason });
+    } catch {
+      setRow(i, { chain: null, problem: null });
+    }
+  };
   const connect = async () => {
     if (name.trim() === "") {
       setError("Give the wallet a name first — \"Ledger\" works.");
@@ -421,7 +429,7 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
     }
     const holdings = rows
       .filter((r) => r.value.trim() !== "")
-      .map((r) => ({ kind: r.kind, value: r.value.trim(), ...(r.label.trim() !== "" ? { label: r.label.trim() } : {}) }));
+      .map((r) => ({ value: r.value.trim(), ...(r.label.trim() !== "" ? { label: r.label.trim() } : {}) }));
     if (holdings.length === 0) {
       setError("Paste at least one address. In Ledger Live: each account's receive address (Accounts → Receive).");
       return;
@@ -440,24 +448,29 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
   return (
     <div style={{ marginTop: 8 }}>
       <div className="small muted" style={{ marginBottom: 4 }}>
-        Public addresses only — they can show balances, never move funds. In Ledger Live, copy each account's receive
-        address. Modern Bitcoin accounts: paste addresses (a segwit "zpub" won't work); only older legacy accounts can
-        use the xpub. Note: the addresses are looked up via public chain services (mempool.space, blockchain.info, a
-        public Ethereum node), which learn that someone asked about them.
+        Public addresses only — they can show balances, never move funds. Just paste; the chain is recognized from the
+        address itself (Bitcoin, Litecoin, Ethereum, Solana, and legacy Bitcoin xpubs today). In Ledger Live, copy each
+        account's receive address. Note: the addresses are looked up via public chain services, which learn that someone
+        asked about them.
       </div>
       {rows.map((r, i) => (
-        <div key={i} className="actions" style={{ marginTop: 6 }}>
-          <select value={r.kind} onChange={(e) => setRow(i, { kind: e.target.value })}>
-            {WALLET_KIND_OPTIONS.map(([v, label]) => (
-              <option key={v} value={v}>{label}</option>
-            ))}
-          </select>
-          <input style={{ flex: 1 }} placeholder={r.kind === "btc_xpub" ? "xpub…" : r.kind === "eth_address" ? "0x…" : "bc1… / 1… / 3…"} value={r.value} onChange={(e) => setRow(i, { value: e.target.value })} />
-          <input style={{ width: 130 }} placeholder="label (optional)" value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+        <div key={i} style={{ marginTop: 6 }}>
+          <div className="actions">
+            <input
+              style={{ flex: 1 }}
+              placeholder="Paste an address — bc1…, 0x…, L…, xpub…, a Solana address…"
+              value={r.value}
+              onChange={(e) => setRow(i, { value: e.target.value })}
+              onBlur={(e) => void detect(i, e.target.value)}
+            />
+            <input style={{ width: 130 }} placeholder="label (optional)" value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+            {r.chain !== null && <span className="pill low">{r.chain}</span>}
+          </div>
+          {r.problem !== null && <div className="small" style={{ marginTop: 2 }}><span className="pill high">{r.problem}</span></div>}
         </div>
       ))}
       <div className="actions" style={{ marginTop: 6 }}>
-        <button className="secondary" disabled={busy} onClick={() => setRows((r) => [...r, { kind: "btc_address", value: "", label: "" }])}>
+        <button className="secondary" disabled={busy} onClick={() => setRows((r) => [...r, { value: "", label: "", chain: null, problem: null }])}>
           Add another address
         </button>
         <button disabled={busy} onClick={() => void connect()}>{busy ? "reading the blockchain…" : "Watch this wallet"}</button>

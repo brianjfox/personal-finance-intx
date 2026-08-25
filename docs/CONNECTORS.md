@@ -101,18 +101,29 @@ never a made-up one. Key rotation: the card's "Replace the API key".
 A hardware wallet is read WITHOUT the device: paste public addresses
 (in Ledger Live: each account's receive address). An address can show
 balances but can never move funds — read-only is structural, not a
-permission. Supported rows: Bitcoin address (via mempool.space),
-Bitcoin **legacy** xpub (via blockchain.info/multiaddr — a modern segwit
-`zpub` is NOT supported by that API and would report 0; paste addresses
-instead), Ethereum address (native ETH via a public JSON-RPC node).
-Prices from Coinbase's public spot endpoint. Satoshis and wei are
-converted with BigInt string math — quantities never touch floats.
+permission. **The chain is detected from the address itself** (base58
+version prefixes, bech32 human-readable parts, `0x`+40-hex, the
+xpub-family prefixes) — no "what kind is this?" dropdown. Detection is
+conservative: a recognized-but-unsupported chain refuses by name
+("that looks like a Dogecoin address — not supported yet"), and
+ambiguous input is an error, never a guess that silently reads the
+wrong chain.
+
+Supported today: **Bitcoin** (addresses via mempool.space; **legacy**
+xpubs via blockchain.info — a segwit `zpub` is refused with an
+explanation, paste addresses instead), **Litecoin** (litecoinspace.org,
+the mempool-compatible LTC instance), **Ethereum** (native ETH via a
+public JSON-RPC node), **Solana** (getBalance via the public RPC).
+Recognized and named but not yet supported: Dogecoin, XRP, Tron,
+Cardano, Bitcoin Cash, Cosmos-family. Prices from Coinbase's public
+spot endpoint. Satoshis, litoshis, wei, and lamports convert through
+BigInt string math — quantities never touch floats.
 
 **Privacy trade-off, stated plainly**: each nightly discloses the
-watched addresses to the public chain-data services (mempool.space,
-blockchain.info, the ETH RPC operator). The endpoints are configurable
-in the registry entry's options (`btc_api`, `btc_xpub_api`, `eth_rpc`,
-`price_api`) for self-hosted explorers/nodes.
+watched addresses to the public chain-data services. The endpoints are
+configurable in the registry entry's options (`btc_api`,
+`btc_xpub_api`, `eth_rpc`, `ltc_api`, `sol_rpc`, `price_api`) for
+self-hosted explorers/nodes.
 
 ## Testing
 

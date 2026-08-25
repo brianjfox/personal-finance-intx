@@ -32,7 +32,7 @@ export interface ConnectorConfig {
   ebRedirectUrl?: string;
   coinbaseBaseUrl?: string;
   /** Endpoint overrides for watch-only wallets (tests, self-hosted explorers/nodes). */
-  walletApis?: Partial<Record<"btc_api" | "btc_xpub_api" | "eth_rpc" | "price_api", string>>;
+  walletApis?: Partial<Record<"btc_api" | "btc_xpub_api" | "eth_rpc" | "ltc_api" | "sol_rpc" | "price_api", string>>;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
 }
