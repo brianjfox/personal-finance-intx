@@ -7,12 +7,12 @@
 import { fixtureAdapter } from "@fin/institutions";
 
 import { createApp } from "../../src/app";
-import { demoAdapters } from "./demo-adapters";
+import { demoAdapters, demoClock } from "./demo-adapters";
 
 const [dataDir, runId, nightArg, crashAt] = process.argv.slice(2);
 if (!dataDir || !runId) throw new Error("usage: nightly-child <dataDir> <runId> <night> [crashAt]");
 const night = nightArg === "2" ? 2 : 1;
-const app = createApp({ dataDir, adapters: demoAdapters(night).map((a) => fixtureAdapter(a.id, a.snapshot)), pollMs: 50 });
+const app = createApp({ dataDir, adapters: demoAdapters(night).map((a) => fixtureAdapter(a.id, a.snapshot)), pollMs: 50, clock: demoClock(night) });
 
 const emit = (o: Record<string, unknown>): void => {
   process.stdout.write(`${JSON.stringify(o)}\n`);

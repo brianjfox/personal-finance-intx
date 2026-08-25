@@ -42,3 +42,11 @@ export function demoAdapters(night: 1 | 2 | 3): DemoInstitution[] {
     },
   ];
 }
+
+/**
+ * A clock pinned a few hours after the night's fixture as-of. The
+ * fixtures carry absolute dates, so tests must not read the real clock:
+ * the staleness detector would (correctly) start flagging the fixtures
+ * a few days after they were written.
+ */
+export const demoClock = (night: 1 | 2 | 3) => (): Date => new Date(`2026-08-2${String(night + 1)}T06:00:00.000Z`);
