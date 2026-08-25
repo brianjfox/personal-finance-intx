@@ -11,3 +11,8 @@ Welcome. Connect an institution read-only: list it in /Users/bfox/Library/Applic
 This is an app for a non-programmer to use.  The user won't understand JSON data formats, or how to create files in their home directory.  They won't even be able to run "fin-host init --demo 1".  I would like the app to present two options when there is absolutely no data: "Currently, there are no institutions connected, and there's no other data for us to work with." And then two buttons: 1) "Click here to start connecting your institutions" and 2) "Click here to start with a bunch of made up data".
 
 If there is already data present, the user should be able to add or delete institutions and modify their connected status.  The user should be able to manage the data about their assets in general using the GUI.
+
+--------------------------------------------------------------------------------------------------------------------------------
+
+We need to include Coinbase as a place to learn about crypto holdings, and we should be able to read a ledger wallet.
+Most importantly -- the GUI is the place that the end user will interact with.  Users don't want to learn about the security CLI and how to use the command line.  So the user should be able to paste API keys and secrets once, and the app should store those in the Keychain.  The user should also be able to delete or modify those credentials.
