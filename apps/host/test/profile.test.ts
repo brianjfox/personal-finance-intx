@@ -75,3 +75,70 @@ describe("household profile", () => {
     expect(JSON.stringify(empty.result)).toContain("Profile page");
   });
 });
+
+describe("free-text profile intake", () => {
+  test("the model's tool reply becomes a validated patch; garbage fields are scrubbed", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/v1/messages") {
+          const body = (await req.json()) as { tool_choice?: { name?: string }; system?: string };
+          expect(body.tool_choice?.name).toBe("fill_profile");
+          expect(body.system).toContain("Never invent a date");
+          return Response.json({
+            content: [{
+              type: "tool_use",
+              name: "fill_profile",
+              input: {
+                person: { legal_name: "Brian J. Fox", state_or_province: "CA", marital_status: "married", date_of_birth: "not-a-date" },
+                spouse: { legal_name: "Alex Example" },
+                children: [
+                  { legal_name: "Sam Example", date_of_birth: "2004-03-02" },
+                  { legal_name: "Riley Example", note: "age 15 as of now" },
+                  { legal_name: "" },
+                ],
+                others: [{ legal_name: "Ted Fox", relationship: "brother" }],
+                note: "Riley's exact birth date wasn't given.",
+              },
+            }],
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const app = createApp({
+        dataDir: tmp(),
+        inferenceSource: () => ({ id: "stub", provider: "anthropic", baseURL: `http://127.0.0.1:${server.port}`, apiKey: "k", model: "m" }),
+      });
+      try {
+        const patch = await app.extractProfile("I'm Brian, married to Alex, kids Sam (2004-03-02) and Riley who's 15; brother Ted should be in the will.");
+        expect(patch.person?.legal_name).toBe("Brian J. Fox");
+        expect(patch.person?.date_of_birth).toBeUndefined(); // malformed date scrubbed
+        expect(patch.spouse?.legal_name).toBe("Alex Example");
+        expect(patch.children).toHaveLength(2); // empty-name row scrubbed
+        expect(patch.children?.[1]).toMatchObject({ legal_name: "Riley Example", note: "age 15 as of now" });
+        expect(patch.others?.[0]).toMatchObject({ legal_name: "Ted Fox", relationship: "brother" });
+        expect(patch.note).toContain("Riley");
+      } finally {
+        app.close();
+      }
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("no AI key means the Credentials-page message, not a crash", async () => {
+    const saved = process.env["ANTHROPIC_API_KEY"];
+    delete process.env["ANTHROPIC_API_KEY"];
+    const app = createApp({ dataDir: tmp() });
+    try {
+      expect(app.extractProfile("hello")).rejects.toThrow(/Credentials page/);
+    } finally {
+      app.close();
+      if (saved !== undefined) process.env["ANTHROPIC_API_KEY"] = saved;
+    }
+  });
+});

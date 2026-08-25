@@ -230,6 +230,14 @@ export const api = {
   connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
   profile: () => get<ProfileRedacted>("/api/profile"),
+  profileExtract: (text: string) =>
+    post<{
+      person?: Partial<{ legal_name: string; preferred_name: string; date_of_birth: string; ssn: string; citizenship: string; country_of_residence: string; state_or_province: string; marital_status: string }>;
+      spouse?: ProfileRelation | null;
+      children?: ProfileRelation[];
+      others?: ProfileRelation[];
+      note?: string;
+    }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
   credentials: () =>
     get<{

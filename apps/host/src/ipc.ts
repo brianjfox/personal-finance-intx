@@ -83,6 +83,7 @@ const CredentialSetBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'", 
 const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'" });
 const TokensDeleteBody = type({ institution_id: "string > 0" });
 const ProfileBody = HouseholdProfile.and(type({ "clear_ssn?": "boolean" }));
+const ExtractBody = type({ text: "string > 0" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -194,6 +195,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           app.saveProfile(body);
           return json(app.getProfile());
+        }
+        if (p === "/api/profile/extract" && req.method === "POST") {
+          const body = ExtractBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.extractProfile(body.text));
         }
         if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
         if (p === "/api/credentials/set" && req.method === "POST") {

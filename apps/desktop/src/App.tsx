@@ -317,7 +317,104 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
         <button disabled={busy} onClick={() => { void save().then(onChanged); }}>{busy ? "saving…" : "Save profile"}</button>
         {saved && <span className="pill low">saved</span>}
       </div>
+      <ProfileIntake setD={setD} disabled={busy} />
     </>
+  );
+}
+
+/** Free-text intake: the model proposes fields into the UNSAVED form; the operator reviews and saves. */
+function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; disabled: boolean }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    const t = text.trim();
+    if (t === "") return;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const patch = await api.profileExtract(t);
+      const filled: string[] = [];
+      setD((x) => {
+        const next = { ...x };
+        const pp = patch.person ?? {};
+        const setField = (key: keyof ProfileDraft, v: string | undefined, label: string) => {
+          if (v !== undefined && v !== "") {
+            (next as Record<string, unknown>)[key] = v;
+            filled.push(label);
+          }
+        };
+        setField("legal_name", pp.legal_name, "name");
+        setField("preferred_name", pp.preferred_name, "preferred name");
+        setField("date_of_birth", pp.date_of_birth, "date of birth");
+        setField("ssn", pp.ssn, "tax id");
+        setField("citizenship", pp.citizenship, "citizenship");
+        setField("country_of_residence", pp.country_of_residence, "country of residence");
+        setField("state_or_province", pp.state_or_province, "state");
+        setField("marital_status", pp.marital_status, "marital status");
+        if (patch.spouse != null) {
+          next.has_spouse = true;
+          next.spouse = toRel(patch.spouse);
+          filled.push("spouse");
+        }
+        const have = (list: Rel[], name: string) => list.some((r) => r.legal_name.trim().toLowerCase() === name.trim().toLowerCase());
+        for (const c of patch.children ?? []) {
+          if (!have(next.children, c.legal_name)) {
+            next.children = [...next.children, toRel(c)];
+            filled.push(`child ${c.legal_name}`);
+          }
+        }
+        for (const o of patch.others ?? []) {
+          if (!have(next.others, o.legal_name)) {
+            next.others = [...next.others, toRel(o)];
+            filled.push(o.legal_name);
+          }
+        }
+        return next;
+      });
+      setResult(
+        (filled.length > 0 ? `Filled in: ${filled.join(", ")}. Review above and press Save profile.` : "Nothing new found in that.") +
+          (patch.note !== undefined ? ` (${patch.note})` : ""),
+      );
+      setText("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 18 }}>
+      <h3>Or just tell us</h3>
+      <p className="small muted">
+        Say anything about yourself or others here, and we'll try to use it to fill out the data fields as best as we can.
+      </p>
+      <div className="actions" style={{ alignItems: "flex-end" }}>
+        <textarea
+          className="chat-input"
+          rows={5}
+          placeholder={busy ? "reading…" : 'e.g. "I\'m Brian, born in California, married to Alex since 2001. Two kids: Sam (2004-03-02) and Riley, who\'s 15. My brother Ted should be in the will."'}
+          value={text}
+          disabled={busy || disabled}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void run();
+            }
+          }}
+        />
+        <button disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill in the form"}</button>
+      </div>
+      {result !== null && <div className="banner" style={{ marginTop: 8 }}>{result}</div>}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <p className="small muted" style={{ marginTop: 4 }}>
+        Your words go to the AI model to be understood; the fields it suggests land in the form above, unsaved, for you
+        to check. Nothing is stored until you press Save profile.
+      </p>
+    </div>
   );
 }
 
