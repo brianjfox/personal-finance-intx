@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "institutions" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "positions" | "institutions" | "credentials" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -37,6 +37,7 @@ export function App() {
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
             ["institutions", "Institutions", null],
+            ["credentials", "Credentials", null],
             ["tax", "Tax calendar", null],
             ["strategy", "Strategy", null],
             ["estate", "Estate", null],
@@ -61,6 +62,7 @@ export function App() {
             {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
             {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
             {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
+            {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} />}
             {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "strategy" && <ChatPage openFact={setFactId} />}
             {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
@@ -137,6 +139,160 @@ function NoNumbersYet({ overview, onChanged, goInstitutions }: { overview: Insti
         </>
       )}
     </div>
+  );
+}
+
+// --- Credentials: paste keys once; the app keeps them in the Keychain ---
+
+type CredentialsData = Awaited<ReturnType<typeof api.credentials>>;
+
+function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+  const [data, setData] = useState<CredentialsData | null>(null);
+  useEffect(() => {
+    api.credentials().then(setData).catch(() => setData(null));
+  }, [tick]);
+  if (data === null) return <p className="muted">Host unreachable.</p>;
+  return (
+    <>
+      <h2>Credentials</h2>
+      <p className="small muted">
+        Every key is pasted once, stored in your Mac's Keychain by the app, and shown here only as set / not set — the
+        values never leave this machine. None of these keys can move money.
+      </p>
+      {data.slots.map((s) => (
+        <CredentialCard key={s.id} slot={s} onChanged={onChanged} />
+      ))}
+      {data.tokens.length > 0 && (
+        <>
+          <h3>Connection tokens</h3>
+          <p className="small muted">
+            Stored automatically when you connect an institution; removed automatically when you delete one. Removing a
+            token here disconnects that institution until you reconnect it.
+          </p>
+          <table>
+            <thead><tr><th>Institution</th><th>Kind</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {data.tokens.map((t) => (
+                <TokenRow key={t.institution_id} t={t} onChanged={onChanged} />
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][number]; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      setEditing(false);
+      setConfirmDelete(false);
+      setValues({});
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="queue-item">
+      <div className="head">
+        <b>{slot.label}</b>
+        <span className={`pill ${slot.configured ? "low" : "medium"}`}>{slot.configured ? "set up" : "not set up"}</span>
+      </div>
+      <div className="small muted">{slot.note}</div>
+      {editing ? (
+        <>
+          {slot.fields.map((f) => (
+            <div key={f.account} className="actions" style={{ marginTop: 6 }}>
+              {f.multiline ? (
+                <textarea
+                  style={{ flex: 1, minHeight: 80, fontFamily: "monospace", fontSize: 11 }}
+                  placeholder={f.label}
+                  value={values[f.account] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [f.account]: e.target.value }))}
+                />
+              ) : (
+                <input
+                  style={{ flex: 1 }}
+                  type="password"
+                  placeholder={f.label}
+                  value={values[f.account] ?? ""}
+                  onChange={(e) => setValues((v) => ({ ...v, [f.account]: e.target.value }))}
+                />
+              )}
+            </div>
+          ))}
+          <div className="actions" style={{ marginTop: 6 }}>
+            <button disabled={busy} onClick={() => void act(() => api.credentialSet(slot.id, values))}>
+              {busy ? "saving…" : "Save to Keychain"}
+            </button>
+            <button className="secondary" disabled={busy} onClick={() => { setEditing(false); setValues({}); setError(null); }}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="actions" style={{ marginTop: 8 }}>
+          <button className="secondary" disabled={busy} onClick={() => setEditing(true)}>
+            {slot.configured ? "Replace" : "Set up"}
+          </button>
+          {slot.configured &&
+            (confirmDelete ? (
+              <>
+                <span className="small">Remove this key from the Keychain?</span>
+                <button disabled={busy} onClick={() => void act(() => api.credentialDelete(slot.id))}>Yes, remove</button>
+                <button className="secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </>
+            ) : (
+              <button className="secondary" disabled={busy} onClick={() => setConfirmDelete(true)}>Remove</button>
+            ))}
+        </div>
+      )}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function TokenRow({ t, onChanged }: { t: CredentialsData["tokens"][number]; onChanged: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const kind = t.adapter === "plaid" ? "Plaid access token" : t.adapter === "enablebanking" ? "bank consent session" : "Coinbase API key";
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await api.connectionTokensDelete(t.institution_id);
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <tr>
+      <td>{t.name}<div className="small muted">{t.institution_id}</div></td>
+      <td className="small">{kind}</td>
+      <td>{t.set ? <span className="pill low">stored</span> : <span className="pill medium">missing — reconnect</span>}</td>
+      <td>
+        {t.set &&
+          (confirm ? (
+            <>
+              <span className="small">Disconnects until you reconnect. </span>
+              <button disabled={busy} onClick={() => void remove()}>Yes, remove</button>{" "}
+              <button className="secondary" onClick={() => setConfirm(false)}>Cancel</button>
+            </>
+          ) : (
+            <button className="secondary" disabled={busy} onClick={() => setConfirm(true)}>Remove</button>
+          ))}
+      </td>
+    </tr>
   );
 }
 
@@ -242,8 +398,8 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
       <div style={{ marginTop: 8 }}>
         {radio("managed", "I'll type the numbers in myself", "Best for property, cash, and anything without downloadable statements. You can update the values any time.")}
         {radio("files", "I'll upload files downloaded from the institution's website", "Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.")}
-        {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys set up once.")}
-        {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key set up once.")}
+        {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys — set them up once on the Credentials page.")}
+        {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key — set it up once on the Credentials page.")}
         {radio("coinbase", "Connect Coinbase (crypto holdings)", "Uses a view-only Coinbase API key you create — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
         {radio("wallet", "Watch a self-custody wallet (Ledger, Trezor, any address)", "Paste public addresses; balances are read from the blockchain. An address can never move funds. The addresses are disclosed to public chain-data services.")}
       </div>

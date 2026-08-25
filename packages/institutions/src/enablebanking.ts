@@ -125,7 +125,7 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
     const appId = secrets.get(ENABLEBANKING_SERVICE, "app_id");
     const key = secrets.get(ENABLEBANKING_SERVICE, "private_key");
     if (appId === null || key === null) {
-      throw new Error(`enablebanking ${opts.institution_id}: no Enable Banking credentials -- connect from the Institutions page (app_id/private_key in the ${ENABLEBANKING_SERVICE} Keychain items)`);
+      throw new Error(`enablebanking ${opts.institution_id}: no Enable Banking credentials -- add your Enable Banking keys on the Credentials page`);
     }
     const r = await doFetch(`${base}${path}`, { headers: { Authorization: `Bearer ${enableBankingJwt(appId, key, now)}` } });
     if (!r.ok) {

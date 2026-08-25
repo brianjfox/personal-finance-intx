@@ -204,6 +204,14 @@ export const api = {
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/coinbase", input),
   connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
+  credentials: () =>
+    get<{
+      slots: Array<{ id: string; label: string; note: string; configured: boolean; fields: Array<{ account: string; label: string; multiline: boolean; set: boolean }> }>;
+      tokens: Array<{ institution_id: string; name: string; adapter: string; set: boolean }>;
+    }>("/api/credentials"),
+  credentialSet: (id: string, values: Record<string, string>) => post<{ saved: boolean }>("/api/credentials/set", { id, values }),
+  credentialDelete: (id: string) => post<{ removed: boolean }>("/api/credentials/delete", { id }),
+  connectionTokensDelete: (institutionId: string) => post<{ removed: number }>("/api/credentials/tokens/delete", { institution_id: institutionId }),
   walletDetect: (value: string) =>
     get<{ ok: true; kind: string; chain: string; value: string; note?: string; label?: string } | { ok: false; reason: string }>(
       `/api/wallet/detect?value=${encodeURIComponent(value)}`,

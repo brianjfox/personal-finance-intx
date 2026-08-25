@@ -84,6 +84,13 @@ import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
 import { createConnectors, type ConnectorConfig } from "./connect";
+import {
+  credentialsStatus,
+  deleteConnectionTokens,
+  deleteCredential,
+  setCredential,
+  type CredentialsStatus,
+} from "./credentials";
 import { seedDemo } from "./demo";
 import { runBreakGlassExport, type BreakGlassResult } from "./export/break-glass";
 import { anthropicSourceFromEnv, createFinStepInvoker, createFsHost, type FsHost } from "./fs-host/index";
@@ -208,6 +215,14 @@ export interface App {
    * plain words rather than guessing.
    */
   connectWallet(opts: { name?: string; holdings: Array<{ value: string; label?: string; kind?: WalletHolding["kind"] }> }): Promise<{ institution_id: string; runId: string; status: string }>;
+  /** The Credentials page: which keys are set (presence only -- values never leave the host). */
+  credentialsStatus(): CredentialsStatus;
+  /** Store a global credential (Anthropic / Plaid / Enable Banking); validated before storing; Anthropic takes effect without a restart. */
+  setCredential(id: string, values: Record<string, string>): void;
+  /** Remove a stored global credential. */
+  deleteCredential(id: string): boolean;
+  /** Remove the per-connection tokens an institution owns (also happens on institution delete). */
+  deleteConnectionTokens(institutionId: string): number;
   /** Start (or resume) a nightly run. Resolves when the run is terminal. */
   runNightly(opts?: { runId?: string; institutions?: string[] }): Promise<RunResult>;
   /** Resume every non-terminal run on disk (startup). */
@@ -591,9 +606,27 @@ export function createApp(opts: AppOptions): App {
       return entry;
     },
     removeInstitution(institutionId) {
+      // A deleted connection's tokens are no longer needed: remove them
+      // from the Keychain too (the ledger history stays, as always).
+      const entry = loaded.entries.find((e) => e.institution_id === institutionId);
+      if (entry !== undefined) deleteConnectionTokens(secrets, entry);
       const removed = removeInstitutionEntry(dataDir, institutionId);
       if (removed) loaded = reloadRegistry();
       return removed;
+    },
+    credentialsStatus() {
+      return credentialsStatus(secrets, loaded.entries);
+    },
+    setCredential(id, values) {
+      setCredential(secrets, id, values);
+    },
+    deleteCredential(id) {
+      return deleteCredential(secrets, id);
+    },
+    deleteConnectionTokens(institutionId) {
+      const entry = loaded.entries.find((e) => e.institution_id === institutionId);
+      if (entry === undefined) throw new Error(`unknown institution ${institutionId}`);
+      return deleteConnectionTokens(secrets, entry);
     },
     setInstitutionEnabled(institutionId, enabled) {
       const changed = setEnabledInRegistry(dataDir, institutionId, enabled);

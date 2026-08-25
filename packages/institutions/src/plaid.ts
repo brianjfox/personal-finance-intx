@@ -154,7 +154,7 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
     const clientId = secrets.get(PLAID_SERVICE, "client_id");
     const secret = secrets.get(PLAID_SERVICE, "secret");
     if (clientId === null || secret === null) {
-      throw new Error(`plaid ${opts.institution_id}: no Plaid credentials -- connect from the Institutions page (client_id/secret in the ${PLAID_SERVICE} Keychain items)`);
+      throw new Error(`plaid ${opts.institution_id}: no Plaid credentials -- add your Plaid keys on the Credentials page`);
     }
     const r = await doFetch(`${base}${path}`, {
       method: "POST",
