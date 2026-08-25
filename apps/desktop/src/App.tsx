@@ -438,6 +438,7 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
       {data.slots.map((s) => (
         <CredentialCard key={s.id} slot={s} onChanged={onChanged} />
       ))}
+      <InferenceCard tick={tick} />
       {data.tokens.length > 0 && (
         <>
           <h3>Connection tokens</h3>
@@ -456,6 +457,80 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
         </>
       )}
     </>
+  );
+}
+
+/** Which AI engine answers: Anthropic's cloud, or a local server (Apple MLX, LM Studio) so nothing leaves this Mac. */
+function InferenceCard({ tick }: { tick: number }) {
+  const [engine, setEngine] = useState<"anthropic" | "local">("anthropic");
+  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8080/v1");
+  const [model, setModel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.inference().then((s) => {
+      setEngine(s.engine);
+      if (s.base_url !== undefined) setBaseUrl(s.base_url);
+      if (s.model !== undefined) setModel(s.model);
+    }).catch(() => {});
+  }, [tick]);
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () =>
+    act(async () => {
+      await api.inferenceSave(engine === "local" ? { engine, base_url: baseUrl, model } : { engine });
+      setStatus("Saved. New chat turns use this engine immediately -- no restart.");
+    });
+  const test = () =>
+    act(async () => {
+      const r = await api.inferenceTest();
+      setStatus(r.ok ? `Working: ${r.detail}` : `Not working: ${r.detail}`);
+    });
+  return (
+    <div className="queue-item">
+      <div className="head">
+        <b>AI engine</b>
+        <span className="pill info">{engine === "local" ? "local — private" : "Anthropic cloud"}</span>
+      </div>
+      <div className="small muted">
+        Powers the Strategist and Estate Planner chats, proposals, and the profile intake. With a local engine, nothing
+        you discuss ever leaves this Mac — at the cost of a much less capable model.
+      </div>
+      <label style={{ display: "block", marginTop: 8 }}>
+        <input type="radio" checked={engine === "anthropic"} disabled={busy} onChange={() => setEngine("anthropic")} /> Anthropic cloud (Claude)
+        <div className="small muted" style={{ marginLeft: 20 }}>Uses the Anthropic API key above. The most capable option.</div>
+      </label>
+      <label style={{ display: "block", marginTop: 4 }}>
+        <input type="radio" checked={engine === "local"} disabled={busy} onChange={() => setEngine("local")} /> Local — Apple MLX or any OpenAI-compatible server
+        <div className="small muted" style={{ marginLeft: 20 }}>
+          e.g. <code>mlx_lm.server --model mlx-community/Qwen2.5-14B-Instruct-4bit</code> (address http://127.0.0.1:8080/v1), or LM
+          Studio's local server. Pick a tool-capable model; advisory quality will be well below Claude's.
+        </div>
+      </label>
+      {engine === "local" && (
+        <div className="actions" style={{ marginTop: 6 }}>
+          <input style={{ flex: 1 }} placeholder="Server address — http://127.0.0.1:8080/v1" value={baseUrl} disabled={busy} onChange={(e) => setBaseUrl(e.target.value)} />
+          <input style={{ width: 280 }} placeholder="Model name (as the server knows it)" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)} />
+        </div>
+      )}
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button disabled={busy} onClick={() => void save()}>{busy ? "…" : "Save"}</button>
+        <button className="secondary" disabled={busy} onClick={() => void test()}>Test</button>
+      </div>
+      {status !== null && <div className="banner" style={{ marginTop: 8 }}>{status}</div>}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
   );
 }
 

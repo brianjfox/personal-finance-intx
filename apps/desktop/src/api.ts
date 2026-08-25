@@ -239,6 +239,10 @@ export const api = {
       note?: string;
     }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
+  inference: () => get<{ engine: "anthropic" | "local"; base_url?: string; model?: string }>("/api/inference"),
+  inferenceSave: (input: { engine: "anthropic" | "local"; base_url?: string; model?: string }) =>
+    post<{ engine: string; base_url?: string; model?: string }>("/api/inference", input),
+  inferenceTest: () => post<{ ok: boolean; detail: string }>("/api/inference/test"),
   credentials: () =>
     get<{
       slots: Array<{ id: string; label: string; note: string; configured: boolean; fields: Array<{ account: string; label: string; multiline: boolean; set: boolean }> }>;
