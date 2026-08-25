@@ -900,14 +900,49 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
   );
 }
 
+type PositionSortKey = "symbol" | "qty" | "price" | "value";
+
+/** Sort by a clicked header: numbers descending first, symbols ascending first; missing values last. */
+function sortPositions<T extends { symbol: string; quantity: string; price: string | null; market_value: string | null }>(
+  rows: T[],
+  sort: { key: PositionSortKey; dir: 1 | -1 } | null,
+): T[] {
+  if (sort === null) return rows;
+  const num = (v: string | null): number => (v === null ? Number.NEGATIVE_INFINITY : Number(v));
+  const out = [...rows].sort((a, b) => {
+    switch (sort.key) {
+      case "symbol": return sort.dir * a.symbol.localeCompare(b.symbol);
+      case "qty": return sort.dir * (num(a.quantity) - num(b.quantity));
+      case "price": return sort.dir * (num(a.price) - num(b.price));
+      case "value": return sort.dir * (num(a.market_value) - num(b.market_value));
+    }
+  });
+  return out;
+}
+
 function Positions({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [rows, setRows] = useState<Position[]>([]);
   const [bundled, setBundled] = useState<import("./api").ConsolidatedPosition[]>([]);
   const [consolidated, setConsolidated] = useState(false);
+  const [sort, setSort] = useState<{ key: PositionSortKey; dir: 1 | -1 } | null>(null);
   useEffect(() => {
     api.positions().then(setRows).catch(() => setRows([]));
     api.positionsConsolidated().then(setBundled).catch(() => setBundled([]));
   }, [tick]);
+  const clickSort = (key: PositionSortKey) =>
+    setSort((s) => {
+      if (s === null || s.key !== key) {
+        // First click: symbols A->Z, numbers largest-first.
+        return { key, dir: key === "symbol" ? 1 : -1 };
+      }
+      return { key, dir: s.dir === 1 ? -1 : 1 };
+    });
+  const Th = ({ k, label, num }: { k: PositionSortKey; label: string; num?: boolean }) => (
+    <th className={`sortable${num === true ? " num" : ""}`} onClick={() => clickSort(k)}>
+      {label}
+      {sort?.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+    </th>
+  );
   return (
     <>
       <h2>Positions</h2>
@@ -918,9 +953,9 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
       </p>
       {!consolidated && (
         <table>
-          <thead><tr><th>Account</th><th>Symbol</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Market value</th><th className="num">Cost basis</th><th>Observed</th></tr></thead>
+          <thead><tr><th>Account</th><Th k="symbol" label="Symbol" /><Th k="qty" label="Qty" num /><Th k="price" label="Price" num /><Th k="value" label="Market value" num /><th className="num">Cost basis</th><th>Observed</th></tr></thead>
           <tbody>
-            {rows.map((p) => (
+            {sortPositions(rows, sort).map((p) => (
               <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
                 <td className="small">{p.account_id}</td>
                 <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
@@ -936,9 +971,9 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
       )}
       {consolidated && (
         <table>
-          <thead><tr><th>Asset</th><th>Held in</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Market value</th><th className="num">Cost basis</th><th>Observed</th></tr></thead>
+          <thead><tr><Th k="symbol" label="Asset" /><th>Held in</th><Th k="qty" label="Qty" num /><Th k="price" label="Price" num /><Th k="value" label="Market value" num /><th className="num">Cost basis</th><th>Observed</th></tr></thead>
           <tbody>
-            {bundled.map((p) => (
+            {sortPositions(bundled, sort).map((p) => (
               <tr key={`${p.symbol}|${p.currency}`} className={p.provisional ? "prov" : ""}>
                 <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
                 <td className="small" title={p.account_ids.join("\n")}>{p.accounts} account{p.accounts === 1 ? "" : "s"}</td>

@@ -64,3 +64,7 @@ button:disabled { opacity: .5; cursor: default; }
 .welcome p { margin: 14px 0; }
 .welcome-actions { display: flex; flex-direction: column; gap: 12px; align-items: center; margin: 22px 0; }
 .welcome-actions button { font-size: 15px; padding: 12px 20px; min-width: 380px; }
+
+/* Sortable table headers (Positions). */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--accent); }
