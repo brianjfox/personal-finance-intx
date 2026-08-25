@@ -50,7 +50,8 @@ const RemoveAccountBody = type({ account_id: "string > 0" });
 const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "string > 0", "link_token?": "string > 0", "public_token?": "string > 0" });
 const EbStartBody = type({ "name?": "string > 0", "institution_id?": "string > 0", country: /^[A-Z]{2}$/, bank: "string > 0", "redirect_url?": "string > 0" });
 const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
-const OpenBody = type({ url: /^https:\/\/[^\s]+$/ });
+// https anywhere; plain http only back to this host's own loopback (document links).
+const OpenBody = type({ url: /^(https:\/\/[^\s]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/[^\s]*)$/ });
 const CoinbaseBody = type({
   "name?": "string > 0",
   "institution_id?": "string > 0",

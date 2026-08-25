@@ -1010,6 +1010,31 @@ function UploadBox({ inst, disabled, onDone }: { inst: InstitutionOverview; disa
   );
 }
 
+/**
+ * A link to a document served by the host. Inside the Tauri webview a
+ * target=_blank anchor is a blocked new-window request (GH issue #1), so
+ * the host opens the default browser instead; the href stays real for
+ * copy-link and for plain-browser use.
+ */
+function DocumentLink({ path, children }: { path: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={path}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => {
+        e.preventDefault();
+        void api.openExternal(new URL(path, window.location.origin).toString()).catch(() => {
+          // Host refused or unreachable: fall back to the anchor's default.
+          window.open(path, "_blank");
+        });
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 function FactLink({ id, children, openFact }: { id: string; children: React.ReactNode; openFact: (id: string) => void }) {
   return (
     <span className="fact" title={`fact ${id}`} onClick={() => openFact(id)}>
@@ -1404,7 +1429,7 @@ function FactDrawer({ id, onClose, openFact }: { id: string; onClose: () => void
         <p className="muted small">none recorded{fact.source_doc_id ? ` (${fact.source_doc_id})` : ""}</p>
       ) : (
         <dl className="kv">
-          <dt>file</dt><dd><a href={`/api/document/${document.id}/bytes`} target="_blank" rel="noreferrer">{document.filename}</a></dd>
+          <dt>file</dt><dd><DocumentLink path={`/api/document/${document.id}/bytes`}>{document.filename}</DocumentLink></dd>
           <dt>sha256</dt><dd className="small">{document.sha256}</dd>
           <dt>kind / mime</dt><dd>{document.kind} / {document.mime}{document.pages !== null ? ` · ${document.pages} pages` : ""}{fact.page ? ` · page ${fact.page}` : ""}</dd>
           <dt>ingested</dt><dd>{when(document.ingested_at)} by {document.ingested_by}</dd>
@@ -1809,7 +1834,7 @@ function Documents({ tick }: { tick: number }) {
         <tbody>
           {docs.map((d) => (
             <tr key={d.id}>
-              <td><a href={`/api/document/${d.id}/bytes`} target="_blank" rel="noreferrer">{d.filename}</a></td>
+              <td><DocumentLink path={`/api/document/${d.id}/bytes`}>{d.filename}</DocumentLink></td>
               <td>{d.kind}</td>
               <td className="small">{d.source_id}</td>
               <td className="num">{d.bytes}</td>
