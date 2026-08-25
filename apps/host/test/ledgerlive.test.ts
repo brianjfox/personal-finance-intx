@@ -81,3 +81,19 @@ describe("ledger live import", () => {
     expect(r.error).toMatch(/JSON|Unexpected/); // the true parse error is named
   }, 10_000);
 });
+
+describe("permission refusals", () => {
+  test("an unreadable file is reported as macOS's doing, machine-readably", async () => {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fin-ll-")), "app.json");
+    fs.writeFileSync(f, "{}");
+    fs.chmodSync(f, 0o000);
+    try {
+      const r = await readLedgerLiveAccounts(f);
+      expect(r.permission_denied).toBe(true);
+      expect(r.error).toMatch(/macOS refused/);
+      expect(r.accounts).toHaveLength(0);
+    } finally {
+      fs.chmodSync(f, 0o600);
+    }
+  }, 15_000);
+});

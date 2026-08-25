@@ -605,7 +605,26 @@ function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }
       {data === "loading" && <span className="muted small">reading the Ledger app's account list…</span>}
       {data !== null && data !== "loading" && (
         <>
-          {data.error !== undefined && <div className="banner">{data.error}</div>}
+          {data.permission_denied === true ? (
+            <div className="banner">
+              <b>macOS is protecting other apps' data</b> — it refused to let this app read your Ledger accounts, and it
+              doesn't always show an Allow dialog for helper processes. One-time fix:
+              <ol className="small" style={{ margin: "6px 0 6px 18px" }}>
+                <li>Open the privacy settings (button below — lands on Full Disk Access).</li>
+                <li>Click <b>+</b>, add <b>Financial Interchange</b> from Applications, and switch it on.</li>
+                <li>Come back and hit Try again (if it still refuses, quit and reopen this app once).</li>
+              </ol>
+              <div className="actions">
+                <button onClick={() => void api.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")}>
+                  Open macOS privacy settings
+                </button>
+                <button className="secondary" onClick={() => void load()}>Try again</button>
+              </div>
+              <div className="small muted" style={{ marginTop: 4 }}>Or skip all of this and paste the addresses above.</div>
+            </div>
+          ) : (
+            data.error !== undefined && <div className="banner">{data.error}</div>
+          )}
           {data.accounts.length > 0 && (
             <>
               <div className="small muted" style={{ marginBottom: 4 }}>

@@ -217,6 +217,7 @@ export const api = {
       found: boolean;
       accounts: Array<{ id: string; name: string; chain: string; balance: string | null; supported: boolean; reason?: string; holding?: { kind: string; value: string; label?: string } }>;
       error?: string;
+      permission_denied?: boolean;
     }>("/api/ledgerlive/accounts"),
   walletDetect: (value: string) =>
     get<{ ok: true; kind: string; chain: string; value: string; note?: string; label?: string } | { ok: false; reason: string }>(

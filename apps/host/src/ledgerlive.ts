@@ -63,6 +63,8 @@ export interface LedgerLiveImport {
   accounts: LedgerLiveAccountRow[];
   /** A found-but-unreadable file, in plain words (e.g. password-locked). */
   error?: string;
+  /** True when macOS refused the read (TCC): the GUI walks the operator through the grant. */
+  permission_denied?: boolean;
 }
 
 export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Promise<LedgerLiveImport> {
@@ -97,11 +99,21 @@ export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Pr
   if (parsed === null) {
     const detail = lastError instanceof Error ? lastError.message : String(lastError);
     const code = (lastError as { code?: string } | null)?.code;
-    const error =
-      code === "EPERM" || code === "EACCES"
-        ? `macOS refused to let this app read the Ledger app's data (${detail}). Grant Financial Interchange file access in System Settings → Privacy & Security, or paste the addresses instead.`
-        : `the Ledger app's data file wouldn't read cleanly after several tries (${detail}). If Ledger Wallet is mid-sync, let it finish and retry -- or paste the addresses instead.`;
-    return { found: true, file, accounts: [], error };
+    if (code === "EPERM" || code === "EACCES") {
+      return {
+        found: true,
+        file,
+        accounts: [],
+        permission_denied: true,
+        error: `macOS refused to let this app read the Ledger app's data (${detail}).`,
+      };
+    }
+    return {
+      found: true,
+      file,
+      accounts: [],
+      error: `the Ledger app's data file wouldn't read cleanly after several tries (${detail}). If Ledger Wallet is mid-sync, let it finish and retry -- or paste the addresses instead.`,
+    };
   }
   const data = parsed.data;
   if (typeof data === "string") {
