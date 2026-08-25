@@ -149,6 +149,88 @@ export function positions(ledger: Ledger, opts: AsOfOpts & { subject?: string } 
     });
 }
 
+export interface ConsolidatedPositionView {
+  symbol: string;
+  name: string | null;
+  asset_class: PositionView["asset_class"];
+  currency: string;
+  /** How many accounts hold this asset. */
+  accounts: number;
+  account_ids: string[];
+  quantity: string;
+  /** The most recently observed price across the accounts, if any. */
+  price: string | null;
+  /** Sum of the stated market values; null when no account states one. */
+  market_value: string | null;
+  /** Sum of the KNOWN bases only; see basis_complete. */
+  cost_basis: string | null;
+  /** False when any account's basis is unknown (the sum understates). */
+  basis_complete: boolean;
+  fact_ids: string[];
+  /** Newest observation among the bundled facts. */
+  observed_at: string;
+  provisional: boolean;
+}
+
+/**
+ * The Positions pane's "consolidated view": all holdings of one
+ * instrument bundled into a single row across accounts -- one row for
+ * ETH, one per stock. Sums are decimal-exact; a partially-unknown cost
+ * basis is flagged rather than silently understated. Grouped by
+ * (symbol, currency) so a same-symbol holding in another currency never
+ * folds into the wrong total.
+ */
+export function consolidatedPositions(ledger: Ledger, opts: AsOfOpts = {}): ConsolidatedPositionView[] {
+  const groups = new Map<string, ConsolidatedPositionView>();
+  for (const p of positions(ledger, opts)) {
+    const key = `${p.symbol}|${p.currency}`;
+    const g = groups.get(key);
+    if (g === undefined) {
+      groups.set(key, {
+        symbol: p.symbol,
+        name: p.name,
+        asset_class: p.asset_class,
+        currency: p.currency,
+        accounts: 1,
+        account_ids: [p.account_id],
+        quantity: p.quantity,
+        price: p.price,
+        market_value: p.market_value,
+        cost_basis: p.basis_known ? p.cost_basis : null,
+        basis_complete: p.basis_known,
+        fact_ids: [p.fact_id],
+        observed_at: p.observed_at,
+        provisional: p.provisional,
+      });
+      continue;
+    }
+    g.accounts += 1;
+    if (!g.account_ids.includes(p.account_id)) g.account_ids.push(p.account_id);
+    g.quantity = decimal.add(g.quantity, p.quantity);
+    g.name = g.name ?? p.name;
+    if (p.observed_at > g.observed_at) {
+      g.observed_at = p.observed_at;
+      if (p.price !== null) g.price = p.price;
+    } else if (g.price === null && p.price !== null) {
+      g.price = p.price;
+    }
+    if (p.market_value !== null) g.market_value = g.market_value === null ? p.market_value : decimal.add(g.market_value, p.market_value);
+    if (p.basis_known && p.cost_basis !== null) {
+      g.cost_basis = g.cost_basis === null ? p.cost_basis : decimal.add(g.cost_basis, p.cost_basis);
+    }
+    g.basis_complete = g.basis_complete && p.basis_known;
+    g.fact_ids.push(p.fact_id);
+    g.provisional = g.provisional || p.provisional;
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, accounts: g.account_ids.length }))
+    .sort((a, b) => {
+      const av = a.market_value !== null ? Number(a.market_value) : -1;
+      const bv = b.market_value !== null ? Number(b.market_value) : -1;
+      return bv - av || a.symbol.localeCompare(b.symbol);
+    });
+}
+
 /**
  * Net worth = assets - liabilities over current accounts. An account's
  * value is its `total` balance when stated; otherwise the sum of its

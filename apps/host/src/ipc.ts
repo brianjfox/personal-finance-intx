@@ -93,7 +93,9 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/net-worth") return json(views.netWorth(app.ledger, asOf));
         if (p === "/api/accounts") return json(views.accounts(app.ledger, asOf));
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
-        if (p === "/api/positions") return json(views.positions(app.ledger, asOf));
+        if (p === "/api/positions") {
+          return json(q.get("consolidated") === "1" ? views.consolidatedPositions(app.ledger, asOf) : views.positions(app.ledger, asOf));
+        }
         if (p === "/api/transactions") {
           const subject = q.get("subject");
           return json(views.transactions(app.ledger, { ...asOf, ...(subject ? { subject } : {}) }));

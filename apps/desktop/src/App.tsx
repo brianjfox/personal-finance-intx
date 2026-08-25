@@ -902,28 +902,72 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
 
 function Positions({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [rows, setRows] = useState<Position[]>([]);
+  const [bundled, setBundled] = useState<import("./api").ConsolidatedPosition[]>([]);
+  const [consolidated, setConsolidated] = useState(false);
   useEffect(() => {
     api.positions().then(setRows).catch(() => setRows([]));
+    api.positionsConsolidated().then(setBundled).catch(() => setBundled([]));
   }, [tick]);
   return (
     <>
       <h2>Positions</h2>
-      <table>
-        <thead><tr><th>Account</th><th>Symbol</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Market value</th><th className="num">Cost basis</th><th>Observed</th></tr></thead>
-        <tbody>
-          {rows.map((p) => (
-            <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
-              <td className="small">{p.account_id}</td>
-              <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
-              <td className="num">{p.quantity}</td>
-              <td className="num">{money(p.price, p.currency)}</td>
-              <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
-              <td className="num">{p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}</td>
-              <td className="small">{when(p.observed_at)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <p>
+        <button className={consolidated ? "secondary" : ""} onClick={() => setConsolidated(false)}>By account</button>{" "}
+        <button className={consolidated ? "" : "secondary"} onClick={() => setConsolidated(true)}>Consolidated</button>
+        {consolidated && <span className="small muted"> all holdings of one asset bundled into a single row, across accounts</span>}
+      </p>
+      {!consolidated && (
+        <table>
+          <thead><tr><th>Account</th><th>Symbol</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Market value</th><th className="num">Cost basis</th><th>Observed</th></tr></thead>
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
+                <td className="small">{p.account_id}</td>
+                <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
+                <td className="num">{p.quantity}</td>
+                <td className="num">{money(p.price, p.currency)}</td>
+                <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
+                <td className="num">{p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}</td>
+                <td className="small">{when(p.observed_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {consolidated && (
+        <table>
+          <thead><tr><th>Asset</th><th>Held in</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Market value</th><th className="num">Cost basis</th><th>Observed</th></tr></thead>
+          <tbody>
+            {bundled.map((p) => (
+              <tr key={`${p.symbol}|${p.currency}`} className={p.provisional ? "prov" : ""}>
+                <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
+                <td className="small" title={p.account_ids.join("\n")}>{p.accounts} account{p.accounts === 1 ? "" : "s"}</td>
+                <td className="num">{p.quantity}</td>
+                <td className="num">{money(p.price, p.currency)}</td>
+                <td className="num">
+                  {p.fact_ids.length > 0 ? (
+                    <FactLink id={p.fact_ids[0] as string} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink>
+                  ) : (
+                    money(p.market_value, p.currency)
+                  )}
+                  {p.fact_ids.length > 1 && <span className="small muted"> (+{p.fact_ids.length - 1} facts)</span>}
+                </td>
+                <td className="num">
+                  {p.cost_basis === null ? (
+                    <span className="pill medium">unknown</span>
+                  ) : (
+                    <>
+                      {money(p.cost_basis, p.currency)}
+                      {!p.basis_complete && <span className="pill medium" title="some accounts don't state a basis; the sum understates"> partial</span>}
+                    </>
+                  )}
+                </td>
+                <td className="small">{when(p.observed_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </>
   );
 }

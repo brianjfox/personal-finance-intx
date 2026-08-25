@@ -91,6 +91,13 @@ export interface InstructionRow {
   issued_at: string; expires: string; status: string; current_status: string;
 }
 
+export interface ConsolidatedPosition {
+  symbol: string; name: string | null; asset_class: string; currency: string;
+  accounts: number; account_ids: string[]; quantity: string; price: string | null;
+  market_value: string | null; cost_basis: string | null; basis_complete: boolean;
+  fact_ids: string[]; observed_at: string; provisional: boolean;
+}
+
 export interface InstitutionAccountRow {
   account_id: string; name: string; type: string; currency: string;
   value: string | null; observed_at: string | null; closed: boolean;
@@ -138,6 +145,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export const api = {
   netWorth: () => get<NetWorth>("/api/net-worth"),
   positions: () => get<Position[]>("/api/positions"),
+  positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),
   findings: () => get<Finding[]>("/api/findings"),
   fact: (id: string) => get<{ fact: Fact; history: Fact[]; document: Doc | null }>(`/api/fact/${id}`),

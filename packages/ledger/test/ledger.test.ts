@@ -309,3 +309,75 @@ describe("release of a held subject", () => {
     expect(l.factCount()).toBe(6);
   });
 });
+
+describe("consolidated positions view", () => {
+  const pos = (account: string, symbol: string, over: Record<string, unknown> = {}, observed = T0): FactInput => ({
+    kind: "position",
+    subject: account,
+    key: symbol,
+    payload: {
+      account_id: account,
+      instrument: { symbol, asset_class: "etf" },
+      quantity: "10",
+      price: "100",
+      market_value: "1000",
+      currency: "USD",
+      cost_basis: "800",
+      basis_known: true,
+      ...over,
+    },
+    observed_at: observed,
+    effective_at: observed,
+    source_id: "inst.demo",
+    source_doc_id: null,
+    supersedes: null,
+    writer: "assets_manager",
+    provisional: false,
+  });
+
+  test("like assets bundle into one row: exact sums, newest price, partial basis flagged", () => {
+    const l = openLedger(":memory:");
+    l.commit({
+      batchId: "c1",
+      writer: "assets_manager",
+      facts: [
+        // ETH in two places -- a broker and a wallet -- plus one stock.
+        pos("acct.a.broker", "ETH", { quantity: "1.5", price: "2000", market_value: "3000", cost_basis: "2500" }, T0),
+        pos("acct.b.wallet", "ETH", { quantity: "0.25", price: "2100", market_value: "525", cost_basis: null, basis_known: false }, T1),
+        pos("acct.a.broker", "AAPL", { quantity: "50", price: "230", market_value: "11500", cost_basis: "9000" }, T0),
+      ],
+    });
+    const rows = views.consolidatedPositions(l);
+    expect(rows.map((r) => r.symbol)).toEqual(["AAPL", "ETH"]); // sorted by market value
+    const eth = rows.find((r) => r.symbol === "ETH")!;
+    expect(eth.quantity).toBe("1.75");
+    expect(eth.market_value).toBe("3525");
+    expect(eth.accounts).toBe(2);
+    expect(eth.account_ids.sort()).toEqual(["acct.a.broker", "acct.b.wallet"]);
+    expect(eth.price).toBe("2100"); // the newest observation's price
+    expect(eth.observed_at).toBe(T1);
+    // One account's basis is unknown: the sum holds only the known part and says so.
+    expect(eth.cost_basis).toBe("2500");
+    expect(eth.basis_complete).toBe(false);
+    expect(eth.fact_ids).toHaveLength(2);
+    const aapl = rows.find((r) => r.symbol === "AAPL")!;
+    expect(aapl).toMatchObject({ accounts: 1, quantity: "50", cost_basis: "9000", basis_complete: true });
+    l.close();
+  });
+
+  test("same symbol in different currencies stays separate", () => {
+    const l = openLedger(":memory:");
+    l.commit({
+      batchId: "c2",
+      writer: "assets_manager",
+      facts: [
+        pos("acct.a.broker", "VUSA", { currency: "USD" }),
+        pos("acct.b.broker", "VUSA", { currency: "EUR" }),
+      ],
+    });
+    const rows = views.consolidatedPositions(l);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.currency).sort()).toEqual(["EUR", "USD"]);
+    l.close();
+  });
+});
