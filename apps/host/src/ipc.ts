@@ -196,7 +196,7 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         }
         if (p === "/api/ledgerlive/accounts") {
           const file = q.get("file");
-          return json(app.ledgerLiveAccounts(file ?? undefined));
+          return json(await app.ledgerLiveAccounts(file ?? undefined));
         }
         if (p === "/api/wallet/detect") {
           return json(detectWalletHolding(q.get("value") ?? ""));

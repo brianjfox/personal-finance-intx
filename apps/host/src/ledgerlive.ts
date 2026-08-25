@@ -1,4 +1,5 @@
-// Import the account list from Ledger Live's own local data. A Ledger
+// Import the account list from the Ledger app's own local data
+// (branded Ledger Wallet these days, Ledger Live before). A Ledger
 // device stores no account list -- it derives keys on demand; the list
 // the operator sees lives in Ledger Live's app.json on this machine.
 // Reading it is local-only (nothing is sent anywhere) and yields exactly
@@ -13,8 +14,18 @@ import path from "node:path";
 
 import { detectWalletHolding, scaleDown, type WalletKind } from "@fin/institutions";
 
+/**
+ * The Ledger app rebranded (Ledger Live -> Ledger Wallet) but, at least
+ * through the current build, keeps its data in the old folder. Check
+ * both, preferring whichever actually holds an app.json.
+ */
 export function defaultLedgerLivePath(): string {
-  return path.join(os.homedir(), "Library", "Application Support", "Ledger Live", "app.json");
+  const base = path.join(os.homedir(), "Library", "Application Support");
+  for (const dir of ["Ledger Wallet", "Ledger Live"]) {
+    const f = path.join(base, dir, "app.json");
+    if (fs.existsSync(f)) return f;
+  }
+  return path.join(base, "Ledger Live", "app.json");
 }
 
 /** Display decimals/symbols for the balances Ledger Live caches (recognition only). */
@@ -54,19 +65,32 @@ export interface LedgerLiveImport {
   error?: string;
 }
 
-export function readLedgerLiveAccounts(file = defaultLedgerLivePath()): LedgerLiveImport {
+export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Promise<LedgerLiveImport> {
   if (!fs.existsSync(file)) {
-    return { found: false, file, accounts: [], error: "Ledger Live doesn't appear to be installed on this Mac (no app.json)" };
+    return { found: false, file, accounts: [], error: "the Ledger app (Ledger Wallet / Ledger Live) doesn't appear to be installed on this Mac" };
   }
-  let parsed: { data?: unknown };
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { data?: unknown };
-  } catch {
-    return { found: true, file, accounts: [], error: "Ledger Live's data file doesn't parse -- try opening Ledger Live once, then retry" };
+  // The Ledger app rewrites app.json frequently and not atomically, so a
+  // single read can catch it mid-write. Retry briefly before giving up.
+  let parsed: { data?: unknown } | null = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { data?: unknown };
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  if (parsed === null) {
+    return {
+      found: true,
+      file,
+      accounts: [],
+      error: "the Ledger app's data file wouldn't read cleanly (it may have been mid-save) -- let Ledger Wallet finish syncing, or quit it, then retry",
+    };
   }
   const data = parsed.data;
   if (typeof data === "string") {
-    return { found: true, file, accounts: [], error: "Ledger Live is password-locked, so its account list is encrypted -- paste the addresses instead" };
+    return { found: true, file, accounts: [], error: "the Ledger app is password-locked, so its account list is encrypted -- paste the addresses instead" };
   }
   const rawAccounts = (data as { accounts?: Array<{ data?: Record<string, unknown> }> } | undefined)?.accounts ?? [];
   const seen = new Set<string>();

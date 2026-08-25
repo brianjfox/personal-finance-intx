@@ -216,8 +216,8 @@ export interface App {
    * plain words rather than guessing.
    */
   connectWallet(opts: { name?: string; holdings: Array<{ value: string; label?: string; kind?: WalletHolding["kind"] }> }): Promise<{ institution_id: string; runId: string; status: string }>;
-  /** The account list Ledger Live keeps on this machine (local read only; nothing is sent anywhere). */
-  ledgerLiveAccounts(file?: string): LedgerLiveImport;
+  /** The account list the Ledger app (Ledger Wallet / Ledger Live) keeps on this machine (local read only; nothing is sent anywhere). */
+  ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** The Credentials page: which keys are set (presence only -- values never leave the host). */
   credentialsStatus(): CredentialsStatus;
   /** Store a global credential (Anthropic / Plaid / Enable Banking); validated before storing; Anthropic takes effect without a restart. */
@@ -617,9 +617,7 @@ export function createApp(opts: AppOptions): App {
       if (removed) loaded = reloadRegistry();
       return removed;
     },
-    ledgerLiveAccounts(file) {
-      return readLedgerLiveAccounts(file);
-    },
+    ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
     credentialsStatus() {
       return credentialsStatus(secrets, loaded.entries);
     },

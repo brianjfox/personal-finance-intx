@@ -599,18 +599,18 @@ function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }
     <div style={{ marginTop: 10 }}>
       {data === null && (
         <button className="secondary" onClick={() => void load()}>
-          Import from Ledger Live on this Mac
+          Import from Ledger Wallet (Ledger Live) on this Mac
         </button>
       )}
-      {data === "loading" && <span className="muted small">reading Ledger Live's account list…</span>}
+      {data === "loading" && <span className="muted small">reading the Ledger app's account list…</span>}
       {data !== null && data !== "loading" && (
         <>
           {data.error !== undefined && <div className="banner">{data.error}</div>}
           {data.accounts.length > 0 && (
             <>
               <div className="small muted" style={{ marginBottom: 4 }}>
-                Found in Ledger Live (read locally — nothing is sent anywhere). Balances shown are Ledger Live's last
-                sync; once watched, balances come live from the blockchain.
+                Found in your Ledger app (read locally — nothing is sent anywhere). Balances shown are its last sync;
+                once watched, balances come live from the blockchain.
               </div>
               {data.accounts.map((a) => (
                 <label key={a.id} style={{ display: "block", marginBottom: 4, opacity: a.supported ? 1 : 0.6 }}>

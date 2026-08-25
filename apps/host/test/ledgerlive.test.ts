@@ -20,7 +20,7 @@ const ETH = "0x1dBAD5E4a7e29D122a9Ec7a3728688b1C953fe28";
 const SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
 describe("ledger live import", () => {
-  test("accounts come back with chain, address, name, and a readable cached balance", () => {
+  test("accounts come back with chain, address, name, and a readable cached balance", async () => {
     const file = write({
       data: {
         accounts: [
@@ -33,7 +33,7 @@ describe("ledger live import", () => {
         ],
       },
     });
-    const r = readLedgerLiveAccounts(file);
+    const r = await readLedgerLiveAccounts(file);
     expect(r.found).toBe(true);
     expect(r.error).toBeUndefined();
     expect(r.accounts).toHaveLength(3); // duplicate collapsed
@@ -48,16 +48,35 @@ describe("ledger live import", () => {
     expect(doge.balance).toBe("2500 DOGE");
   });
 
-  test("a password-locked Ledger Live is explained, not crashed on", () => {
-    const r = readLedgerLiveAccounts(write({ data: "AES256-encrypted-blob-here" }));
+  test("a password-locked Ledger app is explained, not crashed on", async () => {
+    const r = await readLedgerLiveAccounts(write({ data: "AES256-encrypted-blob-here" }));
     expect(r.found).toBe(true);
     expect(r.accounts).toHaveLength(0);
     expect(r.error).toMatch(/password-locked/);
   });
 
-  test("no Ledger Live at all says so", () => {
-    const r = readLedgerLiveAccounts(path.join(os.tmpdir(), "definitely-missing", "app.json"));
+  test("no Ledger app at all says so", async () => {
+    const r = await readLedgerLiveAccounts(path.join(os.tmpdir(), "definitely-missing", "app.json"));
     expect(r.found).toBe(false);
     expect(r.error).toMatch(/doesn't appear to be installed/);
   });
+
+  test("a torn read (the app saving mid-import) is retried, not failed", async () => {
+    // Start with truncated JSON -- what a non-atomic write looks like
+    // mid-save -- and complete the file shortly after.
+    const file = write({ data: { accounts: [] } });
+    const good = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, good.slice(0, 20));
+    setTimeout(() => fs.writeFileSync(file, good), 300);
+    const r = await readLedgerLiveAccounts(file);
+    expect(r.error).toBeUndefined();
+    expect(r.found).toBe(true);
+  });
+
+  test("a file that never parses gives the mid-save explanation", async () => {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fin-ll-")), "app.json");
+    fs.writeFileSync(f, "{never valid");
+    const r = await readLedgerLiveAccounts(f);
+    expect(r.error).toMatch(/mid-save|wouldn't read cleanly/);
+  }, 10_000);
 });
