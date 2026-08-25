@@ -1043,12 +1043,38 @@ function FactLink({ id, children, openFact }: { id: string; children: React.Reac
   );
 }
 
+type AccountSortKey = "account" | "type" | "value" | "observed";
+
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [nw, setNw] = useState<NetWorth | null>(null);
+  const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
   useEffect(() => {
     api.netWorth().then(setNw).catch(() => setNw(null));
   }, [tick]);
   if (nw === null) return <p className="muted">No ledger yet. Run a nightly.</p>;
+  const clickSort = (key: AccountSortKey) =>
+    setSort((s) => {
+      // First click: names/types A->Z, value largest-first, observed newest-first.
+      if (s === null || s.key !== key) return { key, dir: key === "account" || key === "type" ? 1 : -1 };
+      return { key, dir: s.dir === 1 ? -1 : 1 };
+    });
+  const Th = ({ k, label, num }: { k: AccountSortKey; label: string; num?: boolean }) => (
+    <th className={`sortable${num === true ? " num" : ""}`} onClick={() => clickSort(k)}>
+      {label}
+      {sort?.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+    </th>
+  );
+  const lines =
+    sort === null
+      ? nw.lines
+      : [...nw.lines].sort((a, b) => {
+          switch (sort.key) {
+            case "account": return sort.dir * a.name.localeCompare(b.name);
+            case "type": return sort.dir * (a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+            case "value": return sort.dir * (Number(a.value) - Number(b.value));
+            case "observed": return sort.dir * (a.observed_at ?? "").localeCompare(b.observed_at ?? "");
+          }
+        });
   return (
     <>
       <h2>Net worth</h2>
@@ -1060,9 +1086,9 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
       </div>
       <h3>Accounts</h3>
       <table>
-        <thead><tr><th>Account</th><th>Type</th><th className="num">Value</th><th>Basis</th><th>Observed</th><th></th></tr></thead>
+        <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th>Basis</th><Th k="observed" label="Observed" /><th></th></tr></thead>
         <tbody>
-          {nw.lines.map((l) => (
+          {lines.map((l) => (
             <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
               <td>{l.name}<div className="small muted">{l.account_id}</div></td>
               <td>{l.type}</td>
