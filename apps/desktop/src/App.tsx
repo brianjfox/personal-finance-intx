@@ -557,6 +557,88 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
   );
 }
 
+/** The account list Ledger Live keeps on this Mac: tick the ones to watch. Local read only. */
+function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }) {
+  type LL = Awaited<ReturnType<typeof api.ledgerLiveAccounts>>;
+  const [data, setData] = useState<LL | null | "loading">(null);
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = async () => {
+    setData("loading");
+    setError(null);
+    try {
+      const r = await api.ledgerLiveAccounts();
+      setData(r);
+      // Pre-tick every supported account.
+      setChecked(Object.fromEntries(r.accounts.filter((a) => a.supported).map((a) => [a.id, true])));
+    } catch (e) {
+      setData(null);
+      setError(String(e));
+    }
+  };
+  const connect = async () => {
+    if (data === null || data === "loading") return;
+    const holdings = data.accounts.filter((a) => a.supported && checked[a.id] === true && a.holding !== undefined).map((a) => a.holding!);
+    if (holdings.length === 0) {
+      setError("Tick at least one account.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.connectWallet({ name: name.trim() === "" ? "Ledger" : name.trim(), holdings });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      {data === null && (
+        <button className="secondary" onClick={() => void load()}>
+          Import from Ledger Live on this Mac
+        </button>
+      )}
+      {data === "loading" && <span className="muted small">reading Ledger Live's account list…</span>}
+      {data !== null && data !== "loading" && (
+        <>
+          {data.error !== undefined && <div className="banner">{data.error}</div>}
+          {data.accounts.length > 0 && (
+            <>
+              <div className="small muted" style={{ marginBottom: 4 }}>
+                Found in Ledger Live (read locally — nothing is sent anywhere). Balances shown are Ledger Live's last
+                sync; once watched, balances come live from the blockchain.
+              </div>
+              {data.accounts.map((a) => (
+                <label key={a.id} style={{ display: "block", marginBottom: 4, opacity: a.supported ? 1 : 0.6 }}>
+                  <input
+                    type="checkbox"
+                    disabled={!a.supported || busy}
+                    checked={checked[a.id] === true}
+                    onChange={(e) => setChecked((c) => ({ ...c, [a.id]: e.target.checked }))}
+                  />{" "}
+                  <b>{a.name}</b> <span className="pill info">{a.chain}</span>{" "}
+                  {a.balance !== null && <span className="small muted">{a.balance}</span>}
+                  {!a.supported && a.reason !== undefined && <div className="small muted" style={{ marginLeft: 20 }}>{a.reason}</div>}
+                </label>
+              ))}
+              <div className="actions" style={{ marginTop: 6 }}>
+                <button disabled={busy} onClick={() => void connect()}>
+                  {busy ? "reading the blockchain…" : "Watch the ticked accounts"}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 /** Watch-only wallet: paste addresses; the chain is recognized from the address itself. */
 function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
   const [rows, setRows] = useState<Array<{ value: string; label: string; chain: string | null; note: string | null; problem: string | null }>>([
@@ -645,6 +727,7 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
         <button disabled={busy} onClick={() => void connect()}>{busy ? "reading the blockchain…" : "Watch this wallet"}</button>
       </div>
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <LedgerLiveImport name={name} onDone={onDone} />
     </div>
   );
 }

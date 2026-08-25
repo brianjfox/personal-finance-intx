@@ -212,6 +212,12 @@ export const api = {
   credentialSet: (id: string, values: Record<string, string>) => post<{ saved: boolean }>("/api/credentials/set", { id, values }),
   credentialDelete: (id: string) => post<{ removed: boolean }>("/api/credentials/delete", { id }),
   connectionTokensDelete: (institutionId: string) => post<{ removed: number }>("/api/credentials/tokens/delete", { institution_id: institutionId }),
+  ledgerLiveAccounts: () =>
+    get<{
+      found: boolean;
+      accounts: Array<{ id: string; name: string; chain: string; balance: string | null; supported: boolean; reason?: string; holding?: { kind: string; value: string; label?: string } }>;
+      error?: string;
+    }>("/api/ledgerlive/accounts"),
   walletDetect: (value: string) =>
     get<{ ok: true; kind: string; chain: string; value: string; note?: string; label?: string } | { ok: false; reason: string }>(
       `/api/wallet/detect?value=${encodeURIComponent(value)}`,
