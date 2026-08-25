@@ -20,6 +20,7 @@ import { views } from "@fin/ledger";
 import { defineTool, type BaseEnv } from "@intx/agent";
 
 import { finBundle, OBJECT_SCHEMA, type FinTool } from "./bundle";
+import { householdProfileTool } from "./profile";
 import type { FinAgentEnvExtras } from "./env";
 
 export const STRATEGIST_TOOL_NAMES = [
@@ -28,6 +29,7 @@ export const STRATEGIST_TOOL_NAMES = [
   "run_projection",
   "run_scenario",
   "journal_write",
+  "household_profile",
 ] as const;
 
 const aggregates: FinTool = {
@@ -170,5 +172,5 @@ export const strategistTools = defineTool<BaseEnv & FinAgentEnvExtras>({
   id: "fin/strategist",
   requires: ["fin"],
   definitions: STRATEGIST_TOOL_NAMES.map((name) => ({ name })),
-  factory: (env) => finBundle(env.fin, [aggregates, listSubjects, projection, scenario, journalWrite]),
+  factory: (env) => finBundle(env.fin, [aggregates, listSubjects, projection, scenario, journalWrite, householdProfileTool]),
 });

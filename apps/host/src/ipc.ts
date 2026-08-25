@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
-import { AccountType, ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
+import { AccountType, ChatAgent, HouseholdProfile, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
 import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
@@ -82,6 +82,7 @@ const WalletBody = type({
 const CredentialSetBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'", values: "Record<string, string>" });
 const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'" });
 const TokensDeleteBody = type({ institution_id: "string > 0" });
+const ProfileBody = HouseholdProfile.and(type({ "clear_ssn?": "boolean" }));
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -186,6 +187,13 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
               privateKey: body.private_key,
             }),
           );
+        }
+        if (p === "/api/profile" && req.method === "GET") return json(app.getProfile());
+        if (p === "/api/profile" && req.method === "POST") {
+          const body = ProfileBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          app.saveProfile(body);
+          return json(app.getProfile());
         }
         if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
         if (p === "/api/credentials/set" && req.method === "POST") {

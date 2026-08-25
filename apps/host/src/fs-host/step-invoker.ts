@@ -36,7 +36,7 @@ import { createWorkflowStepInvoker } from "@intx/workflow-host";
 
 export interface FinStepInvokerOptions {
   dataDir: string;
-  actx: Pick<ActionContext, "ledger" | "clock" | "taxProfile" | "estateFile" | "plan">;
+  actx: Pick<ActionContext, "ledger" | "clock" | "taxProfile" | "estateFile" | "plan" | "profile">;
   authorize: WorkflowAuthorizeFn;
   /** Resolve the live inference source; called per turn, throws loudly without a key. */
   source: () => InferenceSource;
@@ -71,6 +71,7 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
         clock: opts.actx.clock,
         taxProfile: () => opts.actx.taxProfile?.() ?? null,
         estateFile: () => opts.actx.estateFile?.() ?? null,
+        profile: () => opts.actx.profile?.() ?? null,
         plan: () => opts.actx.plan?.() ?? null,
         evidence: (e) => current.evidence.push(e),
         journal: (id) => current.journal.push(id),
