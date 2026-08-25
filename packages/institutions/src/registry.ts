@@ -168,6 +168,8 @@ export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: Sec
         ...(str("btc_api") !== undefined ? { btc_api: str("btc_api") as string } : {}),
         ...(str("btc_xpub_api") !== undefined ? { btc_xpub_api: str("btc_xpub_api") as string } : {}),
         ...(str("eth_rpc") !== undefined ? { eth_rpc: str("eth_rpc") as string } : {}),
+        ...(str("ltc_api") !== undefined ? { ltc_api: str("ltc_api") as string } : {}),
+        ...(str("sol_rpc") !== undefined ? { sol_rpc: str("sol_rpc") as string } : {}),
         ...(str("price_api") !== undefined ? { price_api: str("price_api") as string } : {}),
       });
     }

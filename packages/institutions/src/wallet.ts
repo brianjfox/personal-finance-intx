@@ -23,7 +23,7 @@ import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from
 export const WALLET_VIA = "adapter.wallet@1";
 
 export const WalletHolding = type({
-  kind: "'btc_address' | 'btc_xpub' | 'eth_address'",
+  kind: "'btc_address' | 'btc_xpub' | 'eth_address' | 'ltc_address' | 'sol_address'",
   value: "string > 0",
   "label?": "string",
 });
@@ -36,6 +36,8 @@ export interface WalletOptions {
   btc_api?: string;
   btc_xpub_api?: string;
   eth_rpc?: string;
+  ltc_api?: string;
+  sol_rpc?: string;
   price_api?: string;
   fetchImpl?: typeof fetch;
 }
@@ -44,6 +46,8 @@ export const WALLET_DEFAULTS = {
   btc_api: "https://mempool.space/api",
   btc_xpub_api: "https://blockchain.info",
   eth_rpc: "https://ethereum-rpc.publicnode.com",
+  ltc_api: "https://litecoinspace.org/api",
+  sol_rpc: "https://api.mainnet-beta.solana.com",
   price_api: "https://api.coinbase.com",
 } as const;
 
@@ -76,11 +80,26 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
       const raw: Record<string, unknown> = {};
       let sats = 0n;
       let wei = 0n;
+      let litoshis = 0n;
+      let lamports = 0n;
       for (const h of opts.holdings) {
-        if (h.kind === "btc_address") {
-          const a = await getJson<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number } }>(`${cfg.btc_api}/address/${encodeURIComponent(h.value)}`);
+        if (h.kind === "btc_address" || h.kind === "ltc_address") {
+          // mempool.space and litecoinspace.org run the same API.
+          const api = h.kind === "btc_address" ? cfg.btc_api : cfg.ltc_api;
+          const a = await getJson<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number } }>(`${api}/address/${encodeURIComponent(h.value)}`);
           raw[h.value] = a;
-          sats += BigInt(a.chain_stats.funded_txo_sum) - BigInt(a.chain_stats.spent_txo_sum);
+          const bal = BigInt(a.chain_stats.funded_txo_sum) - BigInt(a.chain_stats.spent_txo_sum);
+          if (h.kind === "btc_address") sats += bal;
+          else litoshis += bal;
+        } else if (h.kind === "sol_address") {
+          const a = await getJson<{ result?: { value?: number }; error?: { message?: string } }>(cfg.sol_rpc, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [h.value] }),
+          });
+          if (a.result?.value === undefined) throw new Error(`wallet ${opts.institution_id}: getBalance failed: ${a.error?.message ?? "no result"}`);
+          raw[h.value] = a;
+          lamports += BigInt(a.result.value);
         } else if (h.kind === "btc_xpub") {
           const a = await getJson<{ wallet: { final_balance: number } }>(`${cfg.btc_xpub_api}/multiaddr?active=${encodeURIComponent(h.value)}&n=0`);
           raw[h.value.slice(0, 20)] = a.wallet;
@@ -110,22 +129,18 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
       };
 
       const positions = [];
-      if (sats !== 0n) {
-        const qty = scaleDown(sats, 8);
-        const price = await spot("BTC-USD");
+      const holdingsOut: Array<[bigint, number, string, string]> = [
+        [sats, 8, "BTC", "Bitcoin"],
+        [wei, 18, "ETH", "Ethereum"],
+        [litoshis, 8, "LTC", "Litecoin"],
+        [lamports, 9, "SOL", "Solana"],
+      ];
+      for (const [units, decimals, symbol, name] of holdingsOut) {
+        if (units === 0n) continue;
+        const qty = scaleDown(units, decimals);
+        const price = await spot(`${symbol}-USD`);
         positions.push({
-          instrument: { symbol: "BTC", name: "Bitcoin", asset_class: "crypto" as const },
-          quantity: qty,
-          price,
-          market_value: price !== null ? decimal.round(decimal.mul(qty, price), 2) : null,
-          cost_basis: null,
-        });
-      }
-      if (wei !== 0n) {
-        const qty = scaleDown(wei, 18);
-        const price = await spot("ETH-USD");
-        positions.push({
-          instrument: { symbol: "ETH", name: "Ethereum", asset_class: "crypto" as const },
+          instrument: { symbol, name, asset_class: "crypto" as const },
           quantity: qty,
           price,
           market_value: price !== null ? decimal.round(decimal.mul(qty, price), 2) : null,

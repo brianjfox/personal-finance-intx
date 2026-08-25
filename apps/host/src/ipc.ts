@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
 import { AccountType, ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
-import { WalletHolding } from "@fin/institutions";
+import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
 import type { App } from "./app";
@@ -58,9 +58,15 @@ const CoinbaseBody = type({
   "api_key_name?": "string",
   private_key: "string > 0",
 });
+const WalletRow = type({
+  value: "string > 0",
+  "label?": "string",
+  // Optional: rows without a kind are chain-detected from the address syntax.
+  "kind?": "'btc_address' | 'btc_xpub' | 'eth_address' | 'ltc_address' | 'sol_address'",
+});
 const WalletBody = type({
   "name?": "string > 0",
-  holdings: WalletHolding.array().atLeastLength(1),
+  holdings: WalletRow.array().atLeastLength(1),
 });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
@@ -164,6 +170,9 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
               privateKey: body.private_key,
             }),
           );
+        }
+        if (p === "/api/wallet/detect") {
+          return json(detectWalletHolding(q.get("value") ?? ""));
         }
         if (p === "/api/connect/wallet" && req.method === "POST") {
           const body = WalletBody(await req.json());

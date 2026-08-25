@@ -228,34 +228,50 @@ describe("coinbase connect flow (mock API)", () => {
 });
 
 describe("watch-only wallet connect flow (mock chain APIs)", () => {
-  test("addresses in a form -> on-chain balances priced into the ledger", async () => {
+  const BTC = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+  const LTC = "ltc1qhta4z5m9zzz9d2h6nruvhg50a0kcw6kj5wmydt";
+  const ETH = "0x00000000219ab540356cBB839Cbe05303d7705Fa";
+  const SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+
+  test("pasted addresses are chain-detected, read on-chain, and priced into the ledger", async () => {
     const base = serve(async (req) => {
       const url = new URL(req.url);
-      if (url.pathname === "/api/address/bc1qtest") return Response.json({ chain_stats: { funded_txo_sum: 30000000, spent_txo_sum: 0 } });
+      if (url.pathname === `/btc/address/${BTC}`) return Response.json({ chain_stats: { funded_txo_sum: 30000000, spent_txo_sum: 0 } }); // 0.3 BTC
+      if (url.pathname === `/ltc/address/${LTC}`) return Response.json({ chain_stats: { funded_txo_sum: 500000000, spent_txo_sum: 0 } }); // 5 LTC
       if (url.pathname === "/rpc") return Response.json({ jsonrpc: "2.0", id: 1, result: "0xde0b6b3a7640000" }); // 1 ETH
+      if (url.pathname === "/solrpc") return Response.json({ jsonrpc: "2.0", id: 1, result: { context: {}, value: 2500000000 } }); // 2.5 SOL
       if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "50000" } });
+      if (url.pathname === "/v2/prices/LTC-USD/spot") return Response.json({ data: { amount: "100" } });
       if (url.pathname === "/v2/prices/ETH-USD/spot") return Response.json({ data: { amount: "2000" } });
+      if (url.pathname === "/v2/prices/SOL-USD/spot") return Response.json({ data: { amount: "200" } });
       return new Response(`not found: ${url.pathname}`, { status: 404 });
     });
     const app = createApp({
       dataDir: tmp(),
       connectors: {
         secrets: memorySecretStore(),
-        walletApis: { btc_api: `${base}/api`, eth_rpc: `${base}/rpc`, price_api: base },
+        walletApis: { btc_api: `${base}/btc`, ltc_api: `${base}/ltc`, eth_rpc: `${base}/rpc`, sol_rpc: `${base}/solrpc`, price_api: base },
       },
     });
     try {
+      // A recognized-but-unsupported address refuses by name before anything is stored.
+      expect(
+        app.connectWallet({ name: "Ledger", holdings: [{ value: "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L" }] }),
+      ).rejects.toThrow(/Dogecoin/);
+      expect(app.institutionsOverview().institutions).toHaveLength(0);
+
+      // No kinds anywhere: the chain comes from the address itself.
       const done = await app.connectWallet({
         name: "Ledger",
-        holdings: [
-          { kind: "btc_address", value: "bc1qtest", label: "Ledger BTC" },
-          { kind: "eth_address", value: "0x0000000000000000000000000000000000000001" },
-        ],
+        holdings: [{ value: BTC, label: "Ledger BTC" }, { value: LTC }, { value: ETH }, { value: SOL }],
       });
       expect(done.institution_id).toBe("inst.ledger");
       expect(done.status).toBe("completed");
       const nw = views.netWorth(app.ledger);
-      expect(nw.lines.find((l) => l.account_id === "acct.ledger.wallet")?.value).toBe("17000"); // 0.3*50000 + 1*2000
+      // 0.3*50000 + 5*100 + 1*2000 + 2.5*200 = 15000 + 500 + 2000 + 500
+      expect(nw.lines.find((l) => l.account_id === "acct.ledger.wallet")?.value).toBe("18000");
+      const symbols = views.positions(app.ledger).filter((x) => x.account_id === "acct.ledger.wallet").map((x) => x.symbol).sort();
+      expect(symbols).toEqual(["BTC", "ETH", "LTC", "SOL"]);
       const ob = app.institutionsOverview();
       expect(ob.institutions[0]).toMatchObject({ institution_id: "inst.ledger", adapter: "wallet", enabled: true });
       // The chain responses are vault evidence like any statement.

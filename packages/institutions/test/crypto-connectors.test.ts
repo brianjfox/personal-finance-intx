@@ -203,3 +203,42 @@ describe("watch-only wallet adapter (mock chain APIs)", () => {
     expect(adapter.fetch({ now: NOW })).rejects.toThrow();
   });
 });
+
+describe("wallet address detection", () => {
+  const { detectWalletHolding } = require("../src/wallet-detect") as typeof import("../src/wallet-detect");
+  const ok = (v: string) => {
+    const d = detectWalletHolding(v);
+    if (!d.ok) throw new Error(`expected ok for ${v}: ${d.reason}`);
+    return d;
+  };
+  const bad = (v: string) => {
+    const d = detectWalletHolding(v);
+    if (d.ok) throw new Error(`expected refusal for ${v}, got ${d.kind}`);
+    return d.reason;
+  };
+
+  test("the majors are recognized from syntax alone", () => {
+    expect(ok("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")).toMatchObject({ kind: "btc_address", chain: "Bitcoin" });
+    expect(ok("bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297").kind).toBe("btc_address"); // taproot
+    expect(ok("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")).toMatchObject({ kind: "btc_address", chain: "Bitcoin" }); // genesis
+    expect(ok("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy").kind).toBe("btc_address");
+    expect(ok("xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAu3fDVmz")).toMatchObject({ kind: "btc_xpub" });
+    expect(ok("LhK2kQwiaAvhjWY799cZvMyYwnQAcxkarr")).toMatchObject({ kind: "ltc_address", chain: "Litecoin" });
+    expect(ok("ltc1qhta4z5m9zzz9d2h6nruvhg50a0kcw6kj5wmydt").kind).toBe("ltc_address");
+    expect(ok("0x00000000219ab540356cBB839Cbe05303d7705Fa")).toMatchObject({ kind: "eth_address", chain: "Ethereum" });
+    expect(ok("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM")).toMatchObject({ kind: "sol_address", chain: "Solana" });
+  });
+
+  test("recognized-but-unsupported chains refuse by name; nothing is guessed", () => {
+    expect(bad("zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs")).toMatch(/segwit extended key/);
+    expect(bad("DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L")).toMatch(/Dogecoin/);
+    expect(bad("rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH")).toMatch(/XRP/);
+    expect(bad("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")).toMatch(/Tron/);
+    expect(bad("cosmos1vlthgax23ca9syk7xgaz347xmf4nunefw3cnf8")).toMatch(/Cosmos/);
+    expect(bad("addr1qxck8m5jkzqdlrt5xhaxcyjkxxlk28dsyz7wsjk3nxrxk4t7qxpks8m5jkzqdlrt5xhaxcyjkxxlk28dsy")).toMatch(/Cardano/);
+    expect(bad("bitcoincash:qzm47qz5ue99y9yl4aca7jnz7dwgdenl85jkfx3znl")).toMatch(/Bitcoin Cash/);
+    expect(bad("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")).toMatch(/testnet/);
+    expect(bad("0x1234")).toMatch(/40 hex/);
+    expect(bad("hello world")).toMatch(/couldn't recognize/);
+  });
+});
