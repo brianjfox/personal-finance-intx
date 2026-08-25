@@ -13,7 +13,7 @@ import { fixtureAdapter } from "@fin/institutions";
 import { resolveFinding, views } from "@fin/ledger";
 
 import { createApp } from "../src/app";
-import { demoAdapters } from "./fixtures/demo-adapters";
+import { demoAdapters, demoClock } from "./fixtures/demo-adapters";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "fin-p1-"));
 const adaptersFor = (night: 1 | 2 | 3) => demoAdapters(night).map((a) => fixtureAdapter(a.id, a.snapshot));
@@ -22,11 +22,11 @@ describe("phase 1 acceptance through fin-host", () => {
   test("clean -> held (duplicate queued) -> resolved -> clean again", async () => {
     const dataDir = tmp();
     let night: 1 | 2 | 3 = 1;
-    const app = createApp({ dataDir, adapters: adaptersFor(1), pollMs: 20 });
+    const app = createApp({ dataDir, adapters: adaptersFor(1), pollMs: 20, clock: demoClock(1) });
     // swap adapters between nights by recreating the app over the same data dir
     const run = async (n: 1 | 2 | 3) => {
       night = n;
-      const a = createApp({ dataDir, adapters: adaptersFor(night), pollMs: 20 });
+      const a = createApp({ dataDir, adapters: adaptersFor(night), pollMs: 20, clock: demoClock(night) });
       const r = await a.runNightly({ runId: `nightly_t${String(n)}` });
       const summary = (await a.listRuns()).find((x) => x.runId === r.runId)!;
       a.close();
@@ -84,7 +84,7 @@ describe("phase 1 acceptance through fin-host", () => {
     expect(code).not.toBe(0);
 
     // Restart the host over the same data dir: resume what was in flight.
-    const app = createApp({ dataDir, adapters: adaptersFor(1), pollMs: 20 });
+    const app = createApp({ dataDir, adapters: adaptersFor(1), pollMs: 20, clock: demoClock(1) });
     const resumed = await app.resumeInFlight();
     expect(resumed.map((r) => r.runId)).toEqual([runId]);
     // At the pinned framework version an action left in-flight is settled as

@@ -1,4 +1,4 @@
-# Bank connectors (Plaid, Enable Banking)
+# Connectors (Plaid, Enable Banking, Coinbase, watch-only wallets)
 
 Two API connectors join the file-drop adapters: **Plaid** (US/Canada,
 including Chase via OAuth) and **Enable Banking** (2,700+ European banks
@@ -77,6 +77,40 @@ Reconnect button repeats the consent for the same institution (no
 duplicate entry, history intact). An expired consent degrades to a
 plain-words problem on the card, never a crash.
 
+## Coinbase (crypto holdings)
+
+Create an API key in Coinbase (Settings → API) with the **View**
+permission ONLY — the trade/transfer scopes must be absent, not unused.
+Then in the GUI: Institutions → Connect an institution → "Connect
+Coinbase": paste the key name (`organizations/…/apiKeys/…`) and the EC
+private key PEM. Both go into the Keychain (service `fin-coinbase`,
+accounts `api_key_name:<institution_id>` / `private_key:<institution_id>`)
+via the host; the GUI never stores anything. Auth is Coinbase's CDP
+scheme: a fresh ES256 JWT per request, bound to that request's
+method+host+path, 2-minute validity. Balances come from
+`/api/v3/brokerage/accounts` (paginated); USD folds into cash, everything
+else becomes a `crypto` position priced by the public `-USD` spot
+endpoint. Unpriced assets stay as positions with an unknown value —
+never a made-up one. Key rotation: the card's "Replace the API key".
+
+## Watch-only wallets (Ledger, Trezor, any address)
+
+A hardware wallet is read WITHOUT the device: paste public addresses
+(in Ledger Live: each account's receive address). An address can show
+balances but can never move funds — read-only is structural, not a
+permission. Supported rows: Bitcoin address (via mempool.space),
+Bitcoin **legacy** xpub (via blockchain.info/multiaddr — a modern segwit
+`zpub` is NOT supported by that API and would report 0; paste addresses
+instead), Ethereum address (native ETH via a public JSON-RPC node).
+Prices from Coinbase's public spot endpoint. Satoshis and wei are
+converted with BigInt string math — quantities never touch floats.
+
+**Privacy trade-off, stated plainly**: each nightly discloses the
+watched addresses to the public chain-data services (mempool.space,
+blockchain.info, the ETH RPC operator). The endpoints are configurable
+in the registry entry's options (`btc_api`, `btc_xpub_api`, `eth_rpc`,
+`price_api`) for self-hosted explorers/nodes.
+
 ## Testing
 
 - `packages/institutions/test/connectors.test.ts` — hermetic: both
@@ -85,6 +119,11 @@ plain-words problem on the card, never a crash.
 - `apps/host/test/connectors-host.test.ts` — hermetic: both **connect
   flows** end to end through the App (mock APIs → registry entry →
   secret stored → nightly → ledger; reconnect reuses the institution).
+- `packages/institutions/test/crypto-connectors.test.ts` +
+  `apps/host/test/connectors-host.test.ts` — hermetic: Coinbase (JWT
+  verified with the real public key, pagination, fiat/crypto
+  classification) and wallet (sat/wei BigInt conversion, xpub/address/
+  ETH summing) adapters and both connect flows against local mocks.
 - `packages/institutions/test/connectors-live.test.ts` — gated:
   - `PLAID_CLIENT_ID` + `PLAID_SECRET` → mints a sandbox item at
     sandbox.plaid.com and runs the adapter against it.
@@ -92,6 +131,10 @@ plain-words problem on the card, never a crash.
     verifies the JWT against the real API (bank list, Mock ASPSP);
     add `ENABLE_BANKING_SESSION_ID` from a completed consent to run a
     full adapter fetch.
+- `packages/institutions/test/crypto-connectors-live.test.ts` — gated:
+  - `COINBASE_API_KEY_NAME` + `COINBASE_PRIVATE_KEY_PATH` → real
+    read-only accounts fetch through the adapter.
+  - `WALLET_BTC_ADDRESS` / `WALLET_ETH_ADDRESS` → real chain queries.
 
 For debugging, `FIN_PLAID_BASE_URL` / `FIN_EB_BASE_URL` point the host
 at a mock or proxy.

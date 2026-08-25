@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ENABLEBANKING_SERVICE, memorySecretStore, PLAID_SERVICE } from "@fin/institutions";
+import { COINBASE_SERVICE, ENABLEBANKING_SERVICE, memorySecretStore, PLAID_SERVICE } from "@fin/institutions";
 import { views } from "@fin/ledger";
 
 import { createApp } from "../src/app";
@@ -172,6 +172,88 @@ describe("enable banking connect flow (mock API)", () => {
 
       // An unknown state fails in plain words.
       expect(app.connectEbComplete({ state: "nope", code: "auth-code-1" })).rejects.toThrow(/start the bank connection again/);
+    } finally {
+      app.close();
+    }
+  });
+});
+
+describe("coinbase connect flow (mock API)", () => {
+  const { privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const ecPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+
+  test("paste key -> stored, entry added, holdings priced into the ledger; key rotation reuses the entry", async () => {
+    const base = serve((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "50000" } });
+      if (!(req.headers.get("authorization") ?? "").startsWith("Bearer ")) return new Response("no jwt", { status: 401 });
+      if (url.pathname === "/api/v3/brokerage/accounts") {
+        return Response.json({
+          accounts: [{ uuid: "u1", name: "BTC Wallet", currency: "BTC", available_balance: { value: "0.1", currency: "BTC" }, hold: { value: "0", currency: "BTC" } }],
+          has_next: false,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const secrets = memorySecretStore();
+    const app = createApp({ dataDir: tmp(), connectors: { coinbaseBaseUrl: base, secrets } });
+    try {
+      // A garbage key is refused before anything is stored.
+      expect(app.connectCoinbase({ apiKeyName: "org/x/apiKeys/y", privateKey: "not a pem" })).rejects.toThrow(/doesn't look like a private key/);
+      expect(app.institutionsOverview().institutions).toHaveLength(0);
+
+      const done = await app.connectCoinbase({ name: "Coinbase", apiKeyName: "org/x/apiKeys/y", privateKey: ecPem });
+      expect(done.institution_id).toBe("inst.coinbase");
+      expect(done.status).toBe("completed");
+      expect(secrets.dump()[`${COINBASE_SERVICE}/api_key_name:inst.coinbase`]).toBe("org/x/apiKeys/y");
+      const nw = views.netWorth(app.ledger);
+      expect(nw.lines.find((l) => l.account_id === "acct.coinbase.coinbase")?.value).toBe("5000");
+      expect(views.positions(app.ledger).some((p) => p.symbol === "BTC" && p.quantity === "0.1")).toBe(true);
+
+      // Rotation: same entry, new key stored.
+      const again = await app.connectCoinbase({ institutionId: "inst.coinbase", apiKeyName: "org/x/apiKeys/z", privateKey: ecPem });
+      expect(again.institution_id).toBe("inst.coinbase");
+      expect(secrets.dump()[`${COINBASE_SERVICE}/api_key_name:inst.coinbase`]).toBe("org/x/apiKeys/z");
+      expect(app.institutionsOverview().institutions).toHaveLength(1);
+    } finally {
+      app.close();
+    }
+  });
+});
+
+describe("watch-only wallet connect flow (mock chain APIs)", () => {
+  test("addresses in a form -> on-chain balances priced into the ledger", async () => {
+    const base = serve(async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/address/bc1qtest") return Response.json({ chain_stats: { funded_txo_sum: 30000000, spent_txo_sum: 0 } });
+      if (url.pathname === "/rpc") return Response.json({ jsonrpc: "2.0", id: 1, result: "0xde0b6b3a7640000" }); // 1 ETH
+      if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "50000" } });
+      if (url.pathname === "/v2/prices/ETH-USD/spot") return Response.json({ data: { amount: "2000" } });
+      return new Response(`not found: ${url.pathname}`, { status: 404 });
+    });
+    const app = createApp({
+      dataDir: tmp(),
+      connectors: {
+        secrets: memorySecretStore(),
+        walletApis: { btc_api: `${base}/api`, eth_rpc: `${base}/rpc`, price_api: base },
+      },
+    });
+    try {
+      const done = await app.connectWallet({
+        name: "Ledger",
+        holdings: [
+          { kind: "btc_address", value: "bc1qtest", label: "Ledger BTC" },
+          { kind: "eth_address", value: "0x0000000000000000000000000000000000000001" },
+        ],
+      });
+      expect(done.institution_id).toBe("inst.ledger");
+      expect(done.status).toBe("completed");
+      const nw = views.netWorth(app.ledger);
+      expect(nw.lines.find((l) => l.account_id === "acct.ledger.wallet")?.value).toBe("17000"); // 0.3*50000 + 1*2000
+      const ob = app.institutionsOverview();
+      expect(ob.institutions[0]).toMatchObject({ institution_id: "inst.ledger", adapter: "wallet", enabled: true });
+      // The chain responses are vault evidence like any statement.
+      expect(app.ledger.listDocuments().some((d) => d.filename.startsWith("wallet-"))).toBe(true);
     } finally {
       app.close();
     }

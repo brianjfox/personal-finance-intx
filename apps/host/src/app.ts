@@ -8,6 +8,7 @@
 //   <dataDir>/institutions/<id>/inbox/   file-drop inboxes (jsondrop/csvdrop)
 //   <dataDir>/runs|blobs|effects/  the workflow host (fs-host)
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -39,6 +40,7 @@ import {
 } from "@fin/contracts";
 import {
   addInstitutionEntry,
+  COINBASE_SERVICE,
   defaultSecretStore,
   ENABLEBANKING_SERVICE,
   loadInstitutions,
@@ -49,6 +51,7 @@ import {
   type InstitutionAdapter,
   type InstitutionEntry,
   type LoadedInstitutions,
+  type WalletHolding,
 } from "@fin/institutions";
 import { approvalQueue, listInstructions, markInstruction, openLedger, verdictsFor, views, type Ledger, type QueuedApproval, type InstructionRow } from "@fin/ledger";
 import { createPolicyAuthorize, type PolicyDecision } from "@fin/policy";
@@ -190,6 +193,14 @@ export interface App {
   connectEbStart(opts: { name?: string; institutionId?: string; country: string; bank: string; redirectUrl?: string }): Promise<{ url: string; state: string }>;
   /** Enable Banking, step 2: the code from the redirect becomes a 90-180 day read-only session; store and reconcile. */
   connectEbComplete(opts: { state: string; code: string }): Promise<{ institution_id: string; consent_until: string | null; runId: string; status: string }>;
+  /**
+   * Coinbase: store the view-only CDP API key (name + EC private key)
+   * in the secret store, add the entry (or rotate `institutionId`'s
+   * key), and reconcile. The key is validated before it is stored.
+   */
+  connectCoinbase(opts: { name?: string; institutionId?: string; apiKeyName: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
+  /** Watch-only wallet (Ledger/Trezor/any): public addresses only -- structurally unable to move funds. */
+  connectWallet(opts: { name?: string; holdings: WalletHolding[] }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** Start (or resume) a nightly run. Resolves when the run is terminal. */
   runNightly(opts?: { runId?: string; institutions?: string[] }): Promise<RunResult>;
   /** Resume every non-terminal run on disk (startup). */
@@ -331,6 +342,10 @@ export function createApp(opts: AppOptions): App {
       : process.env["FIN_EB_REDIRECT_URL"] !== undefined
         ? { ebRedirectUrl: process.env["FIN_EB_REDIRECT_URL"] }
         : {}),
+    ...(opts.connectors?.coinbaseBaseUrl ?? process.env["FIN_COINBASE_BASE_URL"]
+      ? { coinbaseBaseUrl: (opts.connectors?.coinbaseBaseUrl ?? process.env["FIN_COINBASE_BASE_URL"]) as string }
+      : {}),
+    ...(opts.connectors?.walletApis !== undefined ? { walletApis: opts.connectors.walletApis } : {}),
     ...(opts.connectors?.fetchImpl !== undefined ? { fetchImpl: opts.connectors.fetchImpl } : {}),
   };
   const connectors = createConnectors(connectorCfg);
@@ -669,6 +684,41 @@ export function createApp(opts: AppOptions): App {
       loaded = reloadRegistry();
       const run = await refreshInstitution(institutionId);
       return { institution_id: institutionId, consent_until: s.validUntil, ...run };
+    },
+    async connectCoinbase(o) {
+      // Refuse a key that doesn't even parse before anything is stored.
+      try {
+        crypto.createPrivateKey(o.privateKey);
+      } catch {
+        throw new Error("that doesn't look like a private key -- paste the full PEM block Coinbase gave you (BEGIN ... PRIVATE KEY)");
+      }
+      let institutionId = o.institutionId ?? null;
+      if (institutionId === null) {
+        const entry = addInstitutionEntry(dataDir, {
+          name: o.name ?? "Coinbase",
+          adapter: "coinbase",
+          ...(connectorCfg.coinbaseBaseUrl !== undefined ? { options: { base_url: connectorCfg.coinbaseBaseUrl } } : {}),
+        });
+        institutionId = entry.institution_id;
+      } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "coinbase")) {
+        throw new Error(`${institutionId} is not a Coinbase connection`);
+      }
+      storeSecret(COINBASE_SERVICE, `api_key_name:${institutionId}`, o.apiKeyName.trim());
+      storeSecret(COINBASE_SERVICE, `private_key:${institutionId}`, o.privateKey);
+      loaded = reloadRegistry();
+      const run = await refreshInstitution(institutionId);
+      return { institution_id: institutionId, ...run };
+    },
+    async connectWallet(o) {
+      if (o.holdings.length === 0) throw new Error("add at least one address to watch");
+      const entry = addInstitutionEntry(dataDir, {
+        name: o.name ?? "Self-custody wallet",
+        adapter: "wallet",
+        options: { holdings: o.holdings, ...connectorCfg.walletApis },
+      });
+      loaded = reloadRegistry();
+      const run = await refreshInstitution(entry.institution_id);
+      return { institution_id: entry.institution_id, ...run };
     },
     async runNightly(o = {}) {
       return runNightlyOnce(o);
