@@ -176,7 +176,7 @@ export interface App {
    * values into forms (the host writes the snapshots); `files` = export
    * files are uploaded into the inbox. Both are jsondrop underneath.
    */
-  addInstitution(input: { name: string; mode: "managed" | "files" }): InstitutionEntry;
+  addInstitution(input: { name: string; mode: "managed" | "files"; category?: "real_estate" | "crypto" }): InstitutionEntry;
   /** Remove a connection from the registry. Ledger history and inbox files stay -- nothing is erased. */
   removeInstitution(institutionId: string): boolean;
   /** Pause/resume a connection without losing its configuration or history. */
@@ -344,6 +344,8 @@ export interface InstitutionOverview {
   consent_until: string | null;
   /** For Enable Banking institutions: which bank, for the reconnect flow. */
   aspsp: { name: string; country: string } | null;
+  /** The tab this connection belongs to when it isn't derivable from the adapter (real_estate, crypto). */
+  category: string | null;
 }
 
 export interface InstitutionsOverview {
@@ -634,6 +636,7 @@ export function createApp(opts: AppOptions): App {
           problems,
           consent_until: typeof e.options?.["valid_until"] === "string" ? (e.options["valid_until"] as string) : null,
           aspsp: isAspsp(e.options?.["aspsp"]) ? (e.options["aspsp"] as { name: string; country: string }) : null,
+          category: typeof e.options?.["category"] === "string" ? (e.options["category"] as string) : null,
         };
       });
       return { institutions, hasFacts: nw.lines.length > 0 };
@@ -642,7 +645,10 @@ export function createApp(opts: AppOptions): App {
       const entry = addInstitutionEntry(dataDir, {
         name: input.name,
         adapter: "jsondrop",
-        ...(input.mode === "managed" ? { options: { managed: true } } : {}),
+        options: {
+          ...(input.mode === "managed" ? { managed: true } : {}),
+          ...(input.category !== undefined ? { category: input.category } : {}),
+        },
       });
       if (input.mode === "managed") initManagedInstitution(dataDir, entry.institution_id, clock());
       loaded = reloadRegistry();

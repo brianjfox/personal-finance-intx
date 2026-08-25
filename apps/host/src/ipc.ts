@@ -37,7 +37,7 @@ const DecideBody = type({
   "bound?": type({ "max_quantity?": "string | null", "limit_price?": "string | null" }),
   "note?": "string",
 });
-const AddInstitutionBody = type({ name: "string > 0", mode: "'managed' | 'files'" });
+const AddInstitutionBody = type({ name: "string > 0", mode: "'managed' | 'files'", "category?": "'real_estate' | 'crypto'" });
 const EnabledBody = type({ enabled: "boolean" });
 const ManagedAccountBody = type({
   "account_id?": "string",

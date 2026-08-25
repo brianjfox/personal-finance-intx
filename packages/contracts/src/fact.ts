@@ -56,7 +56,7 @@ export function writerOf(kind: FactKind): Principal {
 // --- payloads ---------------------------------------------------------
 
 export const AccountType = type(
-  "'checking' | 'savings' | 'money_market' | 'brokerage' | 'ira' | 'roth_ira' | '401k' | 'hsa' | '529' | 'crypto' | 'credit_card' | 'mortgage' | 'loan' | 'heloc' | 'other'",
+  "'checking' | 'savings' | 'money_market' | 'brokerage' | 'ira' | 'roth_ira' | '401k' | 'hsa' | '529' | 'crypto' | 'real_estate' | 'credit_card' | 'mortgage' | 'loan' | 'heloc' | 'other'",
 );
 export type AccountType = typeof AccountType.infer;
 

@@ -36,7 +36,7 @@ export function App() {
             ["queue", "Queue", queue.length],
             ["dashboard", "Dashboard", null],
             ["positions", "Positions", null],
-            ["institutions", "Institutions", null],
+            ["institutions", "Assets, Cash & Holdings", null],
             ["credentials", "Credentials", null],
             ["profile", "Profile", null],
             ["tax", "Tax calendar", null],
@@ -658,6 +658,7 @@ const ACCOUNT_TYPE_OPTIONS: ReadonlyArray<readonly [string, string]> = [
   ["401k", "Retirement — 401(k)"],
   ["hsa", "Health savings (HSA)"],
   ["crypto", "Crypto"],
+  ["real_estate", "Real estate"],
   ["credit_card", "Credit card"],
   ["mortgage", "Mortgage"],
   ["loan", "Loan"],
@@ -672,45 +673,170 @@ function cleanAmount(raw: string): string | null {
   return /^-?\d+(\.\d+)?$/.test(s) ? s : null;
 }
 
+type HoldingsTab = "institutions" | "real_estate" | "crypto";
+const CRYPTO_ADAPTERS = new Set(["coinbase", "kraken", "wallet"]);
+
+/** Which tab a connection belongs on: explicit category first, then the adapter, then what it holds. */
+function holdingsTabOf(i: InstitutionOverview): HoldingsTab {
+  if (i.category === "real_estate") return "real_estate";
+  if (i.category === "crypto" || CRYPTO_ADAPTERS.has(i.adapter)) return "crypto";
+  const open = i.accounts.filter((a) => !a.closed);
+  if (open.length > 0 && open.every((a) => a.type === "real_estate")) return "real_estate";
+  if (open.length > 0 && open.every((a) => a.type === "crypto")) return "crypto";
+  return "institutions";
+}
+
 function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
   const [ob, setOb] = useState<InstitutionsOverview | null>(null);
+  const [tab, setTab] = useState<HoldingsTab>("institutions");
   const [adding, setAdding] = useState(false);
   useEffect(() => {
     api.institutionsOverview().then(setOb).catch(() => setOb(null));
   }, [tick]);
   if (ob === null) return <p className="muted">Host unreachable.</p>;
-  const none = ob.institutions.length === 0;
+  const inTab = ob.institutions.filter((i) => holdingsTabOf(i) === tab);
+  const none = inTab.length === 0;
+  const counts = new Map<HoldingsTab, number>();
+  for (const i of ob.institutions) counts.set(holdingsTabOf(i), (counts.get(holdingsTabOf(i)) ?? 0) + 1);
   return (
     <>
-      <h2>Institutions</h2>
+      <h2>Assets, Cash &amp; Holdings</h2>
       <p className="small muted">
         Connections are read-only: nothing here can move money or change your accounts. Deleting a connection only stops
         updates — everything already recorded stays in your history.
       </p>
-      {none && <p>No institutions are connected yet. Let's add your first one.</p>}
-      {none || adding ? (
-        <AddInstitutionForm
-          onDone={() => {
-            setAdding(false);
-            onChanged();
-          }}
-          onCancel={none ? null : () => setAdding(false)}
-        />
-      ) : (
-        <p>
-          <button onClick={() => setAdding(true)}>Connect another institution</button>
-        </p>
+      <p>
+        {(
+          [
+            ["institutions", "Institutions"],
+            ["real_estate", "Real Estate"],
+            ["crypto", "Crypto"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            className={tab === id ? "" : "secondary"}
+            style={{ marginRight: 6 }}
+            onClick={() => {
+              setTab(id);
+              setAdding(false);
+            }}
+          >
+            {label}
+            {(counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
+          </button>
+        ))}
+      </p>
+      {tab === "institutions" && (
+        <>
+          {none && <p>No institutions are connected yet. Let's add your first one.</p>}
+          {none || adding ? (
+            <AddInstitutionForm
+              onDone={() => {
+                setAdding(false);
+                onChanged();
+              }}
+              onCancel={none ? null : () => setAdding(false)}
+              modes={["managed", "files", "plaid", "eb"]}
+            />
+          ) : (
+            <p><button onClick={() => setAdding(true)}>Connect another institution</button></p>
+          )}
+        </>
       )}
-      {ob.institutions.map((i) => (
+      {tab === "real_estate" && (
+        <>
+          {none && <p>No properties yet. Add your first one — its value flows straight into net worth.</p>}
+          {none || adding ? (
+            <AddPropertyForm
+              onDone={() => {
+                setAdding(false);
+                onChanged();
+              }}
+              onCancel={none ? null : () => setAdding(false)}
+            />
+          ) : (
+            <p><button onClick={() => setAdding(true)}>Add a property</button></p>
+          )}
+        </>
+      )}
+      {tab === "crypto" && (
+        <>
+          {none && <p>No crypto connections yet. Connect an exchange, or watch a self-custody wallet.</p>}
+          {none || adding ? (
+            <AddInstitutionForm
+              onDone={() => {
+                setAdding(false);
+                onChanged();
+              }}
+              onCancel={none ? null : () => setAdding(false)}
+              modes={["coinbase", "kraken", "wallet"]}
+            />
+          ) : (
+            <p><button onClick={() => setAdding(true)}>Add a crypto connection</button></p>
+          )}
+        </>
+      )}
+      {inTab.map((i) => (
         <InstitutionCard key={i.institution_id} inst={i} onChanged={onChanged} />
       ))}
     </>
   );
 }
 
-function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
+/** The Real Estate tab's add flow: one property, one value -- a managed institution under the hood. */
+function AddPropertyForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb" | "coinbase" | "kraken" | "wallet">("managed");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    if (name.trim() === "") {
+      setError("Name the property — \"Our house\" or \"12 Main St\" works.");
+      return;
+    }
+    const amount = cleanAmount(value);
+    if (amount === null) {
+      setError("Enter the current value as a plain number, like 1250000.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const inst = await api.addInstitution(name.trim(), "managed", "real_estate");
+      await api.saveManagedAccount(inst.institution_id, { name: name.trim(), type: "real_estate", value: amount });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="queue-item">
+      <div className="head"><b>Add a property</b></div>
+      <div className="small muted">
+        Its value becomes a dated observation — update it any time (new appraisal, market shift) and the history stays.
+        A mortgage is its own account: add it here with type Mortgage, or it arrives with a connected lender.
+      </div>
+      <div className="actions" style={{ marginTop: 8 }}>
+        <input style={{ flex: 1 }} placeholder="Property — e.g. Our house, 12 Main St" value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
+        <input style={{ width: 160 }} placeholder="Current value" value={value} disabled={busy} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button disabled={busy} onClick={() => void add()}>{busy ? "adding and valuing…" : "Add property"}</button>
+        {onCancel !== null && <button className="secondary" disabled={busy} onClick={onCancel}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
+type ConnectMode = "managed" | "files" | "plaid" | "eb" | "coinbase" | "kraken" | "wallet";
+
+function AddInstitutionForm({ onDone, onCancel, modes }: { onDone: () => void; onCancel: (() => void) | null; modes: readonly ConnectMode[] }) {
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<ConnectMode>(modes[0] ?? "managed");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
@@ -729,12 +855,13 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
       setBusy(false);
     }
   };
-  const radio = (m: typeof mode, label: string, hint: string) => (
-    <label style={{ display: "block", marginBottom: 6 }}>
-      <input type="radio" checked={mode === m} onChange={() => setMode(m)} /> {label}
-      <div className="small muted" style={{ marginLeft: 20 }}>{hint}</div>
-    </label>
-  );
+  const radio = (m: ConnectMode, label: string, hint: string) =>
+    modes.includes(m) ? (
+      <label style={{ display: "block", marginBottom: 6 }}>
+        <input type="radio" checked={mode === m} onChange={() => setMode(m)} /> {label}
+        <div className="small muted" style={{ marginLeft: 20 }}>{hint}</div>
+      </label>
+    ) : null;
   return (
     <div className="queue-item">
       <div className="head"><b>Connect an institution</b></div>
@@ -1408,9 +1535,10 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
 /** One row of inputs: pick an existing account to update, or add a new one. */
 function ManagedAccountEditor({ inst, disabled, onSave }: { inst: InstitutionOverview; disabled: boolean; onSave: (input: { account_id?: string; name: string; type: string; value: string }) => void }) {
   const open = inst.accounts.filter((a) => !a.closed);
+  const defaultType = inst.category === "real_estate" ? "real_estate" : "checking";
   const [accountId, setAccountId] = useState<string>("new");
   const [name, setName] = useState("");
-  const [type, setType] = useState("checking");
+  const [type, setType] = useState(defaultType);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const existing = open.find((a) => a.account_id === accountId);
@@ -1418,7 +1546,7 @@ function ManagedAccountEditor({ inst, disabled, onSave }: { inst: InstitutionOve
     setAccountId(id);
     const a = open.find((x) => x.account_id === id);
     setName(a?.name ?? "");
-    setType(a?.type ?? "checking");
+    setType(a?.type ?? defaultType);
     setValue(a?.value ?? "");
     setError(null);
   };

@@ -172,3 +172,21 @@ describe("GUI onboarding (managed institutions)", () => {
     }
   });
 });
+
+describe("holdings categories", () => {
+  test("a property is a managed real_estate institution; the category and type survive the round trip", async () => {
+    const app = createApp({ dataDir: tmp() });
+    try {
+      const inst = app.addInstitution({ name: "12 Main St", mode: "managed", category: "real_estate" });
+      const saved = await app.saveManagedAccount(inst.institution_id, { name: "12 Main St", type: "real_estate", value: "1250000" });
+      expect(saved.status).toBe("completed");
+      const ob = app.institutionsOverview();
+      const row = ob.institutions.find((i) => i.institution_id === inst.institution_id)!;
+      expect(row.category).toBe("real_estate");
+      expect(row.accounts[0]).toMatchObject({ type: "real_estate", value: "1250000" });
+      expect(views.netWorth(app.ledger).assets).toBe("1250000");
+    } finally {
+      app.close();
+    }
+  });
+});
