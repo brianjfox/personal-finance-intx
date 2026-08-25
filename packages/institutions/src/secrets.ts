@@ -14,6 +14,8 @@ export interface SecretStore {
   get(service: string, account: string): string | null;
   /** Persist a secret (used by the GUI connect flows). Optional: read-only stores omit it. */
   set?(service: string, account: string, value: string): void;
+  /** Remove a stored secret; returns whether one existed. Optional: read-only stores omit it. */
+  delete?(service: string, account: string): boolean;
 }
 
 export function envKeyFor(service: string, account: string): string {
@@ -49,6 +51,11 @@ export function keychainSecretStore(): SecretStore {
       });
       if (r.status !== 0) throw new Error(`security add-generic-password failed: ${r.stderr.trim()}`);
     },
+    delete(service, account) {
+      if (process.platform !== "darwin") return false;
+      const r = spawnSync("security", ["delete-generic-password", "-s", service, "-a", account], { encoding: "utf8" });
+      return r.status === 0;
+    },
   };
 }
 
@@ -63,6 +70,9 @@ export function defaultSecretStore(): SecretStore {
     set(service, account, value) {
       chain.set?.(service, account, value);
     },
+    delete(service, account) {
+      return chain.delete?.(service, account) ?? false;
+    },
   };
 }
 
@@ -73,6 +83,7 @@ export function memorySecretStore(initial: Record<string, string> = {}): SecretS
   return {
     get: (s, a) => m.get(key(s, a)) ?? null,
     set: (s, a, v) => void m.set(key(s, a), v),
+    delete: (s, a) => m.delete(key(s, a)),
     dump: () => Object.fromEntries(m),
   };
 }

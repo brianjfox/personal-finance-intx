@@ -127,7 +127,7 @@ export function anthropicSourceFromEnv(): InferenceSource {
   const apiKey = process.env["ANTHROPIC_API_KEY"] ?? "";
   if (apiKey === "") {
     throw new Error(
-      "fin-host: ANTHROPIC_API_KEY is not set; the advisory agents need an inference source. Export it (the key itself never enters the ledger or the logs).",
+      "no AI key is set -- add your Anthropic API key on the Credentials page (it goes into the Keychain and never enters the ledger or the logs).",
     );
   }
   const model = process.env["FIN_MODEL"] ?? "claude-sonnet-5";

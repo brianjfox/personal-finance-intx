@@ -55,7 +55,7 @@ export function createConnectors(cfg: ConnectorConfig) {
     const clientId = cfg.secrets.get(PLAID_SERVICE, "client_id");
     const secret = cfg.secrets.get(PLAID_SERVICE, "secret");
     if (clientId === null || secret === null) {
-      throw new Error(`Plaid is not set up: store your Plaid client_id and secret first (Keychain service ${PLAID_SERVICE})`);
+      throw new Error("Plaid is not set up yet -- add your Plaid Client ID and Secret on the Credentials page first");
     }
     const r = await doFetch(`${plaidBase}${path}`, {
       method: "POST",
@@ -71,7 +71,7 @@ export function createConnectors(cfg: ConnectorConfig) {
     const appId = cfg.secrets.get(ENABLEBANKING_SERVICE, "app_id");
     const key = cfg.secrets.get(ENABLEBANKING_SERVICE, "private_key");
     if (appId === null || key === null) {
-      throw new Error(`Enable Banking is not set up: store your app_id and private_key first (Keychain service ${ENABLEBANKING_SERVICE})`);
+      throw new Error("Enable Banking is not set up yet -- add your Application ID and private key on the Credentials page first");
     }
     const r = await doFetch(`${ebBase}${path}`, {
       method,

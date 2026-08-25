@@ -15,9 +15,19 @@ the GUI — is unchanged.
 
 ## Secrets
 
-Connector credentials never live in `institutions.json`. They resolve
-through one secret store: **environment variables first, then the macOS
-login Keychain** (the Anthropic-key pattern from PACKAGING §7.3).
+**The GUI is the way in**: the app's **Credentials** page takes each key
+pasted once, stores it in the macOS login Keychain itself, shows
+set/not-set status (values never leave the host), and can replace or
+remove any of them — including the Anthropic key, which takes effect in
+the running app without a restart. Per-connection tokens (Plaid access
+tokens, Enable Banking sessions, Coinbase keys) are stored by the
+connect flows, listed on the same page, and deleted automatically when
+their institution is deleted. No `security` CLI required.
+
+Under the hood, credentials never live in `institutions.json`. They
+resolve through one secret store: **environment variables first, then
+the macOS login Keychain** (the Anthropic-key pattern from PACKAGING
+§7.3). The CLI remains an alternative for scripts:
 
 | Service (Keychain `-s`) | Account (`-a`) | What |
 | --- | --- | --- |
@@ -30,15 +40,16 @@ login Keychain** (the Anthropic-key pattern from PACKAGING §7.3).
 
 Environment override for any of these: `FIN_SECRET_<SERVICE>_<ACCOUNT>`
 uppercased with non-alphanumerics as `_` — e.g.
-`FIN_SECRET_FIN_PLAID_CLIENT_ID`. Per-connection tokens are written by
-the GUI connect flows into the Keychain; you only ever store the four
-top rows yourself:
+`FIN_SECRET_FIN_PLAID_CLIENT_ID`. The Credentials page covers the
+global rows (plus `fin-interchange`/`anthropic` for the AI key); the
+CLI equivalent, for scripts only:
 
 ```bash
 security add-generic-password -U -s fin-plaid -a client_id -w '<CLIENT_ID>'
 security add-generic-password -U -s fin-plaid -a secret    -w '<SECRET>'
 security add-generic-password -U -s fin-enablebanking -a app_id      -w '<APP_ID>'
 security add-generic-password -U -s fin-enablebanking -a private_key -w "$(cat key.pem)"
+security add-generic-password -U -s fin-interchange -a anthropic     -w '<ANTHROPIC_KEY>'
 ```
 
 ## Plaid setup (once)

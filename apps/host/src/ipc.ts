@@ -68,6 +68,9 @@ const WalletBody = type({
   "name?": "string > 0",
   holdings: WalletRow.array().atLeastLength(1),
 });
+const CredentialSetBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'", values: "Record<string, string>" });
+const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'" });
+const TokensDeleteBody = type({ institution_id: "string > 0" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -172,6 +175,23 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
               privateKey: body.private_key,
             }),
           );
+        }
+        if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
+        if (p === "/api/credentials/set" && req.method === "POST") {
+          const body = CredentialSetBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          app.setCredential(body.id, body.values);
+          return json({ saved: true });
+        }
+        if (p === "/api/credentials/delete" && req.method === "POST") {
+          const body = CredentialDeleteBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json({ removed: app.deleteCredential(body.id) });
+        }
+        if (p === "/api/credentials/tokens/delete" && req.method === "POST") {
+          const body = TokensDeleteBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json({ removed: app.deleteConnectionTokens(body.institution_id) });
         }
         if (p === "/api/wallet/detect") {
           return json(detectWalletHolding(q.get("value") ?? ""));
