@@ -86,7 +86,8 @@ describe("free-text profile intake", () => {
         if (url.pathname === "/v1/messages") {
           const body = (await req.json()) as { tool_choice?: { name?: string }; system?: string };
           expect(body.tool_choice?.name).toBe("fill_profile");
-          expect(body.system).toContain("Never invent a date");
+          expect(body.system).toContain("Today is");
+          expect(body.system).toContain("Never guess");
           return Response.json({
             content: [{
               type: "tool_use",

@@ -653,6 +653,7 @@ export function createApp(opts: AppOptions): App {
         model,
         text,
         current: profile(),
+        now: clock(),
         ...(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {}),
       });
     },

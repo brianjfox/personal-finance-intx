@@ -346,14 +346,14 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
             filled.push(label);
           }
         };
-        setField("legal_name", pp.legal_name, "name");
-        setField("preferred_name", pp.preferred_name, "preferred name");
-        setField("date_of_birth", pp.date_of_birth, "date of birth");
-        setField("ssn", pp.ssn, "tax id");
-        setField("citizenship", pp.citizenship, "citizenship");
-        setField("country_of_residence", pp.country_of_residence, "country of residence");
-        setField("state_or_province", pp.state_or_province, "state");
-        setField("marital_status", pp.marital_status, "marital status");
+        setField("legal_name", pp.legal_name, "your name");
+        setField("preferred_name", pp.preferred_name, "your preferred name");
+        setField("date_of_birth", pp.date_of_birth, "your date of birth");
+        setField("ssn", pp.ssn, "your tax id");
+        setField("citizenship", pp.citizenship, "your citizenship");
+        setField("country_of_residence", pp.country_of_residence, "your country of residence");
+        setField("state_or_province", pp.state_or_province, "your state");
+        setField("marital_status", pp.marital_status, "your marital status");
         if (patch.spouse != null) {
           next.has_spouse = true;
           next.spouse = toRel(patch.spouse);
@@ -363,13 +363,13 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
         for (const c of patch.children ?? []) {
           if (!have(next.children, c.legal_name)) {
             next.children = [...next.children, toRel(c)];
-            filled.push(`child ${c.legal_name}`);
+            filled.push(`child ${c.legal_name}${c.date_of_birth != null && c.date_of_birth !== "" ? " (with birth date)" : " (no birth date)"}`);
           }
         }
         for (const o of patch.others ?? []) {
           if (!have(next.others, o.legal_name)) {
             next.others = [...next.others, toRel(o)];
-            filled.push(o.legal_name);
+            filled.push(`${o.legal_name}${o.date_of_birth != null && o.date_of_birth !== "" ? " (with birth date)" : ""}`);
           }
         }
         return next;

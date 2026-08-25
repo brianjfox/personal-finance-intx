@@ -83,6 +83,8 @@ export interface ExtractOptions {
   model?: string;
   text: string;
   current: HouseholdProfile | null;
+  /** Today, so ages/birthdays pin exact dates ("turns 35 on Nov 6" is arithmetic, not invention). */
+  now: Date;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -90,9 +92,13 @@ export interface ExtractOptions {
 export async function extractProfilePatch(opts: ExtractOptions): Promise<ProfilePatch> {
   const source = opts.source();
   const doFetch = opts.fetchImpl ?? fetch;
+  const today = opts.now.toISOString().slice(0, 10);
   const system = [
+    `Today is ${today}.`,
     "You extract household-profile fields from an operator's free text about themselves and their family, for an estate/tax profile form they will review before saving.",
-    "Rules: include ONLY what the text states or clearly implies. Never invent a date -- an age like 'my daughter is 12' goes into that person's note (e.g. 'age 12 as of now'), not date_of_birth. Do not repeat values already in the current profile unless the text changes them.",
+    "Rules: include ONLY what the text states or exactly determines. A date_of_birth may be COMPUTED when the text pins it: 'turns 35 on Nov 6' plus today's date fixes the birth year exactly (if the birthday hasn't happened yet this year, they were born age years before this year's birthday; if it has, one year later than that). Show such arithmetic in that person's note (e.g. 'computed from: turns 35 on Nov 6').",
+    "Never guess: a bare age with no birthday ('my daughter is 12') cannot fix the year -- put it in that person's note instead of date_of_birth.",
+    "Do not repeat values already in the current profile unless the text changes them.",
     "Relationships for 'others': whatever the text says (mother, brother, godson, friend, charity).",
     opts.current !== null ? `Current profile (tax id withheld): ${JSON.stringify(redactProfile(opts.current))}` : "Current profile: none yet.",
   ].join("\n");
