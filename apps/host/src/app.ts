@@ -88,6 +88,7 @@ import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflo
 
 import { createConnectors, type ConnectorConfig } from "./connect";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
+import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
 import {
   credentialsStatus,
   deleteConnectionTokens,
@@ -225,6 +226,8 @@ export interface App {
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** The household profile, redacted: the tax id never leaves the host (last four digits only). */
   getProfile(): (ReturnType<typeof redactProfile> & { configured: true }) | { configured: false };
+  /** Free-text -> proposed profile fields (model-assisted; the GUI merges into the unsaved form for review). */
+  extractProfile(text: string): Promise<ProfilePatch>;
   /**
    * Save the profile from the GUI. An empty/absent ssn keeps the stored
    * one (the GUI never has the full id to send back); pass
@@ -643,6 +646,15 @@ export function createApp(opts: AppOptions): App {
       const p = profile();
       if (p === null) return { configured: false as const };
       return { configured: true as const, ...redactProfile(p) };
+    },
+    extractProfile(text) {
+      return extractProfilePatch({
+        source: opts.inferenceSource ?? anthropicSourceFromEnv,
+        model,
+        text,
+        current: profile(),
+        ...(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {}),
+      });
     },
     saveProfile(input) {
       const { clear_ssn, ...rest } = input;
