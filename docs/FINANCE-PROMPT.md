@@ -16,3 +16,11 @@ If there is already data present, the user should be able to add or delete insti
 
 We need to include Coinbase as a place to learn about crypto holdings, and we should be able to read a ledger wallet.
 Most importantly -- the GUI is the place that the end user will interact with.  Users don't want to learn about the security CLI and how to use the command line.  So the user should be able to paste API keys and secrets once, and the app should store those in the Keychain.  The user should also be able to delete or modify those credentials.
+
+--------------------------------------------------------------------------------------------------------------------------------
+
+The estate planner should have both the chat box, and present a wizard to collect information that an estate planner must have!  For example, spouse, children, other people who should appear in a will, etc.  Please note that there's no onboarding path in place for collecting a user's name, social, country of origin, country of residence, etc.  We need this information available in the user's profile, and I should be collected from any agent that needs it (e.g, Estate Planning, Tax Planning). The chat box should be 4-6 lines tall, and the text should wrap.
+
+--------------------------------------------------------------------------------------------------------------------------------
+[Given to the app in the Profile page]
+My name is Brian Jhan Fox, born in Boston on Dec 11, 1959. I have boy/girl twins who turn 26 on november 2 named Moses Daniel Liggett-Fox, and Lodiana Olivia Liggett-Fox.  I have a son named Bodhi Liggett who turns 35 on Nov 6.  Bodhi has a wife (Saskia) and a son (Koa). Koa was born on November 25, 2025
