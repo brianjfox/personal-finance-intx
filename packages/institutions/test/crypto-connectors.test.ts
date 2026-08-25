@@ -283,3 +283,31 @@ describe("ledger live account JSON detection", () => {
     if (!broken.ok) expect(broken.reason).toMatch(/doesn't parse/);
   });
 });
+
+describe("ledger live JSON shape variants (the id layout is not fixed)", () => {
+  const { detectWalletHolding } = require("../src/wallet-detect") as typeof import("../src/wallet-detect");
+  const ADDR = "0x616F941BE4bB19Ec11DdE7a12f120000000AbCd1";
+
+  test("id without a trailing colon still names the chain", () => {
+    const d = detectWalletHolding(JSON.stringify({ xpub: ADDR, id: `js:2:ethereum:${ADDR}`, freshAddressPath: "44'/60'/0'/1" }));
+    expect(d).toMatchObject({ ok: true, kind: "eth_address", value: ADDR });
+  });
+
+  test("no id at all: the derivation path's SLIP-44 coin type is the chain", () => {
+    const d = detectWalletHolding(JSON.stringify({ xpub: ADDR, freshAddressPath: "44'/60'/0'/0/0" }));
+    expect(d).toMatchObject({ ok: true, kind: "eth_address", chain: "Ethereum", value: ADDR });
+  });
+
+  test("a bitcoin 84' path names the native segwit scheme even without an id", () => {
+    const xpub = "xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAu3fDVmz";
+    const d = detectWalletHolding(JSON.stringify({ xpub, freshAddressPath: "84'/0'/0'/0/0" }));
+    expect(d.ok).toBe(false);
+    if (!d.ok) expect(d.reason).toMatch(/native segwit/);
+  });
+
+  test("neither id nor path: the error tells the truth about what was missing", () => {
+    const d = detectWalletHolding(JSON.stringify({ xpub: ADDR, index: 0 }));
+    expect(d.ok).toBe(false);
+    if (!d.ok) expect(d.reason).toMatch(/neither a js:… "id" nor a derivation path/);
+  });
+});

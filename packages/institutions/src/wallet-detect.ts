@@ -46,13 +46,34 @@ function detectLedgerLiveAccount(value: string): WalletDetection {
   if (Array.isArray((obj["accounts"] as unknown) ?? (obj["data"] as { accounts?: unknown } | undefined)?.accounts)) {
     return { ok: false, reason: "that's a full Ledger Live export with several accounts -- paste one account object at a time" };
   }
+  // The id names the chain: "js:2:<currency>:<key>[:<scheme>]" -- but its
+  // exact shape varies (trailing colon or not, extra segments), so split
+  // rather than demanding one layout.
   const id = typeof obj["id"] === "string" ? obj["id"] : "";
-  const m = /^js:\d+:([a-z_]+):([^:]*):([a-z_]*)$/.exec(id);
-  const currency = m?.[1] ?? (typeof obj["currencyId"] === "string" ? (obj["currencyId"] as string) : "");
-  const scheme = m?.[3] ?? "";
-  if (currency === "") return { ok: false, reason: "couldn't find the account's chain in this JSON -- expected a Ledger Live account object with an \"id\" like js:2:ethereum:0x…:" };
+  const idParts = id.startsWith("js:") ? id.split(":") : [];
+  let currency = idParts.length >= 4 ? (idParts[2] as string) : (typeof obj["currencyId"] === "string" ? (obj["currencyId"] as string) : "");
+  let scheme = idParts.length >= 5 ? (idParts[4] as string) : "";
+  const idKey = idParts.length >= 4 ? (idParts[3] as string) : "";
+
+  // Independent second source: the BIP44 derivation path. The coin type
+  // (SLIP-44) names the chain -- 44'/60'/... IS Ethereum -- and the
+  // purpose names Bitcoin's address scheme (49' segwit, 84' native
+  // segwit, 86' taproot).
+  const path = typeof obj["freshAddressPath"] === "string" ? obj["freshAddressPath"] : "";
+  const pm = /^(\d+)'?\/(\d+)'?/.exec(path);
+  if (currency === "" && pm !== null) {
+    const SLIP44: Record<string, string> = { "0": "bitcoin", "2": "litecoin", "3": "dogecoin", "60": "ethereum", "144": "ripple", "145": "bitcoin_cash", "195": "tron", "501": "solana" };
+    currency = SLIP44[pm[2] as string] ?? "";
+  }
+  if (scheme === "" && currency === "bitcoin" && pm !== null) {
+    const purpose = pm[1] as string;
+    scheme = purpose === "49" ? "segwit" : purpose === "84" ? "native_segwit" : purpose === "86" ? "taproot" : "";
+  }
+  if (currency === "") {
+    return { ok: false, reason: "couldn't work out this account's chain: the JSON has neither a js:… \"id\" nor a derivation path like 44'/60'/… -- paste the account's address directly instead" };
+  }
   const label = typeof obj["name"] === "string" && obj["name"] !== "" ? { label: obj["name"] as string } : {};
-  const candidates = [obj["xpub"], obj["freshAddress"], m?.[2]].filter((c): c is string => typeof c === "string" && c !== "");
+  const candidates = [obj["xpub"], obj["freshAddress"], idKey].filter((c): c is string => typeof c === "string" && c !== "");
   const from = (kind: WalletKind, chain: string, pick: (c: string) => boolean, missing: string): WalletDetection => {
     const v = candidates.find(pick);
     if (v === undefined) return { ok: false, reason: missing };
