@@ -8,6 +8,7 @@ import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
 import { AccountType, ChatAgent, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
+import { WalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
 import type { App } from "./app";
@@ -50,6 +51,16 @@ const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "stri
 const EbStartBody = type({ "name?": "string > 0", "institution_id?": "string > 0", country: /^[A-Z]{2}$/, bank: "string > 0", "redirect_url?": "string > 0" });
 const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
 const OpenBody = type({ url: /^https:\/\/[^\s]+$/ });
+const CoinbaseBody = type({
+  "name?": "string > 0",
+  "institution_id?": "string > 0",
+  api_key_name: "string > 0",
+  private_key: "string > 0",
+});
+const WalletBody = type({
+  "name?": "string > 0",
+  holdings: WalletHolding.array().atLeastLength(1),
+});
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -140,6 +151,23 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const body = EbCompleteBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(await app.connectEbComplete({ state: body.state, code: body.code }));
+        }
+        if (p === "/api/connect/coinbase" && req.method === "POST") {
+          const body = CoinbaseBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(
+            await app.connectCoinbase({
+              ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}),
+              apiKeyName: body.api_key_name,
+              privateKey: body.private_key,
+            }),
+          );
+        }
+        if (p === "/api/connect/wallet" && req.method === "POST") {
+          const body = WalletBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.connectWallet({ ...(body.name !== undefined ? { name: body.name } : {}), holdings: body.holdings }));
         }
         const instMatch = /^\/api\/institution\/([A-Za-z0-9_.-]+)\/(delete|enabled|refresh|upload|accounts|account|remove-account)$/.exec(p);
         if (instMatch !== null) {

@@ -30,6 +30,9 @@ export interface ConnectorConfig {
   ebBaseUrl?: string;
   /** Registered with the Enable Banking application; where the bank redirects after consent. */
   ebRedirectUrl?: string;
+  coinbaseBaseUrl?: string;
+  /** Endpoint overrides for watch-only wallets (tests, self-hosted explorers/nodes). */
+  walletApis?: Partial<Record<"btc_api" | "btc_xpub_api" | "eth_rpc" | "price_api", string>>;
   fetchImpl?: typeof fetch;
   clock?: () => Date;
 }
