@@ -106,6 +106,7 @@ export interface InstitutionOverview {
   institution_id: string; name: string; adapter: string; enabled: boolean; managed: boolean;
   accounts: InstitutionAccountRow[]; problems: string[];
   consent_until: string | null; aspsp: { name: string; country: string } | null;
+  category: string | null;
 }
 export interface InstitutionsOverview { institutions: InstitutionOverview[]; hasFacts: boolean }
 export interface ProfileRelation { legal_name: string; relationship?: string; date_of_birth?: string | null; note?: string }
@@ -198,8 +199,8 @@ export const api = {
   health: () => get<{ ok: boolean; dataDir: string }>("/api/health"),
   institutions: () => get<Array<{ institution_id: string; name: string; adapter: string; enabled?: boolean }>>("/api/institutions"),
   institutionsOverview: () => get<InstitutionsOverview>("/api/institutions-overview"),
-  addInstitution: (name: string, mode: "managed" | "files") =>
-    post<{ institution_id: string; name: string; adapter: string }>("/api/institutions", { name, mode }),
+  addInstitution: (name: string, mode: "managed" | "files", category?: "real_estate" | "crypto") =>
+    post<{ institution_id: string; name: string; adapter: string }>("/api/institutions", { name, mode, ...(category !== undefined ? { category } : {}) }),
   deleteInstitution: (id: string) => post<{ removed: boolean }>(`/api/institution/${id}/delete`),
   setInstitutionEnabled: (id: string, enabled: boolean) => post<{ changed: boolean }>(`/api/institution/${id}/enabled`, { enabled }),
   refreshInstitution: (id: string) => post<{ runId: string; status: string }>(`/api/institution/${id}/refresh`),
