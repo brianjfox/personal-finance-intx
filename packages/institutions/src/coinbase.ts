@@ -29,15 +29,68 @@ export interface CoinbaseOptions {
   fetchImpl?: typeof fetch;
 }
 
-/** The CDP request JWT: ES256, 2-minute validity, bound to one method+host+path. */
-export function coinbaseJwt(keyName: string, privateKeyPem: string, method: string, host: string, path: string, now: Date): string {
+/**
+ * Coinbase hands out two key formats: modern CDP keys are Ed25519,
+ * downloaded as a base64 string (64 bytes: seed||public key, sometimes
+ * just the 32-byte seed) inside a JSON file; older keys are ECDSA as a
+ * SEC1/PKCS8 PEM block. Auto-detect, and pick the JWT algorithm the key
+ * dictates (EdDSA vs ES256).
+ */
+export function parseCoinbaseKey(raw: string): { key: crypto.KeyObject; alg: "ES256" | "EdDSA" } {
+  const input = raw.trim().replace(/\\n/g, "\n");
+  if (input.includes("BEGIN")) {
+    let key: crypto.KeyObject;
+    try {
+      key = crypto.createPrivateKey(input);
+    } catch (e) {
+      throw new Error(`coinbase: that PEM block doesn't parse as a private key (${e instanceof Error ? e.message : String(e)})`);
+    }
+    return { key, alg: key.asymmetricKeyType === "ed25519" ? "EdDSA" : "ES256" };
+  }
+  if (/^[A-Za-z0-9+/]+=*$/.test(input)) {
+    const bytes = Buffer.from(input, "base64");
+    if (bytes.length === 32 || bytes.length === 64) {
+      // PKCS8 DER wrapper for a raw Ed25519 seed (the first 32 bytes).
+      const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), bytes.subarray(0, 32)]);
+      return { key: crypto.createPrivateKey({ key: der, format: "der", type: "pkcs8" }), alg: "EdDSA" };
+    }
+  }
+  throw new Error(
+    "coinbase: unrecognized private key -- paste either the base64 Ed25519 key from the downloaded CDP key file (or the whole JSON file), or a PEM block (BEGIN ... PRIVATE KEY)",
+  );
+}
+
+/**
+ * The downloaded CDP key file is JSON ({"name": "organizations/...",
+ * "privateKey": "..."}). Accept it pasted whole: the JSON's own fields
+ * win, since they are exactly what the portal issued.
+ */
+export function parseCoinbaseCredential(apiKeyName: string, privateKeyRaw: string): { apiKeyName: string; privateKey: string } {
+  const trimmed = privateKeyRaw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const j = JSON.parse(trimmed) as { name?: unknown; privateKey?: unknown };
+      if (typeof j.privateKey === "string" && j.privateKey !== "") {
+        return { apiKeyName: typeof j.name === "string" && j.name !== "" ? j.name : apiKeyName.trim(), privateKey: j.privateKey };
+      }
+    } catch {
+      /* not JSON after all; fall through */
+    }
+  }
+  return { apiKeyName: apiKeyName.trim(), privateKey: trimmed };
+}
+
+/** The CDP request JWT: EdDSA or ES256 per the key, 2-minute validity, bound to one method+host+path. */
+export function coinbaseJwt(keyName: string, privateKeyRaw: string, method: string, host: string, path: string, now: Date): string {
   const b64url = (b: Buffer | string): string =>
     (typeof b === "string" ? Buffer.from(b) : b).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const { key, alg } = parseCoinbaseKey(privateKeyRaw);
   const iat = Math.floor(now.getTime() / 1000);
-  const header = b64url(JSON.stringify({ alg: "ES256", kid: keyName, typ: "JWT", nonce: crypto.randomBytes(16).toString("hex") }));
+  const header = b64url(JSON.stringify({ alg, kid: keyName, typ: "JWT", nonce: crypto.randomBytes(16).toString("hex") }));
   const payload = b64url(JSON.stringify({ sub: keyName, iss: "cdp", nbf: iat, exp: iat + 120, uri: `${method} ${host}${path}` }));
-  // ES256 JWTs need the raw (r||s) signature, not DER.
-  const sig = crypto.sign("sha256", Buffer.from(`${header}.${payload}`), { key: privateKeyPem, dsaEncoding: "ieee-p1363" });
+  const data = Buffer.from(`${header}.${payload}`);
+  // ES256 JWTs need the raw (r||s) signature, not DER; Ed25519 signs the data directly.
+  const sig = alg === "ES256" ? crypto.sign("sha256", data, { key, dsaEncoding: "ieee-p1363" }) : crypto.sign(null, data, key);
   return `${header}.${payload}.${b64url(sig)}`;
 }
 

@@ -8,7 +8,6 @@
 //   <dataDir>/institutions/<id>/inbox/   file-drop inboxes (jsondrop/csvdrop)
 //   <dataDir>/runs|blobs|effects/  the workflow host (fs-host)
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -41,6 +40,8 @@ import {
 import {
   addInstitutionEntry,
   COINBASE_SERVICE,
+  parseCoinbaseCredential,
+  parseCoinbaseKey,
   defaultSecretStore,
   ENABLEBANKING_SERVICE,
   loadInstitutions,
@@ -686,12 +687,11 @@ export function createApp(opts: AppOptions): App {
       return { institution_id: institutionId, consent_until: s.validUntil, ...run };
     },
     async connectCoinbase(o) {
-      // Refuse a key that doesn't even parse before anything is stored.
-      try {
-        crypto.createPrivateKey(o.privateKey);
-      } catch {
-        throw new Error("that doesn't look like a private key -- paste the full PEM block Coinbase gave you (BEGIN ... PRIVATE KEY)");
-      }
+      // The downloaded CDP key file may be pasted whole; its fields win.
+      const cred = parseCoinbaseCredential(o.apiKeyName, o.privateKey);
+      if (cred.apiKeyName === "") throw new Error("missing the API key name (organizations/…/apiKeys/…) -- or paste the whole downloaded key file into the key box");
+      // Refuse a key that doesn't parse (Ed25519 base64 or ECDSA PEM) before anything is stored.
+      parseCoinbaseKey(cred.privateKey);
       let institutionId = o.institutionId ?? null;
       if (institutionId === null) {
         const entry = addInstitutionEntry(dataDir, {
@@ -703,8 +703,8 @@ export function createApp(opts: AppOptions): App {
       } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "coinbase")) {
         throw new Error(`${institutionId} is not a Coinbase connection`);
       }
-      storeSecret(COINBASE_SERVICE, `api_key_name:${institutionId}`, o.apiKeyName.trim());
-      storeSecret(COINBASE_SERVICE, `private_key:${institutionId}`, o.privateKey);
+      storeSecret(COINBASE_SERVICE, `api_key_name:${institutionId}`, cred.apiKeyName);
+      storeSecret(COINBASE_SERVICE, `private_key:${institutionId}`, cred.privateKey);
       loaded = reloadRegistry();
       const run = await refreshInstitution(institutionId);
       return { institution_id: institutionId, ...run };

@@ -199,7 +199,7 @@ describe("coinbase connect flow (mock API)", () => {
     const app = createApp({ dataDir: tmp(), connectors: { coinbaseBaseUrl: base, secrets } });
     try {
       // A garbage key is refused before anything is stored.
-      expect(app.connectCoinbase({ apiKeyName: "org/x/apiKeys/y", privateKey: "not a pem" })).rejects.toThrow(/doesn't look like a private key/);
+      expect(app.connectCoinbase({ apiKeyName: "org/x/apiKeys/y", privateKey: "not a pem" })).rejects.toThrow(/unrecognized private key/);
       expect(app.institutionsOverview().institutions).toHaveLength(0);
 
       const done = await app.connectCoinbase({ name: "Coinbase", apiKeyName: "org/x/apiKeys/y", privateKey: ecPem });
@@ -210,10 +210,16 @@ describe("coinbase connect flow (mock API)", () => {
       expect(nw.lines.find((l) => l.account_id === "acct.coinbase.coinbase")?.value).toBe("5000");
       expect(views.positions(app.ledger).some((p) => p.symbol === "BTC" && p.quantity === "0.1")).toBe(true);
 
-      // Rotation: same entry, new key stored.
-      const again = await app.connectCoinbase({ institutionId: "inst.coinbase", apiKeyName: "org/x/apiKeys/z", privateKey: ecPem });
+      // Rotation: same entry, new key stored -- this time the modern shape,
+      // the whole downloaded CDP key file (Ed25519, base64) pasted as-is.
+      const ed = crypto.generateKeyPairSync("ed25519");
+      const seed = Buffer.from(ed.privateKey.export({ format: "jwk" }).d as string, "base64url");
+      const pub = Buffer.from(ed.publicKey.export({ format: "jwk" }).x as string, "base64url");
+      const keyFile = JSON.stringify({ name: "organizations/x/apiKeys/ed", privateKey: Buffer.concat([seed, pub]).toString("base64") });
+      const again = await app.connectCoinbase({ institutionId: "inst.coinbase", apiKeyName: "", privateKey: keyFile });
       expect(again.institution_id).toBe("inst.coinbase");
-      expect(secrets.dump()[`${COINBASE_SERVICE}/api_key_name:inst.coinbase`]).toBe("org/x/apiKeys/z");
+      expect(again.status).toBe("completed");
+      expect(secrets.dump()[`${COINBASE_SERVICE}/api_key_name:inst.coinbase`]).toBe("organizations/x/apiKeys/ed");
       expect(app.institutionsOverview().institutions).toHaveLength(1);
     } finally {
       app.close();

@@ -54,7 +54,8 @@ const OpenBody = type({ url: /^https:\/\/[^\s]+$/ });
 const CoinbaseBody = type({
   "name?": "string > 0",
   "institution_id?": "string > 0",
-  api_key_name: "string > 0",
+  // Optional: a pasted CDP key file (JSON in private_key) carries its own name.
+  "api_key_name?": "string",
   private_key: "string > 0",
 });
 const WalletBody = type({
@@ -159,7 +160,7 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
             await app.connectCoinbase({
               ...(body.name !== undefined ? { name: body.name } : {}),
               ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}),
-              apiKeyName: body.api_key_name,
+              apiKeyName: body.api_key_name ?? "",
               privateKey: body.private_key,
             }),
           );

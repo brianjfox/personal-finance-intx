@@ -80,14 +80,17 @@ plain-words problem on the card, never a crash.
 ## Coinbase (crypto holdings)
 
 Create an API key in Coinbase (Settings → API) with the **View**
-permission ONLY — the trade/transfer scopes must be absent, not unused.
-Then in the GUI: Institutions → Connect an institution → "Connect
-Coinbase": paste the key name (`organizations/…/apiKeys/…`) and the EC
-private key PEM. Both go into the Keychain (service `fin-coinbase`,
-accounts `api_key_name:<institution_id>` / `private_key:<institution_id>`)
-via the host; the GUI never stores anything. Auth is Coinbase's CDP
-scheme: a fresh ES256 JWT per request, bound to that request's
-method+host+path, 2-minute validity. Balances come from
+permission ONLY — the trade/transfer scopes must be absent, not unused —
+and download the key file. Then in the GUI: Institutions → Connect an
+institution → "Connect Coinbase": **paste the whole downloaded JSON key
+file** into the key box (the name fills in by itself). Both key formats
+are auto-detected: modern CDP keys are **Ed25519** (a base64 string;
+JWTs signed EdDSA), older keys are **ECDSA PEM** (JWTs signed ES256).
+Everything goes into the Keychain (service `fin-coinbase`, accounts
+`api_key_name:<institution_id>` / `private_key:<institution_id>`) via
+the host; the GUI never stores anything. Auth is Coinbase's CDP scheme:
+a fresh JWT per request, bound to that request's method+host+path,
+2-minute validity. Balances come from
 `/api/v3/brokerage/accounts` (paginated); USD folds into cash, everything
 else becomes a `crypto` position priced by the public `-USD` spot
 endpoint. Unpriced assets stay as positions with an unknown value —

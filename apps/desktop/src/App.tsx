@@ -344,8 +344,8 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
       setError("Give the connection a name first — \"Coinbase\" works.");
       return;
     }
-    if (keyName.trim() === "" || pem.trim() === "") {
-      setError("Paste both the API key name (organizations/…/apiKeys/…) and the private key.");
+    if (pem.trim() === "" || (keyName.trim() === "" && !pem.trim().startsWith("{"))) {
+      setError("Paste the private key — or just paste the whole downloaded key file (JSON), which fills in everything.");
       return;
     }
     setBusy(true);
@@ -366,18 +366,31 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
   return (
     <div style={{ marginTop: 8 }}>
       <div className="small muted" style={{ marginBottom: 4 }}>
-        In Coinbase: Settings → API → create a key with the <b>View</b> permission only. Both values below go into your
-        Mac's Keychain — this app stores nothing else.
+        In Coinbase: Settings → API → create a key with the <b>View</b> permission only, and download the key file.
+        Easiest: paste the <b>whole downloaded file</b> (it's JSON) into the key box below — the name fills in by itself.
+        Everything goes into your Mac's Keychain; this app stores nothing else.
       </div>
       <div className="actions">
-        <input style={{ flex: 1 }} placeholder="API key name — organizations/…/apiKeys/…" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
+        <input style={{ flex: 1 }} placeholder="API key name — organizations/…/apiKeys/… (fills in automatically from a pasted key file)" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
       </div>
       <div className="actions" style={{ marginTop: 6 }}>
         <textarea
           style={{ flex: 1, minHeight: 80, fontFamily: "monospace", fontSize: 11 }}
-          placeholder={"-----BEGIN EC PRIVATE KEY-----\n…\n-----END EC PRIVATE KEY-----"}
+          placeholder={'Paste the downloaded key file here — {"name":"organizations/…","privateKey":"…"} — or just the private key itself'}
           value={pem}
-          onChange={(e) => setPem(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPem(v);
+            // Pasted the whole downloaded JSON key file? Fill the name in.
+            if (v.trim().startsWith("{")) {
+              try {
+                const j = JSON.parse(v) as { name?: string };
+                if (typeof j.name === "string" && j.name !== "") setKeyName(j.name);
+              } catch {
+                /* keep typing */
+              }
+            }
+          }}
         />
       </div>
       <div className="actions" style={{ marginTop: 6 }}>

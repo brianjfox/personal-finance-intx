@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import crypto from "node:crypto";
 
-import { coinbaseAdapter, coinbaseJwt, COINBASE_SERVICE, memorySecretStore, scaleDown, walletAdapter } from "../src";
+import { coinbaseAdapter, coinbaseJwt, COINBASE_SERVICE, memorySecretStore, parseCoinbaseCredential, parseCoinbaseKey, scaleDown, walletAdapter } from "../src";
 
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 const servers: Array<{ stop: () => void }> = [];
@@ -37,6 +37,35 @@ describe("coinbase jwt", () => {
     expect(payload.exp - payload.nbf).toBe(120);
     const ok = crypto.verify("sha256", Buffer.from(`${h}.${p}`), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(sig, "base64url"));
     expect(ok).toBe(true);
+  });
+
+  test("an Ed25519 key -- the CDP portal's base64 format -- signs EdDSA JWTs the public key verifies", () => {
+    const kp = crypto.generateKeyPairSync("ed25519");
+    // The downloaded format: base64(seed || raw public key), 64 bytes.
+    const seed = Buffer.from(kp.privateKey.export({ format: "jwk" }).d as string, "base64url");
+    const pub = Buffer.from(kp.publicKey.export({ format: "jwk" }).x as string, "base64url");
+    const portalKey = Buffer.concat([seed, pub]).toString("base64");
+
+    expect(parseCoinbaseKey(portalKey).alg).toBe("EdDSA");
+    expect(parseCoinbaseKey(seed.toString("base64")).alg).toBe("EdDSA"); // bare 32-byte seed too
+    const jwt = coinbaseJwt(KEY_NAME, portalKey, "GET", "api.coinbase.com", "/api/v3/brokerage/accounts", NOW);
+    const [h, p, sig] = jwt.split(".") as [string, string, string];
+    const header = JSON.parse(Buffer.from(h, "base64url").toString()) as { alg: string; kid: string };
+    expect(header).toMatchObject({ alg: "EdDSA", kid: KEY_NAME });
+    expect(crypto.verify(null, Buffer.from(`${h}.${p}`), kp.publicKey, Buffer.from(sig, "base64url"))).toBe(true);
+
+    // Ed25519 PEM (PKCS8) also works.
+    const pem = kp.privateKey.export({ type: "pkcs8", format: "pem" }) as string;
+    expect(parseCoinbaseKey(pem).alg).toBe("EdDSA");
+    // Garbage is refused in plain words.
+    expect(() => parseCoinbaseKey("not a key at all !!!")).toThrow(/unrecognized private key/);
+  });
+
+  test("the whole downloaded key file can be pasted; its own name wins", () => {
+    const file = JSON.stringify({ name: "organizations/o/apiKeys/k", privateKey: "AAAA" });
+    expect(parseCoinbaseCredential("typed-name", file)).toEqual({ apiKeyName: "organizations/o/apiKeys/k", privateKey: "AAAA" });
+    expect(parseCoinbaseCredential("typed-name", "raw-key")).toEqual({ apiKeyName: "typed-name", privateKey: "raw-key" });
+    expect(parseCoinbaseCredential("", file).apiKeyName).toBe("organizations/o/apiKeys/k");
   });
 });
 
