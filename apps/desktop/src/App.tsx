@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, money, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
+import { api, fxState, money, moneyNative, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
 type Page = "queue" | "dashboard" | "positions" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
@@ -17,9 +17,14 @@ export function App() {
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
+  const [, setFxTick] = useState(0);
   useEffect(() => {
     api.queue().then(setQueue).catch(() => setQueue([]));
     api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
+    api.fx().then((fx) => {
+      setFxRates(fx);
+      setFxTick((t) => t + 1); // re-render with rates in hand
+    }).catch(() => {});
   }, [tick]);
 
   // Nothing at all yet: the welcome screen takes over (except when the
@@ -163,7 +168,7 @@ const fromRel = (r: Rel): import("./api").ProfileRelation => ({
 
 interface ProfileDraft {
   legal_name: string; preferred_name: string; date_of_birth: string; ssn: string; ssn_last4: string | null; clear_ssn: boolean;
-  citizenship: string; country_of_residence: string; state_or_province: string; marital_status: string;
+  citizenship: string; country_of_residence: string; state_or_province: string; marital_status: string; preferred_currency: string;
   has_spouse: boolean; spouse: Rel; children: Rel[]; others: Rel[];
 }
 
@@ -179,6 +184,7 @@ function draftFrom(p: import("./api").ProfileRedacted): ProfileDraft {
     country_of_residence: p.person?.country_of_residence ?? "",
     state_or_province: p.person?.state_or_province ?? "",
     marital_status: p.person?.marital_status ?? "",
+    preferred_currency: p.preferred_currency ?? "USD",
     has_spouse: p.spouse != null,
     spouse: toRel(p.spouse),
     children: (p.children ?? []).map(toRel),
@@ -198,6 +204,7 @@ function saveInputFrom(d: ProfileDraft): import("./api").ProfileSave {
       ...(d.state_or_province.trim() !== "" ? { state_or_province: d.state_or_province.trim() } : {}),
       ...(d.marital_status !== "" ? { marital_status: d.marital_status } : {}),
     },
+    preferred_currency: d.preferred_currency,
     ...(d.has_spouse && d.spouse.legal_name.trim() !== "" ? { spouse: fromRel(d.spouse) } : { spouse: null }),
     children: d.children.filter((c) => c.legal_name.trim() !== "").map(fromRel),
     others: d.others.filter((o) => o.legal_name.trim() !== "").map(fromRel),
@@ -302,6 +309,11 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
         <input style={{ width: 180 }} placeholder="Citizenship (country)" value={d.citizenship} disabled={busy} onChange={(e) => setD((x) => ({ ...x, citizenship: e.target.value }))} />
         <input style={{ width: 180 }} placeholder="Country of residence" value={d.country_of_residence} disabled={busy} onChange={(e) => setD((x) => ({ ...x, country_of_residence: e.target.value }))} />
         <input style={{ width: 160 }} placeholder="State / province" value={d.state_or_province} disabled={busy} onChange={(e) => setD((x) => ({ ...x, state_or_province: e.target.value }))} />
+        <select value={d.preferred_currency} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_currency: e.target.value }))} title="Everything displays converted into this currency">
+          {["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "TRY", "ILS", "INR", "KRW", "CNY", "HKD", "SGD", "MXN", "BRL", "ZAR"].map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
         <select value={d.marital_status} disabled={busy} onChange={(e) => setD((x) => ({ ...x, marital_status: e.target.value }))}>
           <option value="">Marital status…</option>
           <option value="single">Single</option>
@@ -667,12 +679,6 @@ const ACCOUNT_TYPE_OPTIONS: ReadonlyArray<readonly [string, string]> = [
 const typeLabel = (t: string): string => ACCOUNT_TYPE_OPTIONS.find(([v]) => v === t)?.[1] ?? t;
 const OWED_TYPES = new Set(["credit_card", "mortgage", "loan", "heloc"]);
 
-/** "$1,234.56" -> "1234.56"; returns null when it isn't a plain amount. */
-function cleanAmount(raw: string): string | null {
-  const s = raw.replace(/[$,\s]/g, "");
-  return /^-?\d+(\.\d+)?$/.test(s) ? s : null;
-}
-
 type HoldingsTab = "institutions" | "real_estate" | "crypto";
 const CRYPTO_ADAPTERS = new Set(["coinbase", "kraken", "wallet"]);
 
@@ -795,16 +801,15 @@ function AddPropertyForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
       setError("Name the property — \"Our house\" or \"12 Main St\" works.");
       return;
     }
-    const amount = cleanAmount(value);
-    if (amount === null) {
-      setError("Enter the current value as a plain number, like 1250000.");
+    if (value.trim() === "") {
+      setError("Enter the current value — 1250000, $1,250,000, and €1.250.000 all work.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const inst = await api.addInstitution(name.trim(), "managed", "real_estate");
-      await api.saveManagedAccount(inst.institution_id, { name: name.trim(), type: "real_estate", value: amount });
+      await api.saveManagedAccount(inst.institution_id, { name: name.trim(), type: "real_estate", value: value.trim() });
       onDone();
     } catch (e) {
       setError(String(e));
@@ -1551,17 +1556,16 @@ function ManagedAccountEditor({ inst, disabled, onSave }: { inst: InstitutionOve
     setError(null);
   };
   const save = () => {
-    const amount = cleanAmount(value);
     if (name.trim() === "") {
       setError("Name the account — e.g. \"Everyday checking\" or \"The house\".");
       return;
     }
-    if (amount === null) {
-      setError("Enter the value as a plain number, like 1234.56.");
+    if (value.trim() === "") {
+      setError("Enter the value — 1234.56, $1,234.56, and €1.234,56 all work; the currency is kept with it.");
       return;
     }
     setError(null);
-    onSave({ ...(existing !== undefined ? { account_id: existing.account_id } : {}), name: name.trim(), type, value: amount });
+    onSave({ ...(existing !== undefined ? { account_id: existing.account_id } : {}), name: name.trim(), type, value: value.trim() });
     if (existing === undefined) {
       setName("");
       setValue("");
@@ -1715,6 +1719,17 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
     <>
       <h2>Net worth</h2>
       {nw.provisional && <div className="banner">Some figures rest on provisional facts. Downstream agents are held until the exception queue is cleared.</div>}
+      {(nw.fx_missing ?? []).length > 0 && (
+        <div className="banner">
+          No exchange rate available for {(nw.fx_missing ?? []).join(", ")} — those accounts show their native amounts and are excluded from the totals.
+        </div>
+      )}
+      {nw.lines.some((l) => l.currency !== nw.currency) && fxState() !== null && (
+        <p className="small muted">
+          Foreign-currency accounts converted to {nw.currency} at ECB reference rates of {fxState()!.date}
+          {fxState()!.stale ? " (offline — last known rates)" : ""}. Native amounts shown beneath.
+        </p>
+      )}
       <div className="cards">
         <div className={`card ${nw.provisional ? "prov" : ""}`}><div className="label">Net worth</div><div className="value">{money(nw.net_worth, nw.currency)}</div></div>
         <div className="card"><div className="label">Assets</div><div className="value">{money(nw.assets, nw.currency)}</div></div>
@@ -1731,6 +1746,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <td className="num">
                 {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
                 {l.fact_ids.length > 1 && <span className="small muted"> (+{l.fact_ids.length - 1} facts)</span>}
+                {l.currency !== nw.currency && <div className="small muted">{moneyNative(l.value, l.currency)}</div>}
               </td>
               <td className="small muted">{l.basis}</td>
               <td className="small">{when(l.observed_at)}</td>

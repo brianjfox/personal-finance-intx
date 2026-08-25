@@ -182,10 +182,11 @@ at a mock or proxy.
 
 ## Known limits
 
-- **Multi-currency**: a EUR account enters net worth at face value —
-  no FX conversion exists yet. Deciding how to convert (dated FX-rate
-  facts vs per-currency reporting) is its own design decision, recorded
-  as deferred in DECISIONS D-024.
+- **Multi-currency**: resolved (D-031). The ledger stores every value in
+  its native currency; display converts dynamically into the profile's
+  preferred currency at current ECB reference rates (frankfurter.app,
+  cached ~12h, stale-marked offline). A currency without a rate shows
+  native and is excluded from totals, by name — never silently mixed.
 - Plaid investment cost-basis/lot data is spottier than a broker's own
   export; missing basis surfaces as the existing `missing_cost_basis`
   finding.

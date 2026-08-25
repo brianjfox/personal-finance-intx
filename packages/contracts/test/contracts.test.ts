@@ -199,3 +199,44 @@ describe("ids", () => {
     expect(a.startsWith("fact_")).toBe(true);
   });
 });
+
+describe("parseMoneyInput", () => {
+  const { parseMoneyInput } = require("../src/money") as typeof import("../src/money");
+  const cases: Array<[string, string, string | null]> = [
+    ["$1,250,000.50", "1250000.50", "USD"],
+    ["€1.250.000,50", "1250000.50", "EUR"],
+    ["£12,000", "12000", "GBP"],
+    ["¥1500000", "1500000", "JPY"],
+    ["CHF 5'000", "5000", "CHF"],
+    ["1 250 000,50 €", "1250000.50", "EUR"],
+    ["USD 1200", "1200", "USD"],
+    ["1200 eur", "1200", "EUR"],
+    ["CA$99.95", "99.95", "CAD"],
+    ["R$ 2.500,00", "2500.00", "BRL"],
+    ["(1,200)", "-1200", "USD"],   // wait: no symbol -> null currency
+  ];
+  test("symbols, ISO codes, and locale separators", () => {
+    for (const [input, amount] of cases.slice(0, 10)) {
+      const r = parseMoneyInput(input);
+      expect(r?.amount).toBe(amount);
+    }
+    expect(parseMoneyInput("$1,250,000.50")?.currency).toBe("USD");
+    expect(parseMoneyInput("€1.250.000,50")?.currency).toBe("EUR");
+    expect(parseMoneyInput("CA$99.95")?.currency).toBe("CAD");
+    expect(parseMoneyInput("R$ 2.500,00")?.currency).toBe("BRL");
+    expect(parseMoneyInput("1200 eur")?.currency).toBe("EUR");
+  });
+  test("plain numbers, negatives, ambiguity, and garbage", () => {
+    expect(parseMoneyInput("1250000")).toEqual({ amount: "1250000", currency: null });
+    expect(parseMoneyInput("1,25")).toEqual({ amount: "1.25", currency: null });
+    expect(parseMoneyInput("1.250")).toEqual({ amount: "1250", currency: null }); // exact grouping = thousands
+    expect(parseMoneyInput("1250.50")).toEqual({ amount: "1250.50", currency: null });
+    expect(parseMoneyInput("(1,200)")).toEqual({ amount: "-1200", currency: null });
+    expect(parseMoneyInput("-€500")).toEqual({ amount: "-500", currency: "EUR" });
+    expect(parseMoneyInput("5 000 kr")?.amount).toBe("5000");
+    expect(parseMoneyInput("5 000 kr")?.currency).toBeNull(); // kr is ambiguous: never guessed
+    expect(parseMoneyInput("hello")).toBeNull();
+    expect(parseMoneyInput("1,23,45")).toBeNull();
+    expect(parseMoneyInput("")).toBeNull();
+  });
+});

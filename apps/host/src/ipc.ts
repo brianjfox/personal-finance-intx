@@ -44,7 +44,7 @@ const ManagedAccountBody = type({
   name: "string > 0",
   type: AccountType,
   "currency?": /^[A-Z0-9]{2,10}$/,
-  value: /^-?\d+(\.\d+)?$/,
+  value: "string > 0",
 });
 const RemoveAccountBody = type({ account_id: "string > 0" });
 const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "string > 0", "link_token?": "string > 0", "public_token?": "string > 0" });
@@ -107,7 +107,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
       const asOf = { ...(q.get("effective_at") ? { effectiveAt: q.get("effective_at") as string } : {}), ...(q.get("observed_at") ? { observedAt: q.get("observed_at") as string } : {}) };
       try {
         if (p === "/api/health") return json({ ok: true, dataDir: app.dataDir, now: new Date().toISOString() });
-        if (p === "/api/net-worth") return json(views.netWorth(app.ledger, asOf));
+        if (p === "/api/fx") return json(await app.getFx());
+        if (p === "/api/net-worth") {
+          const fx = await app.getFx();
+          return json(views.netWorth(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates }));
+        }
         if (p === "/api/accounts") return json(views.accounts(app.ledger, asOf));
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
         if (p === "/api/positions") {

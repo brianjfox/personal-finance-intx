@@ -38,6 +38,8 @@ export type ProfileRelation = typeof ProfileRelation.infer;
 
 export const HouseholdProfile = type({
   person: ProfilePerson,
+  /** All values display converted into this currency (ISO). Default USD. */
+  "preferred_currency?": "string",
   "spouse?": ProfileRelation.or("null"),
   children: ProfileRelation.array(),
   /** Anyone else who should appear in a will: parents, siblings, godchildren, charities. */

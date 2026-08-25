@@ -25,6 +25,7 @@ import {
   EstateFile,
   HouseholdProfile,
   InvestmentPlan,
+  parseMoneyInput,
   redactProfile,
   newId,
   TAX_QUARTERS,
@@ -89,6 +90,7 @@ import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflo
 import { createConnectors, type ConnectorConfig } from "./connect";
 import { localSource, readInferenceSettings, testInference, writeInferenceSettings, type InferenceSettings } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
+import { fxRates, type FxRates } from "./fx";
 import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
 import {
   credentialsStatus,
@@ -225,6 +227,8 @@ export interface App {
   connectKraken(opts: { name?: string; institutionId?: string; apiKey: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** The account list the Ledger app (Ledger Wallet / Ledger Live) keeps on this machine (local read only; nothing is sent anywhere). */
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
+  /** Display FX: current ECB rates into the preferred currency (cached ~12h; stale-marked offline). */
+  getFx(): Promise<FxRates>;
   /** Which AI engine answers: Anthropic's cloud, or a local OpenAI-compatible server (Apple MLX, LM Studio). */
   getInferenceSettings(): InferenceSettings;
   /** Switch engines; validated (local http only to loopback). Applies to the next turn -- no restart. */
@@ -398,6 +402,9 @@ export function createApp(opts: AppOptions): App {
     ...(opts.connectors?.krakenBaseUrl ?? process.env["FIN_KRAKEN_BASE_URL"]
       ? { krakenBaseUrl: (opts.connectors?.krakenBaseUrl ?? process.env["FIN_KRAKEN_BASE_URL"]) as string }
       : {}),
+    ...(opts.connectors?.fxBaseUrl ?? process.env["FIN_FX_BASE_URL"]
+      ? { fxBaseUrl: (opts.connectors?.fxBaseUrl ?? process.env["FIN_FX_BASE_URL"]) as string }
+      : {}),
     ...(opts.connectors?.walletApis !== undefined ? { walletApis: opts.connectors.walletApis } : {}),
     ...(opts.connectors?.fetchImpl !== undefined ? { fetchImpl: opts.connectors.fetchImpl } : {}),
   };
@@ -433,6 +440,7 @@ export function createApp(opts: AppOptions): App {
     if (!fs.existsSync(profilePath)) return null;
     return assertType(HouseholdProfile, JSON.parse(fs.readFileSync(profilePath, "utf8")), "profile.json");
   };
+  const preferredCurrency = (): string => profile()?.preferred_currency ?? "USD";
   const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
   const actions = buildActions(actx);
   const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
@@ -664,6 +672,15 @@ export function createApp(opts: AppOptions): App {
       return removed;
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
+    getFx() {
+      return fxRates({
+        dataDir,
+        to: preferredCurrency(),
+        clock,
+        ...(connectorCfg.fxBaseUrl !== undefined ? { base_url: connectorCfg.fxBaseUrl } : {}),
+        ...(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {}),
+      });
+    },
     getInferenceSettings() {
       return inferenceSettings();
     },
@@ -748,7 +765,15 @@ export function createApp(opts: AppOptions): App {
     async saveManagedAccount(institutionId, input) {
       const entry = loaded.entries.find((e) => e.institution_id === institutionId);
       if (entry === undefined || !isManaged(entry)) throw new Error(`${institutionId} is not a managed institution`);
-      const account = upsertManagedAccount(dataDir, institutionId, input, clock());
+      // Read the amount the way it was typed: "$1,250,000.50", "€1.250.000,50",
+      // "CHF 5'000" -- the detected currency is stored WITH the value.
+      const parsed = parseMoneyInput(input.value);
+      if (parsed === null) {
+        throw new Error(`couldn't read ${JSON.stringify(input.value)} as an amount -- try 1234.56, $1,234.56, or €1.234,56`);
+      }
+      const existing = input.account_id !== undefined ? readManagedAccounts(dataDir, institutionId).find((a) => a.account_id === input.account_id) : undefined;
+      const currency = input.currency ?? parsed.currency ?? existing?.currency ?? preferredCurrency();
+      const account = upsertManagedAccount(dataDir, institutionId, { ...input, value: parsed.amount, currency }, clock());
       const run = await refreshInstitution(institutionId);
       return { account, ...run };
     },

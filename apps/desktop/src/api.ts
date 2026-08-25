@@ -3,10 +3,12 @@
 export interface NetWorthLine {
   account_id: string; name: string; type: string; value: string; currency: string;
   basis: string; fact_ids: string[]; observed_at: string | null; provisional: boolean;
+  display_value?: string | null;
 }
 export interface NetWorth {
   assets: string; liabilities: string; net_worth: string; currency: string; lines: NetWorthLine[]; provisional: boolean;
   as_of: { effective_at: string | null; observed_at: string | null };
+  fx_missing?: string[];
 }
 export interface Position {
   account_id: string; symbol: string; name: string | null; asset_class: string; quantity: string; price: string | null;
@@ -119,6 +121,7 @@ export interface ProfileRedacted {
   spouse?: ProfileRelation | null;
   children?: ProfileRelation[];
   others?: ProfileRelation[];
+  preferred_currency?: string;
   updated_at?: string;
 }
 export interface ProfileSave {
@@ -129,6 +132,7 @@ export interface ProfileSave {
   spouse?: ProfileRelation | null;
   children: ProfileRelation[];
   others: ProfileRelation[];
+  preferred_currency?: string;
   clear_ssn?: boolean;
 }
 
@@ -197,6 +201,7 @@ export const api = {
   revoke: (insId: string, note: string) => post<{ replayed: boolean }>(`/api/instruction/${insId}/revoke`, { note }),
   exportBreakGlass: () => post<{ dir: string; files: number; documents: number }>("/api/export"),
   health: () => get<{ ok: boolean; dataDir: string }>("/api/health"),
+  fx: () => get<{ to: string; date: string; rates: Record<string, string>; stale: boolean }>("/api/fx"),
   institutions: () => get<Array<{ institution_id: string; name: string; adapter: string; enabled?: boolean }>>("/api/institutions"),
   institutionsOverview: () => get<InstitutionsOverview>("/api/institutions-overview"),
   addInstitution: (name: string, mode: "managed" | "files", category?: "real_estate" | "crypto") =>
@@ -265,11 +270,35 @@ export const api = {
     ),
 };
 
+/** Display FX state: set once per refresh from /api/fx; money() converts DYNAMICALLY into it. */
+let FX: { to: string; date: string; rates: Record<string, string>; stale: boolean } | null = null;
+export function setFxRates(fx: typeof FX): void {
+  FX = fx;
+}
+export function fxState(): typeof FX {
+  return FX;
+}
+
+const fmt = (n: number, currency: string): string =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
+
+/** Format for display, converted into the preferred currency when a rate exists; native otherwise. */
 export function money(v: string | null | undefined, currency = "USD"): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
   if (!Number.isFinite(n)) return v;
-  return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
+  if (FX !== null && currency !== FX.to) {
+    const rate = FX.rates[currency];
+    if (rate !== undefined) return fmt(n * Number(rate), FX.to);
+  }
+  return fmt(n, currency);
+}
+
+/** The native form, for showing alongside a converted figure. */
+export function moneyNative(v: string | null | undefined, currency = "USD"): string {
+  if (v === null || v === undefined) return "—";
+  const n = Number(v);
+  return Number.isFinite(n) ? fmt(n, currency) : v;
 }
 export function when(iso: string | null | undefined): string {
   if (!iso) return "—";
