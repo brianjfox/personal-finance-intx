@@ -36,9 +36,17 @@ export function detectWalletHolding(raw: string): WalletDetection {
     return { ok: false, reason: "that starts like an Ethereum address but isn't 40 hex characters -- check for a missing or extra character" };
   }
 
-  // Extended keys: legacy xpub works with the lookup API; segwit variants do not.
+  // Extended keys: legacy xpub works with the lookup API; segwit variants
+  // do not. An xpub does NOT say which coin it is for (the prefix is just
+  // BIP32's Bitcoin-network version bytes and every secp256k1 chain shares
+  // the format) -- so say what interpretation is being applied.
   if (/^xpub[1-9A-HJ-NP-Za-km-z]{20,}$/.test(value)) {
-    return { ok: true, kind: "btc_xpub", chain: "Bitcoin (legacy extended key)" };
+    return {
+      ok: true,
+      kind: "btc_xpub",
+      chain: "Bitcoin (legacy extended key)",
+      note: "an extended key doesn't name its coin; this one is read as Bitcoin. If it came from an Ethereum account, paste the 0x… address instead",
+    };
   }
   const xpubish = /^([yzuv]pub)[1-9A-HJ-NP-Za-km-z]{20,}$/.exec(value);
   if (xpubish !== null) {

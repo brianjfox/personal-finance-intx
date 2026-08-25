@@ -403,23 +403,23 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
 
 /** Watch-only wallet: paste addresses; the chain is recognized from the address itself. */
 function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
-  const [rows, setRows] = useState<Array<{ value: string; label: string; chain: string | null; problem: string | null }>>([
-    { value: "", label: "", chain: null, problem: null },
+  const [rows, setRows] = useState<Array<{ value: string; label: string; chain: string | null; note: string | null; problem: string | null }>>([
+    { value: "", label: "", chain: null, note: null, problem: null },
   ]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const setRow = (i: number, patch: Partial<{ value: string; label: string; chain: string | null; problem: string | null }>) =>
+  const setRow = (i: number, patch: Partial<{ value: string; label: string; chain: string | null; note: string | null; problem: string | null }>) =>
     setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
   const detect = async (i: number, value: string) => {
     if (value.trim() === "") {
-      setRow(i, { chain: null, problem: null });
+      setRow(i, { chain: null, note: null, problem: null });
       return;
     }
     try {
       const d = await api.walletDetect(value);
-      setRow(i, d.ok ? { chain: d.chain, problem: null } : { chain: null, problem: d.reason });
+      setRow(i, d.ok ? { chain: d.chain, note: d.note ?? null, problem: null } : { chain: null, note: null, problem: d.reason });
     } catch {
-      setRow(i, { chain: null, problem: null });
+      setRow(i, { chain: null, note: null, problem: null });
     }
   };
   const connect = async () => {
@@ -466,11 +466,12 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
             <input style={{ width: 130 }} placeholder="label (optional)" value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
             {r.chain !== null && <span className="pill low">{r.chain}</span>}
           </div>
+          {r.note !== null && <div className="small muted" style={{ marginTop: 2 }}>{r.note}</div>}
           {r.problem !== null && <div className="small" style={{ marginTop: 2 }}><span className="pill high">{r.problem}</span></div>}
         </div>
       ))}
       <div className="actions" style={{ marginTop: 6 }}>
-        <button className="secondary" disabled={busy} onClick={() => setRows((r) => [...r, { value: "", label: "", chain: null, problem: null }])}>
+        <button className="secondary" disabled={busy} onClick={() => setRows((r) => [...r, { value: "", label: "", chain: null, note: null, problem: null }])}>
           Add another address
         </button>
         <button disabled={busy} onClick={() => void connect()}>{busy ? "reading the blockchain…" : "Watch this wallet"}</button>
