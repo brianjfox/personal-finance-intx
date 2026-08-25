@@ -311,3 +311,71 @@ describe("ledger live JSON shape variants (the id layout is not fixed)", () => {
     if (!d.ok) expect(d.reason).toMatch(/neither a js:… "id" nor a derivation path/);
   });
 });
+
+describe("kraken adapter (mock API)", () => {
+  const { krakenAdapter, krakenSign, normalizeKrakenAsset, KRAKEN_SERVICE } = require("../src/kraken") as typeof import("../src/kraken");
+  const SECRET = crypto.randomBytes(64).toString("base64");
+
+  test("legacy codes and earn suffixes normalize onto plain symbols", () => {
+    expect(normalizeKrakenAsset("XXBT")).toBe("BTC");
+    expect(normalizeKrakenAsset("XBT.M")).toBe("BTC");
+    expect(normalizeKrakenAsset("SOL.S")).toBe("SOL");
+    expect(normalizeKrakenAsset("ZUSD")).toBe("USD");
+    expect(normalizeKrakenAsset("ETH2.S")).toBe("ETH");
+    expect(normalizeKrakenAsset("ADA")).toBe("ADA");
+  });
+
+  test("signs requests the server can verify; aggregates variants; USD is cash; API errors are plain words", async () => {
+    const seenNonces: string[] = [];
+    const base = serve(async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "60000" } });
+      if (url.pathname === "/v2/prices/SOL-USD/spot") return Response.json({ data: { amount: "200" } });
+      if (url.pathname === "/v2/prices/EUR-USD/spot") return Response.json({ data: { amount: "1.10" } });
+      if (url.pathname === "/0/private/Balance" && req.method === "POST") {
+        const postData = await req.text();
+        const nonce = new URLSearchParams(postData).get("nonce") ?? "";
+        seenNonces.push(nonce);
+        const expected = krakenSign("/0/private/Balance", nonce, postData, SECRET);
+        if (req.headers.get("API-Key") !== "key-1" || req.headers.get("API-Sign") !== expected) {
+          return Response.json({ error: ["EAPI:Invalid signature"] });
+        }
+        return Response.json({
+          error: [],
+          result: { ZUSD: "1200.50", XXBT: "0.5", "XBT.M": "0.25", "SOL.S": "10", ZEUR: "100", DUST: "0" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const secrets = memorySecretStore({
+      [`${KRAKEN_SERVICE}/api_key:inst.kraken`]: "key-1",
+      [`${KRAKEN_SERVICE}/private_key:inst.kraken`]: SECRET,
+    });
+    const adapter = krakenAdapter({ institution_id: "inst.kraken", base_url: base, price_api: base, secrets });
+    const out = await adapter.fetch({ now: NOW });
+    expect(seenNonces).toHaveLength(1);
+    const acct = out.snapshot.accounts[0]!;
+    expect(acct.account_id).toBe("acct.kraken.kraken");
+    const pos = new Map((acct.positions ?? []).map((p) => [p.instrument.symbol, p]));
+    expect([...pos.keys()].sort()).toEqual(["BTC", "EUR", "SOL"]); // DUST zero dropped, USD is cash
+    expect(pos.get("BTC")).toMatchObject({ quantity: "0.75", market_value: "45000.00" }); // spot + earn summed
+    expect(pos.get("EUR")?.instrument.asset_class).toBe("cash");
+    const bal = new Map(acct.balances.map((b) => [b.balance_type, b.amount]));
+    expect(bal.get("cash")).toBe("1200.5");
+    expect(bal.get("total")).toBe("48310.5"); // 45000 + 2000 + 110 + 1200.50
+    expect(out.raw[0]?.filename).toBe("kraken-2026-08-25.json");
+
+    // A refused key surfaces Kraken's own error, in plain words.
+    const badSecrets = memorySecretStore({
+      [`${KRAKEN_SERVICE}/api_key:inst.kraken`]: "wrong",
+      [`${KRAKEN_SERVICE}/private_key:inst.kraken`]: SECRET,
+    });
+    const bad = krakenAdapter({ institution_id: "inst.kraken", base_url: base, price_api: base, secrets: badSecrets });
+    expect(bad.fetch({ now: NOW })).rejects.toThrow(/EAPI:Invalid signature/);
+  });
+
+  test("missing key fails in plain words", async () => {
+    const adapter = krakenAdapter({ institution_id: "inst.kraken", base_url: "http://127.0.0.1:9", secrets: memorySecretStore() });
+    expect(adapter.fetch({ now: NOW })).rejects.toThrow(/not connected.*Kraken API key/);
+  });
+});

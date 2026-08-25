@@ -2,6 +2,7 @@ export * from "./adapter";
 export * from "./coinbase";
 export * from "./csv";
 export * from "./jsondrop";
+export * from "./kraken";
 export * from "./csvdrop";
 export * from "./enablebanking";
 export * from "./fixture";

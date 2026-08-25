@@ -265,7 +265,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
 function TokenRow({ t, onChanged }: { t: CredentialsData["tokens"][number]; onChanged: () => void }) {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
-  const kind = t.adapter === "plaid" ? "Plaid access token" : t.adapter === "enablebanking" ? "bank consent session" : "Coinbase API key";
+  const kind = t.adapter === "plaid" ? "Plaid access token" : t.adapter === "enablebanking" ? "bank consent session" : t.adapter === "kraken" ? "Kraken API key" : "Coinbase API key";
   const remove = async () => {
     setBusy(true);
     try {
@@ -359,7 +359,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
 
 function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb" | "coinbase" | "wallet">("managed");
+  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb" | "coinbase" | "kraken" | "wallet">("managed");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
@@ -401,11 +401,13 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
         {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys — set them up once on the Credentials page.")}
         {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key — set it up once on the Credentials page.")}
         {radio("coinbase", "Connect Coinbase (crypto holdings)", "Uses a view-only Coinbase API key you create — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
+        {radio("kraken", "Connect Kraken (crypto holdings)", "Uses a Kraken API key with only the Query Funds permission — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
         {radio("wallet", "Watch a self-custody wallet (Ledger, Trezor, any address)", "Paste public addresses; balances are read from the blockchain. An address can never move funds. The addresses are disclosed to public chain-data services.")}
       </div>
       {mode === "plaid" && <PlaidConnect name={name} institutionId={null} onDone={onDone} />}
       {mode === "eb" && <EbConnect name={name} institutionId={null} preset={null} onDone={onDone} />}
       {mode === "coinbase" && <CoinbaseConnect name={name} institutionId={null} onDone={onDone} />}
+      {mode === "kraken" && <KrakenConnect name={name} institutionId={null} onDone={onDone} />}
       {mode === "wallet" && <WalletConnect name={name} onDone={onDone} />}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <div className="actions" style={{ marginTop: 8 }}>
@@ -751,6 +753,56 @@ function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
   );
 }
 
+/** Kraken: paste the read-only API key pair; straight to the Keychain via the host. */
+function KrakenConnect({ name, institutionId, onDone }: { name: string; institutionId: string | null; onDone: () => void }) {
+  const [apiKey, setApiKey] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const connect = async () => {
+    if (institutionId === null && name.trim() === "") {
+      setError("Give the connection a name first — \"Kraken\" works.");
+      return;
+    }
+    if (apiKey.trim() === "" || secret.trim() === "") {
+      setError("Paste both the API key and the private key from Kraken.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.connectKraken({
+        ...(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() }),
+        api_key: apiKey.trim(),
+        private_key: secret.trim(),
+      });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>
+        In Kraken: Settings → API → create a key with only the <b>Query Funds</b> permission. Both values go into your
+        Mac's Keychain; this app stores nothing else.
+      </div>
+      <div className="actions">
+        <input style={{ flex: 1 }} type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input style={{ flex: 1 }} type="password" placeholder="Private key" value={secret} onChange={(e) => setSecret(e.target.value)} />
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button disabled={busy} onClick={() => void connect()}>{busy ? "connecting and fetching…" : "Connect Kraken"}</button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 /** The countries Enable Banking covers (EU/EEA + UK), by name. */
 const EB_COUNTRIES: ReadonlyArray<readonly [string, string]> = [
   ["AT", "Austria"], ["BE", "Belgium"], ["BG", "Bulgaria"], ["HR", "Croatia"], ["CY", "Cyprus"],
@@ -956,7 +1008,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
   );
 }
 
-const CONNECTOR_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "wallet"]);
+const CONNECTOR_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "kraken", "wallet"]);
 
 /** Connector institutions: automatic read-only updates, consent status, and the reconnect flow. */
 function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: InstitutionOverview; disabled: boolean; onUpdate: () => void; onChanged: () => void }) {
@@ -982,7 +1034,7 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
         <button className="secondary" disabled={disabled} onClick={onUpdate}>Update now</button>
         {reconnectable && (
           <button className="secondary" disabled={disabled} onClick={() => setReconnecting((r) => !r)}>
-            {reconnecting ? "Hide reconnect" : inst.adapter === "coinbase" ? "Replace the API key" : "Reconnect"}
+            {reconnecting ? "Hide reconnect" : inst.adapter === "coinbase" || inst.adapter === "kraken" ? "Replace the API key" : "Reconnect"}
           </button>
         )}
       </div>
@@ -994,6 +1046,9 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
       )}
       {reconnecting && inst.adapter === "coinbase" && (
         <CoinbaseConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
+      )}
+      {reconnecting && inst.adapter === "kraken" && (
+        <KrakenConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}
     </div>
   );

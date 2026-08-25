@@ -12,6 +12,7 @@ import { coinbaseAdapter } from "./coinbase";
 import { csvDropAdapter, type CsvDropOptions } from "./csvdrop";
 import { enableBankingAdapter } from "./enablebanking";
 import { jsonDropAdapter } from "./jsondrop";
+import { krakenAdapter } from "./kraken";
 import { plaidAdapter, PLAID_BASE_URLS } from "./plaid";
 import type { SecretStore } from "./secrets";
 import { walletAdapter, WalletHolding } from "./wallet";
@@ -19,7 +20,7 @@ import { walletAdapter, WalletHolding } from "./wallet";
 export const InstitutionEntry = type({
   institution_id: /^inst\.[A-Za-z0-9_-]+$/,
   name: "string",
-  adapter: "'jsondrop' | 'csvdrop' | 'plaid' | 'enablebanking' | 'coinbase' | 'wallet'",
+  adapter: "'jsondrop' | 'csvdrop' | 'plaid' | 'enablebanking' | 'coinbase' | 'wallet' | 'kraken'",
   /** `false` pauses the connection: the entry stays listed but no adapter is built. */
   "enabled?": "boolean",
   "options?": "Record<string, unknown>",
@@ -157,6 +158,13 @@ export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: Sec
       return coinbaseAdapter({
         institution_id: e.institution_id,
         ...(str("base_url") !== undefined ? { base_url: str("base_url") as string } : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+      });
+    case "kraken":
+      return krakenAdapter({
+        institution_id: e.institution_id,
+        ...(str("base_url") !== undefined ? { base_url: str("base_url") as string } : {}),
+        ...(str("price_api") !== undefined ? { price_api: str("price_api") as string } : {}),
         ...(secrets !== undefined ? { secrets } : {}),
       });
     case "wallet": {
