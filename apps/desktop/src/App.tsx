@@ -203,7 +203,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
 
 function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel: (() => void) | null }) {
   const [name, setName] = useState("");
-  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb">("managed");
+  const [mode, setMode] = useState<"managed" | "files" | "plaid" | "eb" | "coinbase" | "wallet">("managed");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
@@ -244,9 +244,13 @@ function AddInstitutionForm({ onDone, onCancel }: { onDone: () => void; onCancel
         {radio("files", "I'll upload files downloaded from the institution's website", "Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.")}
         {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys set up once.")}
         {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key set up once.")}
+        {radio("coinbase", "Connect Coinbase (crypto holdings)", "Uses a view-only Coinbase API key you create — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
+        {radio("wallet", "Watch a self-custody wallet (Ledger, Trezor, any address)", "Paste public addresses; balances are read from the blockchain. An address can never move funds. The addresses are disclosed to public chain-data services.")}
       </div>
       {mode === "plaid" && <PlaidConnect name={name} institutionId={null} onDone={onDone} />}
       {mode === "eb" && <EbConnect name={name} institutionId={null} preset={null} onDone={onDone} />}
+      {mode === "coinbase" && <CoinbaseConnect name={name} institutionId={null} onDone={onDone} />}
+      {mode === "wallet" && <WalletConnect name={name} onDone={onDone} />}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <div className="actions" style={{ marginTop: 8 }}>
         {(mode === "managed" || mode === "files") && (
@@ -324,6 +328,127 @@ function PlaidConnect({ name, institutionId, onDone }: { name: string; instituti
         </button>
       </div>
       {linkUrl !== null && <ExternalLinkNote url={linkUrl} />}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+/** Coinbase: paste the view-only CDP API key; it goes straight to the Keychain via the host. */
+function CoinbaseConnect({ name, institutionId, onDone }: { name: string; institutionId: string | null; onDone: () => void }) {
+  const [keyName, setKeyName] = useState("");
+  const [pem, setPem] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const connect = async () => {
+    if (institutionId === null && name.trim() === "") {
+      setError("Give the connection a name first — \"Coinbase\" works.");
+      return;
+    }
+    if (keyName.trim() === "" || pem.trim() === "") {
+      setError("Paste both the API key name (organizations/…/apiKeys/…) and the private key.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.connectCoinbase({
+        ...(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() }),
+        api_key_name: keyName.trim(),
+        private_key: pem,
+      });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>
+        In Coinbase: Settings → API → create a key with the <b>View</b> permission only. Both values below go into your
+        Mac's Keychain — this app stores nothing else.
+      </div>
+      <div className="actions">
+        <input style={{ flex: 1 }} placeholder="API key name — organizations/…/apiKeys/…" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <textarea
+          style={{ flex: 1, minHeight: 80, fontFamily: "monospace", fontSize: 11 }}
+          placeholder={"-----BEGIN EC PRIVATE KEY-----\n…\n-----END EC PRIVATE KEY-----"}
+          value={pem}
+          onChange={(e) => setPem(e.target.value)}
+        />
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button disabled={busy} onClick={() => void connect()}>{busy ? "connecting and fetching…" : "Connect Coinbase"}</button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+const WALLET_KIND_OPTIONS: ReadonlyArray<readonly [string, string]> = [
+  ["btc_address", "Bitcoin address"],
+  ["btc_xpub", "Bitcoin xpub (older, legacy wallets)"],
+  ["eth_address", "Ethereum address"],
+];
+
+/** Watch-only wallet: public addresses typed into rows; nothing secret involved. */
+function WalletConnect({ name, onDone }: { name: string; onDone: () => void }) {
+  const [rows, setRows] = useState<Array<{ kind: string; value: string; label: string }>>([{ kind: "btc_address", value: "", label: "" }]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setRow = (i: number, patch: Partial<{ kind: string; value: string; label: string }>) =>
+    setRows((r) => r.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+  const connect = async () => {
+    if (name.trim() === "") {
+      setError("Give the wallet a name first — \"Ledger\" works.");
+      return;
+    }
+    const holdings = rows
+      .filter((r) => r.value.trim() !== "")
+      .map((r) => ({ kind: r.kind, value: r.value.trim(), ...(r.label.trim() !== "" ? { label: r.label.trim() } : {}) }));
+    if (holdings.length === 0) {
+      setError("Paste at least one address. In Ledger Live: each account's receive address (Accounts → Receive).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.connectWallet({ name: name.trim(), holdings });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>
+        Public addresses only — they can show balances, never move funds. In Ledger Live, copy each account's receive
+        address. Modern Bitcoin accounts: paste addresses (a segwit "zpub" won't work); only older legacy accounts can
+        use the xpub. Note: the addresses are looked up via public chain services (mempool.space, blockchain.info, a
+        public Ethereum node), which learn that someone asked about them.
+      </div>
+      {rows.map((r, i) => (
+        <div key={i} className="actions" style={{ marginTop: 6 }}>
+          <select value={r.kind} onChange={(e) => setRow(i, { kind: e.target.value })}>
+            {WALLET_KIND_OPTIONS.map(([v, label]) => (
+              <option key={v} value={v}>{label}</option>
+            ))}
+          </select>
+          <input style={{ flex: 1 }} placeholder={r.kind === "btc_xpub" ? "xpub…" : r.kind === "eth_address" ? "0x…" : "bc1… / 1… / 3…"} value={r.value} onChange={(e) => setRow(i, { value: e.target.value })} />
+          <input style={{ width: 130 }} placeholder="label (optional)" value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+        </div>
+      ))}
+      <div className="actions" style={{ marginTop: 6 }}>
+        <button className="secondary" disabled={busy} onClick={() => setRows((r) => [...r, { kind: "btc_address", value: "", label: "" }])}>
+          Add another address
+        </button>
+        <button disabled={busy} onClick={() => void connect()}>{busy ? "reading the blockchain…" : "Watch this wallet"}</button>
+      </div>
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
@@ -496,10 +621,10 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
               onSave={(input) => void act("update", () => api.saveManagedAccount(inst.institution_id, input))}
             />
           )}
-          {!inst.managed && inst.adapter !== "plaid" && inst.adapter !== "enablebanking" && (
+          {!inst.managed && !CONNECTOR_ADAPTERS.has(inst.adapter) && (
             <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />
           )}
-          {(inst.adapter === "plaid" || inst.adapter === "enablebanking") && (
+          {CONNECTOR_ADAPTERS.has(inst.adapter) && (
             <ConnectorStatus
               inst={inst}
               disabled={busy !== null}
@@ -534,15 +659,20 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
   );
 }
 
+const CONNECTOR_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "wallet"]);
+
 /** Connector institutions: automatic read-only updates, consent status, and the reconnect flow. */
 function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: InstitutionOverview; disabled: boolean; onUpdate: () => void; onChanged: () => void }) {
   const [reconnecting, setReconnecting] = useState(false);
   const days =
     inst.consent_until === null ? null : Math.floor((new Date(inst.consent_until).getTime() - Date.now()) / 86_400_000);
+  const reconnectable = inst.adapter !== "wallet";
   return (
     <div style={{ marginTop: 10 }}>
       <div className="small muted">
-        Connected automatically — this app only ever has read-only access; it cannot move money.
+        {inst.adapter === "wallet"
+          ? "Watch-only: balances read from the blockchain via public addresses — they can never move funds."
+          : "Connected automatically — this app only ever has read-only access; it cannot move money."}
         {inst.consent_until !== null && (
           <>
             {" "}Bank permission valid until {when(inst.consent_until)}
@@ -553,15 +683,20 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
       </div>
       <div className="actions" style={{ marginTop: 6 }}>
         <button className="secondary" disabled={disabled} onClick={onUpdate}>Update now</button>
-        <button className="secondary" disabled={disabled} onClick={() => setReconnecting((r) => !r)}>
-          {reconnecting ? "Hide reconnect" : "Reconnect"}
-        </button>
+        {reconnectable && (
+          <button className="secondary" disabled={disabled} onClick={() => setReconnecting((r) => !r)}>
+            {reconnecting ? "Hide reconnect" : inst.adapter === "coinbase" ? "Replace the API key" : "Reconnect"}
+          </button>
+        )}
       </div>
       {reconnecting && inst.adapter === "plaid" && (
         <PlaidConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}
       {reconnecting && inst.adapter === "enablebanking" && (
         <EbConnect name={inst.name} institutionId={inst.institution_id} preset={inst.aspsp} onDone={() => { setReconnecting(false); onChanged(); }} />
+      )}
+      {reconnecting && inst.adapter === "coinbase" && (
+        <CoinbaseConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}
     </div>
   );
