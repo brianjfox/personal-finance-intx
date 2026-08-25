@@ -75,6 +75,8 @@ export interface NetWorthLine {
   fact_ids: string[];
   observed_at: string | null;
   provisional: boolean;
+  /** The value converted to the display currency (null when no rate was available). */
+  display_value?: string | null;
 }
 
 export interface NetWorthView {
@@ -86,6 +88,8 @@ export interface NetWorthView {
   lines: NetWorthLine[];
   /** True when any line rests on provisional facts. */
   provisional: boolean;
+  /** Currencies present but lacking a conversion rate: their lines kept native values and were EXCLUDED from the totals. */
+  fx_missing: string[];
 }
 
 export function accounts(ledger: Ledger, opts: AsOfOpts = {}): AccountView[] {
@@ -238,8 +242,20 @@ export function consolidatedPositions(ledger: Ledger, opts: AsOfOpts = {}): Cons
  * accounts contribute `owed` (or `total`) negatively. Single-currency in
  * Phase 1: lines in another currency are reported but not summed.
  */
-export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string } = {}): NetWorthView {
+export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string; rates?: Record<string, string> } = {}): NetWorthView {
   const currency = opts.currency ?? "USD";
+  const rates = opts.rates ?? {};
+  const fxMissing = new Set<string>();
+  /** Native -> display currency; exact decimal multiply, null when no rate exists. */
+  const convert = (value: string, from: string): string | null => {
+    if (from === currency) return value;
+    const rate = rates[from];
+    if (rate === undefined) {
+      fxMissing.add(from);
+      return null;
+    }
+    return decimal.round(decimal.mul(value, rate), 2);
+  };
   const accts = accounts(ledger, opts);
   const bals = balances(ledger, opts);
   const poss = positions(ledger, opts);
@@ -283,6 +299,7 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string } 
       prov = prov || myPoss.some((p) => p.provisional);
     }
     anyProvisional = anyProvisional || prov;
+    const displayValue = convert(value, a.currency);
     lines.push({
       account_id: a.account_id,
       name: a.name,
@@ -293,10 +310,13 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string } 
       fact_ids: factIds,
       observed_at: observed,
       provisional: prov,
+      display_value: displayValue,
     });
-    if (a.currency === currency) {
-      if (decimal.cmp(value, "0") < 0) liabilities = decimal.add(liabilities, decimal.abs(value));
-      else assets = decimal.add(assets, value);
+    // Totals sum CONVERTED values; a currency without a rate is excluded
+    // and named in fx_missing rather than silently mixed in.
+    if (displayValue !== null) {
+      if (decimal.cmp(displayValue, "0") < 0) liabilities = decimal.add(liabilities, decimal.abs(displayValue));
+      else assets = decimal.add(assets, displayValue);
     }
   }
   return {
@@ -307,6 +327,7 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string } 
     currency,
     lines,
     provisional: anyProvisional,
+    fx_missing: [...fxMissing].sort(),
   };
 }
 
