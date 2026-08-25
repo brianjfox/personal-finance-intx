@@ -8,7 +8,7 @@
 
 import crypto from "node:crypto";
 
-import { COINBASE_SERVICE, ENABLEBANKING_SERVICE, PLAID_SERVICE, type InstitutionEntry, type SecretStore } from "@fin/institutions";
+import { COINBASE_SERVICE, ENABLEBANKING_SERVICE, KRAKEN_SERVICE, PLAID_SERVICE, type InstitutionEntry, type SecretStore } from "@fin/institutions";
 
 /** The Anthropic key's Keychain home (docs/PACKAGING.md §7.3; the Tauri shell reads it at spawn). */
 export const ANTHROPIC_SERVICE = "fin-interchange";
@@ -93,6 +93,11 @@ export function connectionSecretAccounts(e: InstitutionEntry): Array<{ service: 
       return [
         { service: COINBASE_SERVICE, account: `api_key_name:${e.institution_id}` },
         { service: COINBASE_SERVICE, account: `private_key:${e.institution_id}` },
+      ];
+    case "kraken":
+      return [
+        { service: KRAKEN_SERVICE, account: `api_key:${e.institution_id}` },
+        { service: KRAKEN_SERVICE, account: `private_key:${e.institution_id}` },
       ];
     default:
       return [];

@@ -63,6 +63,12 @@ const CoinbaseBody = type({
   "api_key_name?": "string",
   private_key: "string > 0",
 });
+const KrakenBody = type({
+  "name?": "string > 0",
+  "institution_id?": "string > 0",
+  api_key: "string > 0",
+  private_key: "string > 0",
+});
 const WalletRow = type({
   value: "string > 0",
   "label?": "string",
@@ -204,6 +210,18 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         }
         if (p === "/api/wallet/detect") {
           return json(detectWalletHolding(q.get("value") ?? ""));
+        }
+        if (p === "/api/connect/kraken" && req.method === "POST") {
+          const body = KrakenBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(
+            await app.connectKraken({
+              ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}),
+              apiKey: body.api_key,
+              privateKey: body.private_key,
+            }),
+          );
         }
         if (p === "/api/connect/wallet" && req.method === "POST") {
           const body = WalletBody(await req.json());

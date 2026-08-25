@@ -281,3 +281,46 @@ describe("watch-only wallet connect flow (mock chain APIs)", () => {
     }
   });
 });
+
+describe("kraken connect flow (mock API)", () => {
+  test("paste key pair -> stored, entry added, balances priced; rotation reuses the entry; garbage refused", async () => {
+    const { krakenSign, KRAKEN_SERVICE } = require("@fin/institutions") as typeof import("@fin/institutions");
+    const SECRET = crypto.randomBytes(64).toString("base64");
+    const base = serve(async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "50000" } });
+      if (url.pathname === "/0/private/Balance") {
+        const postData = await req.text();
+        const nonce = new URLSearchParams(postData).get("nonce") ?? "";
+        const ok = req.headers.get("API-Sign") === krakenSign("/0/private/Balance", nonce, postData, SECRET);
+        return ok
+          ? Response.json({ error: [], result: { XXBT: "0.2" } })
+          : Response.json({ error: ["EAPI:Invalid signature"] });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    const secrets = memorySecretStore();
+    const app = createApp({ dataDir: tmp(), connectors: { krakenBaseUrl: base, secrets } });
+    try {
+      expect(app.connectKraken({ name: "Kraken", apiKey: "k", privateKey: "not base64!!" })).rejects.toThrow(/doesn't look like a Kraken key pair/);
+      expect(app.institutionsOverview().institutions).toHaveLength(0);
+
+      const done = await app.connectKraken({ name: "Kraken", apiKey: "key-1", privateKey: SECRET });
+      expect(done.institution_id).toBe("inst.kraken");
+      expect(done.status).toBe("completed");
+      expect(secrets.dump()[`${KRAKEN_SERVICE}/api_key:inst.kraken`]).toBe("key-1");
+      expect(views.netWorth(app.ledger).lines.find((l) => l.account_id === "acct.kraken.kraken")?.value).toBe("10000"); // 0.2 * 50000
+
+      const again = await app.connectKraken({ institutionId: "inst.kraken", apiKey: "key-2", privateKey: SECRET });
+      expect(again.institution_id).toBe("inst.kraken");
+      expect(secrets.dump()[`${KRAKEN_SERVICE}/api_key:inst.kraken`]).toBe("key-2");
+      expect(app.institutionsOverview().institutions).toHaveLength(1);
+      // Its tokens show on the credentials page and vanish with the institution.
+      expect(app.credentialsStatus().tokens).toEqual([{ institution_id: "inst.kraken", name: "Kraken", adapter: "kraken", set: true }]);
+      expect(app.removeInstitution("inst.kraken")).toBe(true);
+      expect(Object.keys(secrets.dump())).toHaveLength(0);
+    } finally {
+      app.close();
+    }
+  });
+});

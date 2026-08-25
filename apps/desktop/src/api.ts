@@ -202,6 +202,8 @@ export const api = {
     post<{ institution_id: string; consent_until: string | null; runId: string; status: string }>("/api/connect/eb/complete", input),
   connectCoinbase: (input: { name?: string; institution_id?: string; api_key_name: string; private_key: string }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/coinbase", input),
+  connectKraken: (input: { name?: string; institution_id?: string; api_key: string; private_key: string }) =>
+    post<{ institution_id: string; runId: string; status: string }>("/api/connect/kraken", input),
   connectWallet: (input: { name?: string; holdings: Array<{ value: string; label?: string; kind?: string }> }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/wallet", input),
   credentials: () =>

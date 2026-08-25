@@ -53,3 +53,21 @@ describe("watch-only wallet live (needs WALLET_BTC_ADDRESS and/or WALLET_ETH_ADD
     }
   }, 60_000);
 });
+
+// Kraken (create the key with the Query Funds permission ONLY):
+//   export KRAKEN_API_KEY=... KRAKEN_PRIVATE_KEY=...
+describe("kraken live (needs KRAKEN_API_KEY + KRAKEN_PRIVATE_KEY)", () => {
+  const { krakenAdapter, KRAKEN_SERVICE } = require("../src/kraken") as typeof import("../src/kraken");
+  const KEY = process.env["KRAKEN_API_KEY"] ?? "";
+  const SEC = process.env["KRAKEN_PRIVATE_KEY"] ?? "";
+  test.skipIf(KEY === "" || SEC === "")("the read-only key fetches priced holdings through the adapter", async () => {
+    const secrets = memorySecretStore({
+      [`${KRAKEN_SERVICE}/api_key:inst.krakenlive`]: KEY,
+      [`${KRAKEN_SERVICE}/private_key:inst.krakenlive`]: SEC,
+    });
+    const adapter = krakenAdapter({ institution_id: "inst.krakenlive", secrets });
+    const out = await adapter.fetch({ now: new Date() });
+    expect(out.snapshot.accounts).toHaveLength(1);
+    expect(out.snapshot.accounts[0]?.type).toBe("crypto");
+  }, 60_000);
+});

@@ -1,4 +1,4 @@
-# Connectors (Plaid, Enable Banking, Coinbase, watch-only wallets)
+# Connectors (Plaid, Enable Banking, Coinbase, Kraken, watch-only wallets)
 
 Two API connectors join the file-drop adapters: **Plaid** (US/Canada,
 including Chase via OAuth) and **Enable Banking** (2,700+ European banks
@@ -106,6 +106,22 @@ a fresh JWT per request, bound to that request's method+host+path,
 else becomes a `crypto` position priced by the public `-USD` spot
 endpoint. Unpriced assets stay as positions with an unknown value —
 never a made-up one. Key rotation: the card's "Replace the API key".
+
+## Kraken (crypto holdings)
+
+Create an API key in Kraken (Settings → API) with only the **Query
+Funds** permission — trade/withdraw permissions must be absent, not
+unused. Then in the GUI: Institutions → Connect an institution →
+"Connect Kraken": paste the API key and private key; both go into the
+Keychain (service `fin-kraken`, per-institution accounts) via the host.
+Auth is Kraken's HMAC scheme (API-Sign = HMAC-SHA512 over path +
+SHA256(nonce+body) with the base64-decoded secret). Balances come from
+`/0/private/Balance`; legacy asset codes (XXBT, ZUSD) and earn/staking
+suffixes (.S/.M/.F) normalize onto plain symbols with same-asset
+variants summed exactly; USD folds to cash, other fiat becomes a
+cash-class position priced by its -USD spot rate. Key rotation: the
+card's "Replace the API key". Live test gate: `KRAKEN_API_KEY` +
+`KRAKEN_PRIVATE_KEY`.
 
 ## Watch-only wallets (Ledger, Trezor, any address)
 

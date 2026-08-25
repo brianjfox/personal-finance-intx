@@ -40,6 +40,7 @@ import {
 import {
   addInstitutionEntry,
   COINBASE_SERVICE,
+  KRAKEN_SERVICE,
   detectWalletHolding,
   parseCoinbaseCredential,
   parseCoinbaseKey,
@@ -216,6 +217,8 @@ export interface App {
    * plain words rather than guessing.
    */
   connectWallet(opts: { name?: string; holdings: Array<{ value: string; label?: string; kind?: WalletHolding["kind"] }> }): Promise<{ institution_id: string; runId: string; status: string }>;
+  /** Kraken: store the read-only API key (create it with the "Query Funds" permission only), add or rotate, reconcile. */
+  connectKraken(opts: { name?: string; institutionId?: string; apiKey: string; privateKey: string }): Promise<{ institution_id: string; runId: string; status: string }>;
   /** The account list the Ledger app (Ledger Wallet / Ledger Live) keeps on this machine (local read only; nothing is sent anywhere). */
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** The Credentials page: which keys are set (presence only -- values never leave the host). */
@@ -369,6 +372,9 @@ export function createApp(opts: AppOptions): App {
         : {}),
     ...(opts.connectors?.coinbaseBaseUrl ?? process.env["FIN_COINBASE_BASE_URL"]
       ? { coinbaseBaseUrl: (opts.connectors?.coinbaseBaseUrl ?? process.env["FIN_COINBASE_BASE_URL"]) as string }
+      : {}),
+    ...(opts.connectors?.krakenBaseUrl ?? process.env["FIN_KRAKEN_BASE_URL"]
+      ? { krakenBaseUrl: (opts.connectors?.krakenBaseUrl ?? process.env["FIN_KRAKEN_BASE_URL"]) as string }
       : {}),
     ...(opts.connectors?.walletApis !== undefined ? { walletApis: opts.connectors.walletApis } : {}),
     ...(opts.connectors?.fetchImpl !== undefined ? { fetchImpl: opts.connectors.fetchImpl } : {}),
@@ -748,6 +754,30 @@ export function createApp(opts: AppOptions): App {
       }
       storeSecret(COINBASE_SERVICE, `api_key_name:${institutionId}`, cred.apiKeyName);
       storeSecret(COINBASE_SERVICE, `private_key:${institutionId}`, cred.privateKey);
+      loaded = reloadRegistry();
+      const run = await refreshInstitution(institutionId);
+      return { institution_id: institutionId, ...run };
+    },
+    async connectKraken(o) {
+      const apiKey = o.apiKey.trim();
+      const secret = o.privateKey.trim();
+      // Kraken secrets are base64; refuse an obviously-wrong paste before storing.
+      if (apiKey === "" || secret === "" || !/^[A-Za-z0-9+/=]+$/.test(secret) || Buffer.from(secret, "base64").length < 32) {
+        throw new Error("that doesn't look like a Kraken key pair -- paste the API key and the private key exactly as Kraken shows them");
+      }
+      let institutionId = o.institutionId ?? null;
+      if (institutionId === null) {
+        const entry = addInstitutionEntry(dataDir, {
+          name: o.name ?? "Kraken",
+          adapter: "kraken",
+          ...(connectorCfg.krakenBaseUrl !== undefined ? { options: { base_url: connectorCfg.krakenBaseUrl, price_api: connectorCfg.krakenBaseUrl } } : {}),
+        });
+        institutionId = entry.institution_id;
+      } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "kraken")) {
+        throw new Error(`${institutionId} is not a Kraken connection`);
+      }
+      storeSecret(KRAKEN_SERVICE, `api_key:${institutionId}`, apiKey);
+      storeSecret(KRAKEN_SERVICE, `private_key:${institutionId}`, secret);
       loaded = reloadRegistry();
       const run = await refreshInstitution(institutionId);
       return { institution_id: institutionId, ...run };
