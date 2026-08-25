@@ -8,16 +8,18 @@ import path from "node:path";
 import { type } from "arktype";
 
 import type { InstitutionAdapter } from "./adapter";
+import { coinbaseAdapter } from "./coinbase";
 import { csvDropAdapter, type CsvDropOptions } from "./csvdrop";
 import { enableBankingAdapter } from "./enablebanking";
 import { jsonDropAdapter } from "./jsondrop";
 import { plaidAdapter, PLAID_BASE_URLS } from "./plaid";
 import type { SecretStore } from "./secrets";
+import { walletAdapter, WalletHolding } from "./wallet";
 
 export const InstitutionEntry = type({
   institution_id: /^inst\.[A-Za-z0-9_-]+$/,
   name: "string",
-  adapter: "'jsondrop' | 'csvdrop' | 'plaid' | 'enablebanking'",
+  adapter: "'jsondrop' | 'csvdrop' | 'plaid' | 'enablebanking' | 'coinbase' | 'wallet'",
   /** `false` pauses the connection: the entry stays listed but no adapter is built. */
   "enabled?": "boolean",
   "options?": "Record<string, unknown>",
@@ -151,6 +153,24 @@ export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: Sec
         ...(num("lookback_days") !== undefined ? { lookback_days: num("lookback_days") as number } : {}),
         ...(secrets !== undefined ? { secrets } : {}),
       });
+    case "coinbase":
+      return coinbaseAdapter({
+        institution_id: e.institution_id,
+        ...(str("base_url") !== undefined ? { base_url: str("base_url") as string } : {}),
+        ...(secrets !== undefined ? { secrets } : {}),
+      });
+    case "wallet": {
+      const holdings = WalletHolding.array()(o["holdings"] ?? []);
+      if (holdings instanceof type.errors) throw new Error(`${e.institution_id}: wallet holdings: ${holdings.summary}`);
+      return walletAdapter({
+        institution_id: e.institution_id,
+        holdings,
+        ...(str("btc_api") !== undefined ? { btc_api: str("btc_api") as string } : {}),
+        ...(str("btc_xpub_api") !== undefined ? { btc_xpub_api: str("btc_xpub_api") as string } : {}),
+        ...(str("eth_rpc") !== undefined ? { eth_rpc: str("eth_rpc") as string } : {}),
+        ...(str("price_api") !== undefined ? { price_api: str("price_api") as string } : {}),
+      });
+    }
   }
 }
 
