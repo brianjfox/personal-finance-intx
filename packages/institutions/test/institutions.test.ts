@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { csvDropAdapter, fixtureAdapter, jsonDropAdapter, loadInstitutions, parseCsv, parseMoney } from "../src/index";
+import { csvDropAdapter, decodeKeychainValue, encodeKeychainValue, fixtureAdapter, jsonDropAdapter, loadInstitutions, parseCsv, parseMoney } from "../src/index";
 
 const NOW = new Date("2026-08-23T06:00:00.000Z");
 const FIX = path.join(import.meta.dir, "fixtures");
@@ -88,5 +88,30 @@ describe("jsondrop adapter + registry", () => {
   test("fixture adapter validates the draft", async () => {
     const bad = fixtureAdapter("inst.demo", { accounts: [{ account_id: "acct.demo.x", name: "x", type: "checking", currency: "USD", as_of: "nope", balances: [] }] } as never);
     await expect(bad.fetch({ now: NOW })).rejects.toThrow(/violates contract/);
+  });
+});
+
+describe("keychain value encoding", () => {
+  const PEM = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBg\nkqhkiG9w0BAQEF\n-----END PRIVATE KEY-----";
+
+  test("multi-line values round-trip via the b64 tag; single-line values stay raw", () => {
+    expect(encodeKeychainValue("sk-ant-plain")).toBe("sk-ant-plain");
+    const enc = encodeKeychainValue(PEM);
+    expect(enc.startsWith("b64:")).toBe(true);
+    expect(enc.includes("\n")).toBe(false);
+    expect(decodeKeychainValue(enc)).toBe(PEM);
+  });
+
+  test("legacy hex output from `security -w` (a raw multi-line write) is healed", () => {
+    // What the CLI prints for an item stored with real newlines.
+    const hexed = Buffer.from(PEM, "utf8").toString("hex");
+    expect(decodeKeychainValue(hexed)).toBe(PEM);
+  });
+
+  test("genuine secrets that merely look hexish pass through untouched", () => {
+    const plaidish = "9a1f0c2b8d4e6f7a3c5b1d9e8f0a2c4b"; // decodes to binary junk, no newline
+    expect(decodeKeychainValue(plaidish)).toBe(plaidish);
+    expect(decodeKeychainValue("deadbeef")).toBe("deadbeef"); // too short to consider
+    expect(decodeKeychainValue("not-hex-at-all")).toBe("not-hex-at-all");
   });
 });

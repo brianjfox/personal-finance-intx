@@ -32,6 +32,35 @@ export function envSecretStore(env: Record<string, string | undefined> = process
   };
 }
 
+// `security find-generic-password -w` prints multi-line values (a PEM
+// private key, say) HEX-ENCODED instead of raw -- the write stores the
+// real bytes, every read hands back gibberish, and the first symptom is
+// OpenSSL's NO_START_LINE deep inside a connector. So: multi-line
+// values are written base64 under a `b64:` tag, and reads decode both
+// that tag and the legacy hex form (healing items stored before this).
+
+/** Store multi-line values in a form the security CLI reads back intact. */
+export function encodeKeychainValue(value: string): string {
+  return /[\r\n]/.test(value) ? `b64:${Buffer.from(value, "utf8").toString("base64")}` : value;
+}
+
+/**
+ * Undo encodeKeychainValue, and heal the legacy case: a raw multi-line
+ * write that `security -w` now returns hex-encoded. Only an even-length
+ * hex string that decodes to clean multi-line text is treated as such --
+ * a genuine hex secret (single-line once decoded, or binary) passes
+ * through untouched.
+ */
+export function decodeKeychainValue(raw: string): string {
+  if (raw.startsWith("b64:")) return Buffer.from(raw.slice(4), "base64").toString("utf8");
+  if (raw.length >= 16 && raw.length % 2 === 0 && /^[0-9a-f]+$/.test(raw)) {
+    const decoded = Buffer.from(raw, "hex").toString("utf8");
+    // eslint-disable-next-line no-control-regex
+    if (decoded.includes("\n") && !/[^\t\n\r\x20-\x7E\u00A0-\uFFFF]/.test(decoded)) return decoded;
+  }
+  return raw;
+}
+
 /** macOS login Keychain. Writes use -U so a re-connect replaces the item. */
 export function keychainSecretStore(): SecretStore {
   return {
@@ -42,11 +71,11 @@ export function keychainSecretStore(): SecretStore {
       });
       if (r.status !== 0) return null;
       const v = r.stdout.replace(/\n$/, "");
-      return v === "" ? null : v;
+      return v === "" ? null : decodeKeychainValue(v);
     },
     set(service, account, value) {
       if (process.platform !== "darwin") throw new Error("keychain store is macOS-only");
-      const r = spawnSync("security", ["add-generic-password", "-U", "-s", service, "-a", account, "-w", value], {
+      const r = spawnSync("security", ["add-generic-password", "-U", "-s", service, "-a", account, "-w", encodeKeychainValue(value)], {
         encoding: "utf8",
       });
       if (r.status !== 0) throw new Error(`security add-generic-password failed: ${r.stderr.trim()}`);
