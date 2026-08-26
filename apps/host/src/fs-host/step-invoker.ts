@@ -40,6 +40,8 @@ export interface FinStepInvokerOptions {
   authorize: WorkflowAuthorizeFn;
   /** Resolve the live inference source; called per turn, throws loudly without a key. */
   source: (agentId?: string) => InferenceSource;
+  /** Display-FX rates for tools that sum money (cached by the host). */
+  fx: () => Promise<{ to: string; date: string; rates: Record<string, string>; stale: boolean }>;
   /** Called once per completed turn with the typed transcript entry. */
   onTurn: (turn: ChatTurn) => void;
   /** Test seam: a scripted agent instead of the real reactor+model. */
@@ -73,6 +75,7 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
         estateFile: () => opts.actx.estateFile?.() ?? null,
         profile: () => opts.actx.profile?.() ?? null,
         saveDocument: ({ title, content }) => saveDraftDocument(opts.actx.vault, req.agent.id, title, content, opts.actx.clock),
+        fx: opts.fx,
         plan: () => opts.actx.plan?.() ?? null,
         evidence: (e) => current.evidence.push(e),
         journal: (id) => current.journal.push(id),

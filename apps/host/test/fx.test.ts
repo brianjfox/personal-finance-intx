@@ -86,3 +86,32 @@ describe("multi-currency display", () => {
     }
   });
 });
+
+describe("strategist aggregates are FX-honest", () => {
+  test("totals convert before summing; by-type never mixes currencies at face value; missing rates are named", async () => {
+    const { aggregatesTool } = await import("@fin/tools");
+    const app = createApp({ dataDir: tmp() });
+    try {
+      const us = app.addInstitution({ name: "US Bank", mode: "managed" });
+      await app.saveManagedAccount(us.institution_id, { name: "Checking", type: "checking", value: "$10,000" });
+      const pt = app.addInstitution({ name: "Cascais", mode: "managed", category: "real_estate" });
+      await app.saveManagedAccount(pt.institution_id, { name: "Flat", type: "real_estate", value: "€2.750.000" });
+      const ch = app.addInstitution({ name: "Swiss", mode: "managed" });
+      await app.saveManagedAccount(ch.institution_id, { name: "Cash", type: "savings", value: "CHF 5'000" });
+
+      const fin = {
+        ledger: app.ledger,
+        clock: () => new Date("2026-08-26T12:00:00.000Z"),
+        fx: async () => ({ to: "USD", date: "2026-08-26", rates: { USD: "1", EUR: "1.2" }, stale: false }),
+      } as never;
+      const r = await aggregatesTool.handler({}, fin);
+      const res = r.result as Record<string, unknown>;
+      expect(res["assets"]).toBe("3310000"); // 10000 + 2.75M * 1.2; CHF excluded
+      expect(res["by_account_type"]).toEqual({ checking: "10000", real_estate: "3300000" });
+      expect(res["excluded_currencies_without_rates"]).toEqual(["CHF"]);
+      expect(res["converted_at_ecb_rates_of"]).toBe("2026-08-26");
+    } finally {
+      app.close();
+    }
+  });
+});

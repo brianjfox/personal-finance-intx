@@ -24,6 +24,8 @@ export interface FinToolEnv {
   journal: (id: string) => void;
   /** Save a drafted document (markdown) into the vault under this agent's name. */
   saveDocument: (opts: { title: string; content: string }) => { document_id: string; filename: string };
+  /** Display-FX rates into the operator's preferred currency (cached; stale-marked offline). */
+  fx: () => Promise<{ to: string; date: string; rates: Record<string, string>; stale: boolean }>;
 }
 
 /** The env shape the @fin bundles are constructed against. */

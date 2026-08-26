@@ -34,7 +34,7 @@ export const STRATEGIST_TOOL_NAMES = [
   "save_draft",
 ] as const;
 
-const aggregates: FinTool = {
+export const aggregatesTool: FinTool = {
   definition: {
     name: "ledger_read_aggregates",
     description:
@@ -42,10 +42,14 @@ const aggregates: FinTool = {
     inputSchema: OBJECT_SCHEMA({}),
   },
   handler: async (_args, fin) => {
-    const nw = views.netWorth(fin.ledger);
+    // Convert BEFORE summing: a euro property and a dollar account only
+    // total honestly in one display currency. A currency with no rate is
+    // excluded and NAMED, never silently mixed at face value.
+    const fx = await fin.fx();
+    const nw = views.netWorth(fin.ledger, { currency: fx.to, rates: fx.rates });
     const byType = new Map<string, string>();
     for (const line of nw.lines) {
-      byType.set(line.type, decimal.add(byType.get(line.type) ?? "0", line.value));
+      if (line.display_value != null) byType.set(line.type, decimal.add(byType.get(line.type) ?? "0", line.display_value));
     }
     return {
       result: {
@@ -54,6 +58,9 @@ const aggregates: FinTool = {
         liabilities: nw.liabilities,
         net_worth: nw.net_worth,
         currency: nw.currency,
+        converted_at_ecb_rates_of: fx.date,
+        ...(fx.stale ? { fx_stale: true } : {}),
+        ...(nw.fx_missing.length > 0 ? { excluded_currencies_without_rates: nw.fx_missing } : {}),
         by_account_type: Object.fromEntries([...byType.entries()].sort()),
         provisional: nw.provisional,
       },
@@ -174,5 +181,5 @@ export const strategistTools = defineTool<BaseEnv & FinAgentEnvExtras>({
   id: "fin/strategist",
   requires: ["fin"],
   definitions: STRATEGIST_TOOL_NAMES.map((name) => ({ name })),
-  factory: (env) => finBundle(env.fin, [aggregates, listSubjects, projection, scenario, journalWrite, householdProfileTool, saveDraftTool]),
+  factory: (env) => finBundle(env.fin, [aggregatesTool, listSubjects, projection, scenario, journalWrite, householdProfileTool, saveDraftTool]),
 });

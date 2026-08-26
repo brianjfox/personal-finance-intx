@@ -459,6 +459,14 @@ export function createApp(opts: AppOptions): App {
   };
   const preferredCurrency = (): string => profile()?.preferred_currency ?? "USD";
   const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
+  const fetchFx = (): ReturnType<typeof fxRates> =>
+    fxRates({
+      dataDir,
+      to: preferredCurrency(),
+      clock,
+      ...(connectorCfg.fxBaseUrl !== undefined ? { base_url: connectorCfg.fxBaseUrl } : {}),
+      ...(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {}),
+    });
   const actions = buildActions(actx);
   const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
   const anthropicKey = (): string | null => {
@@ -504,6 +512,7 @@ export function createApp(opts: AppOptions): App {
     actx,
     authorize,
     source: (agentId?: string) => (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor(agentId !== undefined ? taskOfAgent(agentId) : undefined)),
+    fx: fetchFx,
     onTurn: (turn) => {
       ledger.emitEvent({
         id: `chat:${turn.agent}:${turn.message_id}`,
@@ -718,13 +727,7 @@ export function createApp(opts: AppOptions): App {
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
     getFx() {
-      return fxRates({
-        dataDir,
-        to: preferredCurrency(),
-        clock,
-        ...(connectorCfg.fxBaseUrl !== undefined ? { base_url: connectorCfg.fxBaseUrl } : {}),
-        ...(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {}),
-      });
+      return fetchFx();
     },
     getInferenceSettings() {
       const s = inferenceSettings();
