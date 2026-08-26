@@ -1005,7 +1005,7 @@ function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () 
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
     if (name.trim() === "") {
-      setError("Give the institution a name — e.g. \"Chase\" or \"Our house\".");
+      setError("Give the institution a name — e.g. \"Chase\".");
       return;
     }
     setBusy(true);
@@ -1032,7 +1032,7 @@ function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () 
       <div className="actions" style={{ marginTop: 8 }}>
         <input
           style={{ flex: 1, maxWidth: 320 }}
-          placeholder="Name — e.g. Chase, Fidelity, Our house"
+          placeholder="Name — e.g. Chase, Fidelity"
           value={name}
           onChange={(e) => {
             edited.current = e.target.value.trim() !== "";
@@ -1041,7 +1041,7 @@ function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () 
         />
       </div>
       <div style={{ marginTop: 8 }}>
-        {radio("managed", "I'll type the numbers in myself", "Best for property, cash, and anything without downloadable statements. You can update the values any time.")}
+        {radio("managed", "I'll type the numbers in myself", "For cash, valuables like art or jewelry, and institutions that can't be connected automatically below. You can update the values any time. (Real estate has its own tab.)")}
         {radio("files", "I'll upload files downloaded from the institution's website", "Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.")}
         {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys — set them up once on the Credentials page.")}
         {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key — set it up once on the Credentials page.")}
