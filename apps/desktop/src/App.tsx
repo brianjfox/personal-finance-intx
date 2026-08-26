@@ -32,31 +32,52 @@ export function App() {
   const nothingYet = overview !== null && overview.institutions.length === 0 && !overview.hasFacts;
   const takeover = nothingYet && page !== "institutions";
 
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("fin.nav.collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleNav = () => {
+    setNavCollapsed((c) => {
+      try {
+        localStorage.setItem("fin.nav.collapsed", c ? "0" : "1");
+      } catch {
+        /* private mode */
+      }
+      return !c;
+    });
+  };
   return (
-    <div className="app">
+    <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <nav>
-        <h1>Interchange · Household</h1>
+        <h1>{navCollapsed ? "I·H" : "Interchange · Household"}</h1>
         {(
           [
-            ["queue", "Queue", queue.length],
-            ["dashboard", "Dashboard", null],
-            ["positions", "Positions", null],
-            ["institutions", "Assets, Cash & Holdings", null],
-            ["credentials", "Credentials", null],
-            ["profile", "Profile", null],
-            ["tax", "Tax calendar", null],
-            ["strategy", "Strategy", null],
-            ["estate", "Estate", null],
-            ["journal", "Journal", null],
-            ["runs", "Nightly runs", null],
-            ["documents", "Documents", null],
+            ["queue", "Queue", "📥", queue.length],
+            ["dashboard", "Dashboard", "📊", null],
+            ["positions", "Positions", "📈", null],
+            ["institutions", "Assets, Cash & Holdings", "🏦", null],
+            ["credentials", "Credentials", "🔑", null],
+            ["profile", "Profile", "👤", null],
+            ["tax", "Tax calendar", "🧾", null],
+            ["strategy", "Strategy", "🧭", null],
+            ["estate", "Estate", "🏛️", null],
+            ["journal", "Journal", "📓", null],
+            ["runs", "Nightly runs", "🌙", null],
+            ["documents", "Documents", "📁", null],
           ] as const
-        ).map(([id, label, count]) => (
-          <a key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}>
-            <span>{label}</span>
+        ).map(([id, label, icon, count]) => (
+          <a key={id} className={page === id ? "active" : ""} title={label} onClick={() => setPage(id)}>
+            <span className="icon">{icon}</span>
+            <span className="label">{label}</span>
             {count !== null && count > 0 ? <span className="badge">{count}</span> : null}
           </a>
         ))}
+        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav}>
+          {navCollapsed ? "»" : "« Collapse"}
+        </button>
       </nav>
       <main>
         {takeover ? (
