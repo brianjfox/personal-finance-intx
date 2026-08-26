@@ -1950,8 +1950,8 @@ function sortPositions<T extends { symbol: string; quantity: string; price: stri
 function Positions({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [rows, setRows] = useState<Position[]>([]);
   const [bundled, setBundled] = useState<import("./api").ConsolidatedPosition[]>([]);
-  const [consolidated, setConsolidated] = useState(false);
-  const [sort, setSort] = useState<{ key: PositionSortKey; dir: 1 | -1 } | null>(null);
+  const [consolidated, setConsolidated] = useState(true);
+  const [sort, setSort] = useState<{ key: PositionSortKey; dir: 1 | -1 } | null>({ key: "value", dir: -1 });
   useEffect(() => {
     api.positions().then(setRows).catch(() => setRows([]));
     api.positionsConsolidated().then(setBundled).catch(() => setBundled([]));
@@ -1972,10 +1972,14 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
   );
   return (
     <>
-      <p>
-        <button className={consolidated ? "secondary" : ""} onClick={() => setConsolidated(false)}>By account</button>{" "}
-        <button className={consolidated ? "" : "secondary"} onClick={() => setConsolidated(true)}>Consolidated</button>
-        {consolidated && <span className="small muted"> all holdings of one asset bundled into a single row, across accounts</span>}
+      <p style={{ marginBottom: 4 }}>
+        <button className={consolidated ? "" : "secondary"} onClick={() => setConsolidated(true)}>Consolidated</button>{" "}
+        <button className={consolidated ? "secondary" : ""} onClick={() => setConsolidated(false)}>By account</button>
+      </p>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        {consolidated
+          ? "All holdings of one asset bundled into a single row, across accounts."
+          : "Every holding shown where it lives: one row per asset per account."}
       </p>
       {!consolidated && (
         <table>
