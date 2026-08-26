@@ -867,6 +867,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
               }}
               onCancel={none ? null : () => setAdding(false)}
               modes={["managed", "files", "plaid", "eb"]}
+              existing={ob.institutions.map((i) => i.name)}
             />
           ) : (
             <p><button onClick={() => setAdding(true)}>Connect another institution</button></p>
@@ -900,6 +901,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
               }}
               onCancel={none ? null : () => setAdding(false)}
               modes={["coinbase", "kraken", "wallet"]}
+              existing={ob.institutions.map((i) => i.name)}
             />
           ) : (
             <p><button onClick={() => setAdding(true)}>Add a crypto connection</button></p>
@@ -962,9 +964,43 @@ function AddPropertyForm({ onDone, onCancel }: { onDone: () => void; onCancel: (
 
 type ConnectMode = "managed" | "files" | "plaid" | "eb" | "coinbase" | "kraken" | "wallet";
 
-function AddInstitutionForm({ onDone, onCancel, modes }: { onDone: () => void; onCancel: (() => void) | null; modes: readonly ConnectMode[] }) {
-  const [name, setName] = useState("");
-  const [mode, setMode] = useState<ConnectMode>(modes[0] ?? "managed");
+/** "Coinbase" -> "Coinbase 2" -> "Coinbase 3": one past the highest counter already in use. */
+function uniqueName(base: string, existing: readonly string[]): string {
+  const taken = existing.map((n) => n.trim().toLowerCase());
+  const b = base.toLowerCase();
+  if (!taken.includes(b)) return base;
+  const esc = b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let n = 2;
+  for (const t of taken) {
+    const m = new RegExp(`^${esc} (\\d+)$`).exec(t);
+    if (m !== null) n = Math.max(n, Number(m[1]) + 1);
+  }
+  return `${base} ${n}`;
+}
+
+/** The obvious default name for a connect mode; null when only the user can know it. */
+const MODE_DEFAULT_NAME: Record<ConnectMode, string | null> = {
+  managed: null, files: null, plaid: null, eb: null,
+  coinbase: "Coinbase", kraken: "Kraken", wallet: "Wallet",
+};
+
+function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () => void; onCancel: (() => void) | null; modes: readonly ConnectMode[]; existing: readonly string[] }) {
+  const firstMode = modes[0] ?? "managed";
+  const [name, setName] = useState(() => {
+    const d = MODE_DEFAULT_NAME[firstMode];
+    return d === null ? "" : uniqueName(d, existing);
+  });
+  const [mode, setMode] = useState<ConnectMode>(firstMode);
+  // A name the user typed themselves is never overwritten by a default.
+  const edited = useRef(false);
+  const suggestName = (base: string | null) => {
+    if (edited.current) return;
+    setName(base === null ? "" : uniqueName(base, existing));
+  };
+  const pickMode = (m: ConnectMode) => {
+    setMode(m);
+    suggestName(MODE_DEFAULT_NAME[m]);
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const add = async () => {
@@ -986,7 +1022,7 @@ function AddInstitutionForm({ onDone, onCancel, modes }: { onDone: () => void; o
   const radio = (m: ConnectMode, label: string, hint: string) =>
     modes.includes(m) ? (
       <label style={{ display: "block", marginBottom: 6 }}>
-        <input type="radio" checked={mode === m} onChange={() => setMode(m)} /> {label}
+        <input type="radio" checked={mode === m} onChange={() => pickMode(m)} /> {label}
         <div className="small muted" style={{ marginLeft: 20 }}>{hint}</div>
       </label>
     ) : null;
@@ -998,7 +1034,10 @@ function AddInstitutionForm({ onDone, onCancel, modes }: { onDone: () => void; o
           style={{ flex: 1, maxWidth: 320 }}
           placeholder="Name — e.g. Chase, Fidelity, Our house"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            edited.current = e.target.value.trim() !== "";
+            setName(e.target.value);
+          }}
         />
       </div>
       <div style={{ marginTop: 8 }}>
@@ -1011,7 +1050,7 @@ function AddInstitutionForm({ onDone, onCancel, modes }: { onDone: () => void; o
         {radio("wallet", "Watch a self-custody wallet (Ledger, Trezor, any address)", "Paste public addresses; balances are read from the blockchain. An address can never move funds. The addresses are disclosed to public chain-data services.")}
       </div>
       {mode === "plaid" && <PlaidConnect name={name} institutionId={null} onDone={onDone} />}
-      {mode === "eb" && <EbConnect name={name} institutionId={null} preset={null} onDone={onDone} />}
+      {mode === "eb" && <EbConnect name={name} institutionId={null} preset={null} onDone={onDone} onBankPicked={suggestName} />}
       {mode === "coinbase" && <CoinbaseConnect name={name} institutionId={null} onDone={onDone} />}
       {mode === "kraken" && <KrakenConnect name={name} institutionId={null} onDone={onDone} />}
       {mode === "wallet" && <WalletConnect name={name} onDone={onDone} />}
@@ -1420,7 +1459,7 @@ const EB_COUNTRIES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /** Enable Banking: pick the bank, consent on its page, paste the code from the redirect. */
-function EbConnect({ name, institutionId, preset, onDone }: { name: string; institutionId: string | null; preset: { name: string; country: string } | null; onDone: () => void }) {
+function EbConnect({ name, institutionId, preset, onDone, onBankPicked }: { name: string; institutionId: string | null; preset: { name: string; country: string } | null; onDone: () => void; onBankPicked?: (bank: string) => void }) {
   const [country, setCountry] = useState(preset?.country ?? "");
   const [banks, setBanks] = useState<Array<{ name: string; country: string }>>([]);
   const [bank, setBank] = useState(preset?.name ?? "");
@@ -1453,7 +1492,10 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
     act("banks", async () => {
       const list = await api.ebBanks(country.trim().toUpperCase());
       setBanks(list);
-      if (list.length > 0 && !list.some((b) => b.name === bank)) setBank(list[0]!.name);
+      if (list.length > 0 && !list.some((b) => b.name === bank)) {
+        setBank(list[0]!.name);
+        onBankPicked?.(list[0]!.name);
+      }
     });
   const start = () =>
     act("start", async () => {
@@ -1497,7 +1539,7 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
           {busy === "banks" ? "looking…" : "Find banks"}
         </button>
         {banks.length > 0 && (
-          <select value={bank} onChange={(e) => setBank(e.target.value)}>
+          <select value={bank} onChange={(e) => { setBank(e.target.value); onBankPicked?.(e.target.value); }}>
             {banks.map((b) => (
               <option key={b.name} value={b.name}>{b.name}</option>
             ))}
