@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fxState, money, moneyNative, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -63,8 +63,7 @@ export function App() {
             ["tax", "Tax calendar", "🧾", null],
             ["strategy", "Strategy", "🧭", null],
             ["estate", "Estate", "🏛️", null],
-            ["journal", "Journal", "📓", null],
-            ["runs", "Nightly runs", "🌙", null],
+            ["audit", "Audit Logs", "📓", null],
             ["documents", "Documents", "📁", null],
           ] as const
         ).map(([id, label, icon, count]) => (
@@ -92,8 +91,7 @@ export function App() {
             {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "strategy" && <ChatPage openFact={setFactId} />}
             {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
-            {page === "journal" && <JournalPage tick={tick} openFact={setFactId} />}
-            {page === "runs" && <Runs tick={tick} onChanged={refresh} />}
+            {page === "audit" && <AuditPage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "documents" && <Documents tick={tick} />}
           </>
         )}
@@ -2800,6 +2798,22 @@ function EstateWizard({ tick, onChanged }: { tick: number; onChanged: () => void
 }
 
 // Phase 3: the Decision Journal -- what was decided, when, why.
+/** Where the system accounts for itself: what ran, and what was decided. */
+function AuditPage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [tab, setTab] = useState<"runs" | "journal">("runs");
+  return (
+    <>
+      <h2>Audit Logs</h2>
+      <p style={{ marginBottom: 4 }}>
+        <button className={tab === "runs" ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab("runs")}>Nightly runs</button>
+        <button className={tab === "journal" ? "" : "secondary"} onClick={() => setTab("journal")}>Decision journal</button>
+      </p>
+      {tab === "runs" && <Runs tick={tick} onChanged={onChanged} />}
+      {tab === "journal" && <JournalPage tick={tick} openFact={openFact} />}
+    </>
+  );
+}
+
 function JournalPage({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   useEffect(() => {
@@ -2807,7 +2821,6 @@ function JournalPage({ tick, openFact }: { tick: number; openFact: (id: string) 
   }, [tick]);
   return (
     <>
-      <h2>Decision journal</h2>
       <p className="small muted">Financial feedback loops are years long; memory is the only way to learn from them.</p>
       <table>
         <thead><tr><th>When</th><th>Kind</th><th>Author</th><th>Entry</th><th>Refs</th></tr></thead>
@@ -2849,7 +2862,6 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
   };
   return (
     <>
-      <h2>Nightly runs</h2>
       <p><button disabled={busy} onClick={start}>{busy ? "running…" : "Run nightly now"}</button></p>
       <table className="runs">
         <thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Gate</th><th>Steps</th></tr></thead>
