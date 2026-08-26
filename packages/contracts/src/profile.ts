@@ -1,7 +1,7 @@
 // The household profile: who the operator is, and the people an estate
 // or tax plan must know about (spouse, children, anyone else who should
 // appear in a will). Lives in `<dataDir>/profile.json`, edited only
-// through the GUI's Profile page and the Estate page's wizard.
+// through the GUI's People page and the Estate page's wizard.
 //
 // The SSN/TIN is stored here for documents and exports but is NEVER
 // handed to a model: the `household_profile` agent tool redacts it, and
