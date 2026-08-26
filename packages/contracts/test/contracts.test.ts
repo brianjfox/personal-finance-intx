@@ -245,6 +245,7 @@ describe("parseDateInput", () => {
   const { parseDateInput } = require("../src/dates") as typeof import("../src/dates");
   test("freeform forms all land on ISO", () => {
     expect(parseDateInput("Jul 30 1959")).toBe("1959-07-30");
+    expect(parseDateInput("nov 3 1977")).toBe("1977-11-03"); // lowercase month, as people type
     expect(parseDateInput("July 30, 1959")).toBe("1959-07-30");
     expect(parseDateInput("jul. 30th, 1959")).toBe("1959-07-30");
     expect(parseDateInput("30 Jul 1959")).toBe("1959-07-30");

@@ -169,6 +169,45 @@ describe("freeform dates in profile saves", () => {
       app.close();
     }
   });
+
+  // Regression: the GUI talks HTTP, and the request-body schema used to
+  // demand strict ISO dates -- "nov 3 1977" bounced with a 400 before
+  // the freeform parser ever ran.
+  test("freeform dates survive the HTTP boundary; an unreadable one refuses without touching the stored profile", async () => {
+    const { startIpc } = await import("../src/ipc");
+    const app = createApp({ dataDir: tmp() });
+    const server = startIpc({ app, port: 0 });
+    const post = (body: unknown): Promise<Response> =>
+      fetch(`http://127.0.0.1:${server.port}/api/profile`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const ok = await post({
+        person: { legal_name: "Brian J. Fox" },
+        children: [],
+        others: [
+          { legal_name: "Sib One", relationship: "sibling", date_of_birth: "nov 3 1977" },
+          { legal_name: "Sib Two", relationship: "sibling", date_of_birth: "mar 9, 1981" },
+        ],
+      });
+      expect(ok.status).toBe(200);
+      const saved = (await ok.json()) as { others: Array<{ date_of_birth?: string }> };
+      expect(saved.others.map((o) => o.date_of_birth)).toEqual(["1977-11-03", "1981-03-09"]);
+
+      const bad = await post({
+        person: { legal_name: "Brian J. Fox" },
+        children: [],
+        others: [{ legal_name: "Sib One", relationship: "sibling", date_of_birth: "nov 3 77" }],
+      });
+      expect(bad.status).toBeGreaterThanOrEqual(400);
+      expect(((await bad.json()) as { error: string }).error).toMatch(/couldn't read "nov 3 77" as Sib One's date/);
+      // The refused save changed nothing.
+      const got = app.getProfile();
+      if (!got.configured) throw new Error("unreachable");
+      expect(got.others?.[0]?.date_of_birth).toBe("1977-11-03");
+    } finally {
+      server.stop(true);
+      app.close();
+    }
+  });
 });
 
 describe("tax profile from the GUI", () => {

@@ -48,6 +48,41 @@ export const HouseholdProfile = type({
 });
 export type HouseholdProfile = typeof HouseholdProfile.infer;
 
+// What a SAVE may carry: identical to the stored shape except that dates
+// arrive the way people type them ("nov 3 1977"). The host normalizes
+// them to ISO (refusing unreadable ones by name) before anything is
+// stored -- so the strict IsoDate rule must NOT run at the request
+// boundary, where it would bounce the whole form.
+export const ProfilePersonInput = type({
+  legal_name: "string > 0",
+  "preferred_name?": "string",
+  "date_of_birth?": "string | null",
+  "ssn?": "string | null",
+  "citizenship?": "string",
+  "country_of_residence?": "string",
+  "state_or_province?": "string",
+  "marital_status?": MaritalStatus,
+});
+export type ProfilePersonInput = typeof ProfilePersonInput.infer;
+
+export const ProfileRelationInput = type({
+  legal_name: "string > 0",
+  "relationship?": "string",
+  "date_of_birth?": "string | null",
+  "note?": "string",
+});
+export type ProfileRelationInput = typeof ProfileRelationInput.infer;
+
+export const HouseholdProfileInput = type({
+  person: ProfilePersonInput,
+  "preferred_currency?": "string",
+  "spouse?": ProfileRelationInput.or("null"),
+  children: ProfileRelationInput.array(),
+  others: ProfileRelationInput.array(),
+  "updated_at?": "string",
+});
+export type HouseholdProfileInput = typeof HouseholdProfileInput.infer;
+
 /** What models and the GUI may see: everything except the tax id. */
 export function redactProfile(p: HouseholdProfile): Omit<HouseholdProfile, "person"> & { person: Omit<ProfilePerson, "ssn"> & { ssn_last4: string | null } } {
   const { ssn, ...person } = p.person;
