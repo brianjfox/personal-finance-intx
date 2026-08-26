@@ -473,10 +473,18 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
 }
 
 /** Which AI engine answers: Anthropic's cloud, or a local server (Apple MLX, LM Studio) so nothing leaves this Mac. */
+const INFERENCE_TASKS: ReadonlyArray<readonly [string, string, string]> = [
+  ["profile", "Profile", "the free-text intake on the Profile page — works well on small local models"],
+  ["estate", "Estate", "the Estate Planner chat and its drafts"],
+  ["tax", "Tax", "reserved: tax math is deterministic today; applies when model-backed tax planning arrives"],
+  ["strategy", "Strategy", "the Strategist chat"],
+];
+
 function InferenceCard({ tick }: { tick: number }) {
   const [engine, setEngine] = useState<"anthropic" | "local">("anthropic");
   const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8080/v1");
   const [model, setModel] = useState("");
+  const [tasks, setTasks] = useState<Record<string, { engine: string; model: string }>>({});
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -485,6 +493,9 @@ function InferenceCard({ tick }: { tick: number }) {
       setEngine(s.engine);
       if (s.base_url !== undefined) setBaseUrl(s.base_url);
       if (s.model !== undefined) setModel(s.model);
+      const t: Record<string, { engine: string; model: string }> = {};
+      for (const [id] of INFERENCE_TASKS) t[id] = { engine: s.tasks?.[id]?.engine ?? "default", model: s.tasks?.[id]?.model ?? "" };
+      setTasks(t);
     }).catch(() => {});
   }, [tick]);
   const act = async (fn: () => Promise<void>) => {
@@ -501,13 +512,20 @@ function InferenceCard({ tick }: { tick: number }) {
   };
   const save = () =>
     act(async () => {
-      await api.inferenceSave(engine === "local" ? { engine, base_url: baseUrl, model } : { engine });
-      setStatus("Saved. New chat turns use this engine immediately -- no restart.");
+      const taskPayload: Record<string, { engine: string; model?: string }> = {};
+      for (const [id, choice] of Object.entries(tasks)) {
+        if (choice.engine !== "default") taskPayload[id] = { engine: choice.engine, ...(choice.model.trim() !== "" ? { model: choice.model.trim() } : {}) };
+      }
+      await api.inferenceSave({
+        ...(engine === "local" ? { engine, base_url: baseUrl, model } : { engine }),
+        ...(Object.keys(taskPayload).length > 0 ? { tasks: taskPayload } : {}),
+      });
+      setStatus("Saved. New turns use these engines immediately -- no restart.");
     });
-  const test = () =>
+  const test = (task?: string) =>
     act(async () => {
-      const r = await api.inferenceTest();
-      setStatus(r.ok ? `Working: ${r.detail}` : `Not working: ${r.detail}`);
+      const r = await api.inferenceTest(task);
+      setStatus(`${task !== undefined ? `${task}: ` : ""}${r.ok ? `Working: ${r.detail}` : `Not working: ${r.detail}`}`);
     });
   return (
     <div className="queue-item">
@@ -536,9 +554,40 @@ function InferenceCard({ tick }: { tick: number }) {
           <input style={{ width: 280 }} placeholder="Model name (as the server knows it)" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)} />
         </div>
       )}
+      <div style={{ marginTop: 10 }}>
+        <div className="small muted" style={{ marginBottom: 4 }}>
+          <b>Per-task engines</b> — each area can use its own provider (e.g. a small local model for Profile, Claude for
+          Strategy). "Use default" follows the choice above.
+        </div>
+        {INFERENCE_TASKS.map(([id, label, hint]) => (
+          <div key={id} className="actions" style={{ marginTop: 4 }}>
+            <span style={{ width: 70, display: "inline-block" }}>{label}</span>
+            <select
+              value={tasks[id]?.engine ?? "default"}
+              disabled={busy}
+              onChange={(e) => setTasks((t) => ({ ...t, [id]: { engine: e.target.value, model: t[id]?.model ?? "" } }))}
+            >
+              <option value="default">Use default</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="local">Local server</option>
+            </select>
+            {(tasks[id]?.engine ?? "default") !== "default" && (
+              <input
+                style={{ width: 260 }}
+                placeholder="model override (optional)"
+                value={tasks[id]?.model ?? ""}
+                disabled={busy}
+                onChange={(e) => setTasks((t) => ({ ...t, [id]: { engine: t[id]?.engine ?? "default", model: e.target.value } }))}
+              />
+            )}
+            <button className="secondary" disabled={busy} onClick={() => void test(id)}>Test</button>
+            <span className="small muted">{hint}</span>
+          </div>
+        ))}
+      </div>
       <div className="actions" style={{ marginTop: 8 }}>
         <button disabled={busy} onClick={() => void save()}>{busy ? "…" : "Save"}</button>
-        <button className="secondary" disabled={busy} onClick={() => void test()}>Test</button>
+        <button className="secondary" disabled={busy} onClick={() => void test()}>Test default</button>
       </div>
       {status !== null && <div className="banner" style={{ marginTop: 8 }}>{status}</div>}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}

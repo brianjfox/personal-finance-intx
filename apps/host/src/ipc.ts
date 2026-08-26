@@ -12,6 +12,7 @@ import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
 import type { App } from "./app";
+import { InferenceSettings, type InferenceTask } from "./inference";
 
 export interface IpcOptions {
   app: App;
@@ -84,7 +85,8 @@ const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'
 const TokensDeleteBody = type({ institution_id: "string > 0" });
 const ProfileBody = HouseholdProfile.and(type({ "clear_ssn?": "boolean" }));
 const ExtractBody = type({ text: "string > 0" });
-const InferenceBody = type({ engine: "'anthropic' | 'local'", "base_url?": "string", "model?": "string" });
+const InferenceBody = InferenceSettings;
+const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -212,7 +214,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(app.setInferenceSettings(body));
         }
-        if (p === "/api/inference/test" && req.method === "POST") return json(await app.testInference());
+        if (p === "/api/inference/test" && req.method === "POST") {
+          const body = InferenceTestBody(await req.json().catch(() => ({})));
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.testInference(body.task as InferenceTask | undefined));
+        }
         if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
         if (p === "/api/credentials/set" && req.method === "POST") {
           const body = CredentialSetBody(await req.json());

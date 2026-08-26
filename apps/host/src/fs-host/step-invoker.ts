@@ -39,7 +39,7 @@ export interface FinStepInvokerOptions {
   actx: Pick<ActionContext, "ledger" | "clock" | "taxProfile" | "estateFile" | "plan" | "profile">;
   authorize: WorkflowAuthorizeFn;
   /** Resolve the live inference source; called per turn, throws loudly without a key. */
-  source: () => InferenceSource;
+  source: (agentId?: string) => InferenceSource;
   /** Called once per completed turn with the typed transcript entry. */
   onTurn: (turn: ChatTurn) => void;
   /** Test seam: a scripted agent instead of the real reactor+model. */
@@ -65,7 +65,7 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
       const contextDir = path.join(opts.dataDir, "context", req.agent.id);
       fs.mkdirSync(contextDir, { recursive: true });
       const storage = await createIsogitStore(contextDir);
-      const source = opts.source();
+      const source = opts.source(req.agent.id);
       const fin: FinToolEnv = {
         ledger: opts.actx.ledger,
         clock: opts.actx.clock,

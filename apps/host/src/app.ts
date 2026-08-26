@@ -88,7 +88,7 @@ import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
 import { createConnectors, type ConnectorConfig } from "./connect";
-import { localSource, readInferenceSettings, testInference, writeInferenceSettings, type InferenceSettings } from "./inference";
+import { readInferenceSettings, resolveTaskSource, testInference, writeInferenceSettings, type InferenceSettings, type InferenceTask } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
 import { fxRates, type FxRates } from "./fx";
 import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
@@ -233,8 +233,8 @@ export interface App {
   getInferenceSettings(): InferenceSettings;
   /** Switch engines; validated (local http only to loopback). Applies to the next turn -- no restart. */
   setInferenceSettings(settings: InferenceSettings): InferenceSettings;
-  /** One tiny round-trip to the configured engine, for the GUI's Test button. */
-  testInference(): Promise<{ ok: boolean; detail: string }>;
+  /** One tiny round-trip to the configured engine (optionally a task's engine), for the GUI's Test buttons. */
+  testInference(task?: InferenceTask): Promise<{ ok: boolean; detail: string }>;
   /** The household profile, redacted: the tax id never leaves the host (last four digits only). */
   getProfile(): (ReturnType<typeof redactProfile> & { configured: true }) | { configured: false };
   /** Free-text -> proposed profile fields (model-assisted; the GUI merges into the unsaved form for review). */
@@ -444,15 +444,21 @@ export function createApp(opts: AppOptions): App {
   const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
   const actions = buildActions(actx);
   const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
-  // Local engine -> its model name; Anthropic -> the configured Claude model.
-  const model_ = (): string => {
+  /** The model a task's workflow definition names (no key needed -- settings only). */
+  const modelFor = (task?: InferenceTask): string => {
     const s = inferenceSettings();
-    return s.engine === "local" ? (s.model as string) : (opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5");
+    const choice = task !== undefined ? s.tasks?.[task] : undefined;
+    const engine = choice === undefined || choice.engine === "default" ? s.engine : choice.engine;
+    if (engine === "local") return choice?.model ?? s.model ?? "local";
+    return choice?.model ?? opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
   };
-  const resolveSource = (): InferenceSource => {
-    const s = inferenceSettings();
-    return s.engine === "local" ? localSource(s as InferenceSettings & { engine: "local" }) : anthropicSourceFromEnv();
-  };
+  const model_ = (): string => modelFor(undefined);
+  const resolveSourceFor = (task?: InferenceTask): InferenceSource => resolveTaskSource(inferenceSettings(), task, anthropicSourceFromEnv);
+  const resolveSource = (): InferenceSource => resolveSourceFor(undefined);
+  /** Which per-task engine a chat agent follows. */
+  const taskOfAgent = (agentId: string): InferenceTask | undefined =>
+    agentId === "estate-planner" ? "estate" : agentId === "strategist" ? "strategy" : undefined;
+  const taskOfChat = (agent: ChatAgent): InferenceTask => (agent === "estate_planner" ? "estate" : "strategy");
 
   // Every policy decision lands in the access log; denials are loud.
   const onDecision = (d: PolicyDecision): void => {
@@ -474,7 +480,7 @@ export function createApp(opts: AppOptions): App {
     dataDir,
     actx,
     authorize,
-    source: opts.inferenceSource ?? resolveSource,
+    source: (agentId?: string) => (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor(agentId !== undefined ? taskOfAgent(agentId) : undefined)),
     onTurn: (turn) => {
       ledger.emitEvent({
         id: `chat:${turn.agent}:${turn.message_id}`,
@@ -523,7 +529,7 @@ export function createApp(opts: AppOptions): App {
     if (runId.startsWith("estateaudit")) return estateAuditWorkflow;
     if (runId.startsWith("proposal_")) return buildProposalWorkflow({ model: model_() }).definition;
     const chat = chatSpecOf(runId);
-    if (chat !== null) return buildChatWorkflow(chat.agent, model_()).definition;
+    if (chat !== null) return buildChatWorkflow(chat.agent, modelFor(taskOfChat(chat.agent))).definition;
     const year = taxYearOf(runId);
     if (year !== null) {
       // Rebuilding with the current clock is safe: gates already parked
@@ -557,9 +563,9 @@ export function createApp(opts: AppOptions): App {
   const liveRuns = new Map<string, ReturnType<FsHost["run"]>>();
   /** Which engine (source id) a standing chat run's agent was built against. */
   const chatEngineByRun = new Map<string, string>();
-  const sourceFingerprint = (): string => {
+  const sourceFingerprint = (task?: InferenceTask): string => {
     try {
-      return (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSource()).id;
+      return (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor(task)).id;
     } catch {
       return "unconfigured";
     }
@@ -703,9 +709,9 @@ export function createApp(opts: AppOptions): App {
     setInferenceSettings(settings) {
       return writeInferenceSettings(dataDir, settings);
     },
-    async testInference() {
+    async testInference(task) {
       try {
-        const source = opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSource();
+        const source = opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor(task);
         return await testInference(source);
       } catch (e) {
         return { ok: false, detail: e instanceof Error ? e.message : String(e) };
@@ -718,8 +724,8 @@ export function createApp(opts: AppOptions): App {
     },
     extractProfile(text) {
       return extractProfilePatch({
-        source: opts.inferenceSource ?? resolveSource,
-        model: model_(),
+        source: () => (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor("profile")),
+        model: modelFor("profile"),
         text,
         current: profile(),
         now: clock(),
@@ -944,7 +950,8 @@ export function createApp(opts: AppOptions): App {
           // for months and must not block startup. A chat run resumed now
           // is built against the CURRENT engine; record that so sendChat
           // can retire it if the engine changes later.
-          if (chatSpecOf(runId) !== null) chatEngineByRun.set(runId, sourceFingerprint());
+          const chatSpec = chatSpecOf(runId);
+          if (chatSpec !== null) chatEngineByRun.set(runId, sourceFingerprint(taskOfChat(chatSpec.agent as ChatAgent)));
           drive(def, runId);
           out.push({ ...s, status: "running" });
           continue;
@@ -1145,7 +1152,7 @@ export function createApp(opts: AppOptions): App {
       // When the engine (or model) has changed since, retire the run and
       // start fresh -- the visible transcript lives in the ledger and is
       // unaffected; only the run's working context restarts.
-      const fp = sourceFingerprint();
+      const fp = sourceFingerprint(taskOfChat(o.agent));
       if (active !== null && chatEngineByRun.get(active.runId) !== fp) {
         const handle = liveRuns.get(active.runId);
         if (handle !== undefined) {
@@ -1162,7 +1169,7 @@ export function createApp(opts: AppOptions): App {
       if (active === null) {
         runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
         chatEngineByRun.set(runId, fp);
-        drive(buildChatWorkflow(o.agent, model_()).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
+        drive(buildChatWorkflow(o.agent, modelFor(taskOfChat(o.agent))).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
       } else {
         runId = active.runId;
         // Deliver on the step's CURRENT input channel: the reserved
