@@ -30,6 +30,16 @@ const ResolveBody = type({
 });
 
 const TaxYearBody = type({ "year?": "number.integer >= 1990" });
+const TaxProfileBody = type({
+  tax_year: "number.integer >= 1990",
+  ordinary_rate: "string > 0",
+  ltcg_rate: "string > 0",
+  prior_year_tax: "string > 0",
+  prior_year_agi_over_150k: "boolean",
+  withholding_annual: "string > 0",
+  reserve_account: "string > 0",
+  "prestage_lead_days?": "1 <= number.integer <= 90",
+});
 const TaxCheckBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage });
 const TaxSkipBody = type({ quarter: "1 <= number.integer <= 4", stage: TaxStage, "note?": "string" });
 const ChatBody = type({ agent: ChatAgent, text: "string > 0", "wait?": "boolean" });
@@ -306,6 +316,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/runs") return json(await app.listRuns());
         if (p === "/api/obligations") return json(views.obligations(app.ledger));
         if (p === "/api/tax") return json(await app.taxStatus());
+        if (p === "/api/tax-profile" && req.method === "POST") {
+          const body = TaxProfileBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.saveTaxProfile(body));
+        }
         if (p === "/api/tax-year" && req.method === "POST") {
           const body = TaxYearBody(await req.json().catch(() => ({})));
           if (body instanceof type.errors) return json({ error: body.summary }, 400);

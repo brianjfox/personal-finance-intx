@@ -2238,10 +2238,8 @@ function TaxPage({ tick, onChanged, openFact }: { tick: number; onChanged: () =>
     return (
       <>
         <h2>Tax calendar</h2>
-        <p className="muted">
-          No tax profile. Write <code>tax-profile.json</code> into the data directory (rates, prior-year tax, the reserve
-          account) -- with your accountant -- and reload. The engine is an estimator, not tax advice.
-        </p>
+        <p>Let's set up your tax profile — a few numbers you'd confirm with your accountant. The engine is an estimator, not tax advice.</p>
+        <TaxProfileForm existing={null} onSaved={onChanged} />
       </>
     );
   }
@@ -2262,7 +2260,91 @@ function TaxPage({ tick, onChanged, openFact }: { tick: number; onChanged: () =>
           <QuarterCard key={q.quarter} q={q} busy={busy} act={act} openFact={openFact} />
         ))}
       </div>
+      <TaxProfileEditor profile={tax.profile} onSaved={onChanged} />
     </>
+  );
+}
+
+/** Collapsed edit affordance for an existing tax profile. */
+function TaxProfileEditor({ profile, onSaved }: { profile: NonNullable<TaxStatus["profile"]>; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 14 }}>
+      <button className="secondary" onClick={() => setOpen((o) => !o)}>{open ? "Hide tax profile" : "Edit tax profile"}</button>
+      {open && <TaxProfileForm existing={profile} onSaved={() => { setOpen(false); onSaved(); }} />}
+    </div>
+  );
+}
+
+/** The accountant conversation's numbers, collected as a form -- no JSON, no files. */
+function TaxProfileForm({ existing, onSaved }: { existing: TaxStatus["profile"]; onSaved: () => void }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(String(existing?.tax_year ?? currentYear));
+  const [ordinary, setOrdinary] = useState(existing !== null ? String(Number(existing.ordinary_rate) * 100) : "");
+  const [ltcg, setLtcg] = useState(existing !== null ? String(Number(existing.ltcg_rate) * 100) : "");
+  const [priorTax, setPriorTax] = useState(existing?.prior_year_tax ?? "");
+  const [over150k, setOver150k] = useState(false);
+  const [withholding, setWithholding] = useState(existing?.withholding_annual ?? "");
+  const [reserve, setReserve] = useState(existing?.reserve_account ?? "");
+  const [accounts, setAccounts] = useState<Array<{ account_id: string; name: string; type: string }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.accounts().then(setAccounts).catch(() => setAccounts([]));
+  }, []);
+  const save = async () => {
+    if (reserve === "") {
+      setError("Pick the account your estimated-tax money sits in (the reserve). Connect or add one on the Assets page first if none fits.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.taxProfileSave({
+        tax_year: Number(year),
+        ordinary_rate: ordinary,
+        ltcg_rate: ltcg,
+        prior_year_tax: priorTax,
+        prior_year_agi_over_150k: over150k,
+        withholding_annual: withholding,
+        reserve_account: reserve,
+      });
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="queue-item" style={{ marginTop: 10 }}>
+      <h3 style={{ marginTop: 0 }}>1 · Rates</h3>
+      <div className="actions">
+        <input style={{ width: 110 }} placeholder="Tax year" value={year} disabled={busy} onChange={(e) => setYear(e.target.value)} />
+        <input style={{ width: 200 }} placeholder="Ordinary income rate — e.g. 24%" value={ordinary} disabled={busy} onChange={(e) => setOrdinary(e.target.value)} />
+        <input style={{ width: 210 }} placeholder="Long-term gains rate — e.g. 15%" value={ltcg} disabled={busy} onChange={(e) => setLtcg(e.target.value)} />
+      </div>
+      <h3>2 · Last year & withholding</h3>
+      <div className="actions">
+        <input style={{ width: 230 }} placeholder="Last year's total tax — e.g. $18,500" value={priorTax} disabled={busy} onChange={(e) => setPriorTax(e.target.value)} />
+        <input style={{ width: 250 }} placeholder="Withholding this year — e.g. $12,000/yr" value={withholding} disabled={busy} onChange={(e) => setWithholding(e.target.value)} />
+        <label className="small"><input type="checkbox" checked={over150k} disabled={busy} onChange={(e) => setOver150k(e.target.checked)} /> last year's income was over $150k (raises the safe-harbour to 110%)</label>
+      </div>
+      <h3>3 · Where the tax money sits</h3>
+      <div className="actions">
+        <select value={reserve} disabled={busy} onChange={(e) => setReserve(e.target.value)}>
+          <option value="">Pick the reserve account…</option>
+          {accounts.map((a) => (
+            <option key={a.account_id} value={a.account_id}>{a.name} ({a.type})</option>
+          ))}
+        </select>
+        <span className="small muted">the deadline checks compare each installment against this account's balance</span>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <div className="actions" style={{ marginTop: 10 }}>
+        <button disabled={busy} onClick={() => void save()}>{busy ? "saving…" : "Save tax profile"}</button>
+      </div>
+    </div>
   );
 }
 

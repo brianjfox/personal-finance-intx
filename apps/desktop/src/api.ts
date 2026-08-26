@@ -195,6 +195,11 @@ export const api = {
   journal: () => get<Array<{ id: string; at: string; kind: string; summary: string; author: string; refs: string[] }>>("/api/journal"),
   tax: () => get<TaxStatus>("/api/tax"),
   obligations: () => get<Obligation[]>("/api/obligations"),
+  taxProfileSave: (input: {
+    tax_year: number; ordinary_rate: string; ltcg_rate: string; prior_year_tax: string;
+    prior_year_agi_over_150k: boolean; withholding_annual: string; reserve_account: string; prestage_lead_days?: number;
+  }) => post<{ tax_year: number }>("/api/tax-profile", input),
+  accounts: () => get<Array<{ account_id: string; name: string; type: string; currency: string }>>("/api/accounts"),
   taxYearStart: (year?: number) => post<{ runId: string }>("/api/tax-year", year !== undefined ? { year } : {}),
   taxCheck: (quarter: number, stage: "pre" | "due") => post<{ runId: string; status: string }>("/api/tax/check", { quarter, stage }),
   taxSkip: (quarter: number, stage: "pre" | "due", note: string) => post<{ runId: string; signalId: string }>("/api/tax/skip", { quarter, stage, note }),

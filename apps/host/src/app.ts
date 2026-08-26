@@ -276,6 +276,21 @@ export interface App {
   /** Deliver the operator's skip signal for a deadline gate (durable inbox; works while parked). */
   skipTaxDeadline(opts: { quarter: TaxQuarter; stage: TaxStage; note?: string; decidedBy?: string }): Promise<{ runId: string; signalId: string }>;
   taxStatus(): Promise<TaxStatus>;
+  /**
+   * Save the tax profile from the GUI (the accountant conversation's
+   * numbers). Rates accept "24", "24%" or "0.24"; amounts accept
+   * "$18,500"; the reserve account must be a real ledger account.
+   */
+  saveTaxProfile(input: {
+    tax_year: number;
+    ordinary_rate: string;
+    ltcg_rate: string;
+    prior_year_tax: string;
+    prior_year_agi_over_150k: boolean;
+    withholding_annual: string;
+    reserve_account: string;
+    prestage_lead_days?: number;
+  }): TaxProfile;
   /** The operator's estate plan from `<dataDir>/estate.json`, or null. */
   estateFile(): EstateFile | null;
   /** Run the estate hygiene audit (sync estate.json into registry facts, then plan-vs-reality checks). */
@@ -1050,6 +1065,43 @@ export function createApp(opts: AppOptions): App {
         if (s.status === "running") return { runId, year };
       }
       return null;
+    },
+    saveTaxProfile(input) {
+      const rate = (label: string, v: string): string => {
+        const cleaned = v.trim().replace(/%$/, "").trim();
+        if (!/^\d+(\.\d+)?$/.test(cleaned)) throw new Error(`couldn't read ${JSON.stringify(v)} as the ${label} -- try "24", "24%" or "0.24"`);
+        const n = Number(cleaned);
+        const frac = n > 1 ? n / 100 : n;
+        if (frac <= 0 || frac >= 1) throw new Error(`the ${label} (${v}) doesn't look like a tax rate`);
+        return String(frac);
+      };
+      const amount = (label: string, v: string): string => {
+        const parsed = parseMoneyInput(v);
+        if (parsed === null || parsed.amount.startsWith("-")) throw new Error(`couldn't read ${JSON.stringify(v)} as ${label} -- try 18500 or $18,500`);
+        return parsed.amount;
+      };
+      const accounts = views.accounts(ledger);
+      if (!accounts.some((a) => a.account_id === input.reserve_account)) {
+        throw new Error(`the reserve account ${input.reserve_account} isn't a known account -- pick one from the list`);
+      }
+      const checked = assertType(
+        TaxProfile,
+        {
+          tax_year: input.tax_year,
+          ordinary_rate: rate("ordinary income rate", input.ordinary_rate),
+          ltcg_rate: rate("long-term gains rate", input.ltcg_rate),
+          prior_year_tax: amount("last year's total tax", input.prior_year_tax),
+          prior_year_agi_over_150k: input.prior_year_agi_over_150k,
+          withholding_annual: amount("annual withholding", input.withholding_annual),
+          reserve_account: input.reserve_account,
+          prestage_lead_days: input.prestage_lead_days ?? 30,
+        },
+        "tax profile",
+      );
+      const tmp = `${taxProfilePath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(checked, null, 2));
+      fs.renameSync(tmp, taxProfilePath);
+      return checked;
     },
     async runTaxCheck(o) {
       const profile = taxProfile();
