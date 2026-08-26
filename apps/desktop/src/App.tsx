@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fxState, money, moneyNative, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
-type Page = "queue" | "dashboard" | "positions" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
+type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "journal" | "runs" | "documents";
 
 export function App() {
   const [page, setPage] = useState<Page>("queue");
@@ -57,7 +57,6 @@ export function App() {
           [
             ["queue", "Queue", "📥", queue.length],
             ["dashboard", "Dashboard", "📊", null],
-            ["positions", "Positions", "📈", null],
             ["institutions", "Assets, Cash & Holdings", "🏦", null],
             ["credentials", "Credentials", "🔑", null],
             ["profile", "Profile", "👤", null],
@@ -87,7 +86,6 @@ export function App() {
             {!nothingYet && <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />}
             {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
-            {page === "positions" && <Positions tick={tick} openFact={setFactId} />}
             {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
             {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} />}
             {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
@@ -1836,6 +1834,7 @@ type AccountSortKey = "account" | "type" | "value" | "observed";
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [nw, setNw] = useState<NetWorth | null>(null);
   const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
+  const [tab, setTab] = useState<"accounts" | "positions">("accounts");
   useEffect(() => {
     api.netWorth().then(setNw).catch(() => setNw(null));
   }, [tick]);
@@ -1863,6 +1862,18 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
             case "observed": return sort.dir * (a.observed_at ?? "").localeCompare(b.observed_at ?? "");
           }
         });
+  // A class-of-asset subtotal in the display currency. Lines without a
+  // conversion rate are excluded, matching how the headline totals work.
+  const sumTypes = (types: readonly string[]): string => {
+    let total = 0;
+    for (const l of nw.lines) {
+      if (!types.includes(l.type)) continue;
+      const v = l.display_value ?? (l.currency === nw.currency ? l.value : null);
+      if (v == null) continue;
+      total += Number(v);
+    }
+    return String(Math.round(total * 100) / 100);
+  };
   return (
     <>
       <h2>Net worth</h2>
@@ -1882,8 +1893,16 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         <div className={`card ${nw.provisional ? "prov" : ""}`}><div className="label">Net worth</div><div className="value">{money(nw.net_worth, nw.currency)}</div></div>
         <div className="card"><div className="label">Assets</div><div className="value">{money(nw.assets, nw.currency)}</div></div>
         <div className="card"><div className="label">Liabilities</div><div className="value">{money(nw.liabilities, nw.currency)}</div></div>
+        <div className="card"><div className="label">Cash</div><div className="value">{money(sumTypes(["checking", "savings", "money_market"]), nw.currency)}</div></div>
+        <div className="card"><div className="label">Crypto</div><div className="value">{money(sumTypes(["crypto"]), nw.currency)}</div></div>
+        <div className="card"><div className="label">Property</div><div className="value">{money(sumTypes(["real_estate"]), nw.currency)}</div></div>
       </div>
-      <h3>Accounts</h3>
+      <p style={{ marginTop: 14 }}>
+        <button className={tab === "accounts" ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab("accounts")}>Accounts</button>
+        <button className={tab === "positions" ? "" : "secondary"} onClick={() => setTab("positions")}>Positions</button>
+      </p>
+      {tab === "positions" && <Positions tick={tick} openFact={openFact} />}
+      {tab === "accounts" && (<>
       <table>
         <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th>Basis</th><Th k="observed" label="Observed" /><th></th></tr></thead>
         <tbody>
@@ -1903,6 +1922,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
           ))}
         </tbody>
       </table>
+      </>)}
     </>
   );
 }
@@ -1952,7 +1972,6 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
   );
   return (
     <>
-      <h2>Positions</h2>
       <p>
         <button className={consolidated ? "secondary" : ""} onClick={() => setConsolidated(false)}>By account</button>{" "}
         <button className={consolidated ? "" : "secondary"} onClick={() => setConsolidated(true)}>Consolidated</button>
