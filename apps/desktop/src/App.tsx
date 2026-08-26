@@ -217,7 +217,7 @@ function RelRow({ r, onChange, onRemove, relPlaceholder, disabled }: { r: Rel; o
     <div className="actions" style={{ marginTop: 6 }}>
       <input style={{ flex: 1 }} placeholder="Full legal name" value={r.legal_name} disabled={disabled} onChange={(e) => onChange({ ...r, legal_name: e.target.value })} />
       <input style={{ width: 140 }} placeholder={relPlaceholder} value={r.relationship} disabled={disabled} onChange={(e) => onChange({ ...r, relationship: e.target.value })} />
-      <input style={{ width: 130 }} placeholder="Born (YYYY-MM-DD)" value={r.date_of_birth} disabled={disabled} onChange={(e) => onChange({ ...r, date_of_birth: e.target.value })} />
+      <input style={{ width: 130 }} placeholder="Born — e.g. Jul 30 1959" value={r.date_of_birth} disabled={disabled} onChange={(e) => onChange({ ...r, date_of_birth: e.target.value })} />
       <button className="secondary" disabled={disabled} onClick={onRemove}>Remove</button>
     </div>
   );
@@ -234,7 +234,7 @@ function PeopleEditor({ d, setD, disabled }: { d: ProfileDraft; setD: (fn: (d: P
       {d.has_spouse && (
         <div className="actions" style={{ marginTop: 6 }}>
           <input style={{ flex: 1 }} placeholder="Spouse/partner's full legal name" value={d.spouse.legal_name} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, legal_name: e.target.value } }))} />
-          <input style={{ width: 130 }} placeholder="Born (YYYY-MM-DD)" value={d.spouse.date_of_birth} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, date_of_birth: e.target.value } }))} />
+          <input style={{ width: 130 }} placeholder="Born — e.g. Jul 30 1959" value={d.spouse.date_of_birth} disabled={disabled} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, date_of_birth: e.target.value } }))} />
         </div>
       )}
       <h3>3 · Children</h3>
@@ -299,7 +299,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
       <div className="actions"><input style={{ flex: 1 }} placeholder="Full legal name" value={d.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, legal_name: e.target.value }))} />
         <input style={{ width: 160 }} placeholder="Preferred name" value={d.preferred_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_name: e.target.value }))} /></div>
       <div className="actions" style={{ marginTop: 6 }}>
-        <input style={{ width: 150 }} placeholder="Born (YYYY-MM-DD)" value={d.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, date_of_birth: e.target.value }))} />
+        <input style={{ width: 150 }} placeholder="Born — e.g. Jul 30 1959" value={d.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, date_of_birth: e.target.value }))} />
         <input style={{ flex: 1 }} type="password" placeholder={d.ssn_last4 !== null ? `Tax id / SSN on file (…${d.ssn_last4}) — type to replace` : "Tax id / SSN (optional; never shown to models)"} value={d.ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, ssn: e.target.value }))} />
         {d.ssn_last4 !== null && (
           <label className="small"><input type="checkbox" checked={d.clear_ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, clear_ssn: e.target.checked }))} /> remove it</label>

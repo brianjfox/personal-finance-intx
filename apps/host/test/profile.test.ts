@@ -145,3 +145,28 @@ describe("free-text profile intake", () => {
     }
   });
 });
+
+describe("freeform dates in profile saves", () => {
+  test("'Jul 30 1959' style dates normalize to ISO everywhere; garbage refuses by name", () => {
+    const app = createApp({ dataDir: tmp() });
+    try {
+      app.saveProfile({
+        person: { legal_name: "Brian J. Fox", date_of_birth: "Dec 11, 1959" },
+        spouse: { legal_name: "Spouse Example", date_of_birth: "Jul 30 1959" },
+        children: [{ legal_name: "Koa", date_of_birth: "November 25, 2025" }],
+        others: [{ legal_name: "Ted", date_of_birth: "3/4/1990" }],
+      });
+      const got = app.getProfile();
+      if (!got.configured) throw new Error("unreachable");
+      expect(got.person.date_of_birth).toBe("1959-12-11");
+      expect(got.spouse?.date_of_birth).toBe("1959-07-30");
+      expect(got.children?.[0]?.date_of_birth).toBe("2025-11-25");
+      expect(got.others?.[0]?.date_of_birth).toBe("1990-03-04"); // US month-first
+      expect(() =>
+        app.saveProfile({ person: { legal_name: "B" }, children: [{ legal_name: "Kid", date_of_birth: "sometime" }], others: [] }),
+      ).toThrow(/couldn't read "sometime" as Kid's date/);
+    } finally {
+      app.close();
+    }
+  });
+});

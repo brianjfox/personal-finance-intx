@@ -25,6 +25,7 @@ import {
   EstateFile,
   HouseholdProfile,
   InvestmentPlan,
+  parseDateInput,
   parseMoneyInput,
   redactProfile,
   newId,
@@ -764,6 +765,24 @@ export function createApp(opts: AppOptions): App {
     saveProfile(input) {
       const { clear_ssn, ...rest } = input;
       const prior = profile();
+      // Dates arrive the way people write them ("Jul 30 1959"); store ISO.
+      const normDate = (who: string, v: string | null | undefined): string | null | undefined => {
+        if (v === undefined || v === null || v.trim() === "") return undefined;
+        const parsed = parseDateInput(v);
+        if (parsed === null) throw new Error(`couldn't read ${JSON.stringify(v)} as ${who}'s date -- try "Jul 30 1959" or 1959-07-30`);
+        return parsed;
+      };
+      const normRel = <T extends { legal_name: string; date_of_birth?: string | null }>(r: T): T => {
+        const d = normDate(r.legal_name, r.date_of_birth);
+        const { date_of_birth, ...restRel } = r;
+        return (d !== undefined ? { ...restRel, date_of_birth: d } : restRel) as T;
+      };
+      const personDob = normDate(rest.person.legal_name || "your", rest.person.date_of_birth);
+      const { date_of_birth: _dob, ...personRest } = rest.person;
+      rest.person = personDob !== undefined ? { ...personRest, date_of_birth: personDob } : personRest;
+      if (rest.spouse != null) rest.spouse = normRel(rest.spouse);
+      rest.children = rest.children.map(normRel);
+      rest.others = rest.others.map(normRel);
       const next: HouseholdProfile = {
         ...rest,
         person: {
