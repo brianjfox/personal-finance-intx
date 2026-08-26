@@ -12,6 +12,8 @@ This is an app for a non-programmer to use.  The user won't understand JSON data
 
 If there is already data present, the user should be able to add or delete institutions and modify their connected status.  The user should be able to manage the data about their assets in general using the GUI.
 
+Whenever a number representing a fiat currency is being entered, be prepared to read the currency symbol and any other marks, such as commas and periods.  The type of currency should be stored with the value.  When displaying values, convert all currencies DYNAMICALLY into the user's preferred currency.
+
 --------------------------------------------------------------------------------------------------------------------------------
 
 We need to include Coinbase as a place to learn about crypto holdings, and we should be able to read a ledger wallet.
@@ -19,8 +21,19 @@ Most importantly -- the GUI is the place that the end user will interact with.  
 
 --------------------------------------------------------------------------------------------------------------------------------
 
-The estate planner should have both the chat box, and present a wizard to collect information that an estate planner must have!  For example, spouse, children, other people who should appear in a will, etc.  Please note that there's no onboarding path in place for collecting a user's name, social, country of origin, country of residence, etc.  We need this information available in the user's profile, and I should be collected from any agent that needs it (e.g, Estate Planning, Tax Planning). The chat box should be 4-6 lines tall, and the text should wrap.
+The estate planner should have both the chat box, and present a wizard to collect information that an estate planner must have!  For example, spouse, children, other people who should appear in a will, etc.  Please note that there's no onboarding path in place for collecting a user's name, social, country of origin, country of residence, etc.  We need this information available in the user's profile, and it should be collected from any agent that needs it (e.g, Estate Planning, Tax Planning). The chat box should be 4-6 lines tall, and the text should wrap.
+--------------------------------------------------------------------------------------------------------------------------------
+
+In the settings, the user should be able to assign an inference provider to each of Profile, Estate, Tax, and Strategy.
+--------------------------------------------------------------------------------------------------------------------------------
+
+The user should be able to provide multiple inference providers.  The form for doing so should show the most common ones in a dropdown, with an "Other OpenAI compatible Provider" option allowing the end user to specify the URL and keys.
 
 --------------------------------------------------------------------------------------------------------------------------------
-[Given to the app in the Profile page]
-My name is Brian Jhan Fox, born in Boston on Dec 11, 1959. I have boy/girl twins who turn 26 on november 2 named Moses Daniel Liggett-Fox, and Lodiana Olivia Liggett-Fox.  I have a son named Bodhi Liggett who turns 35 on Nov 6.  Bodhi has a wife (Saskia) and a son (Koa). Koa was born on November 25, 2025
+ If a user is entering text into a chat box, and then clicks away to a different tab, the text that has already been entered when the user returns to the original chat box.
+
+--------------------------------------------------------------------------------------------------------------------------------
+ A sample will produced by the Estate Planner should be saved as a Document, and be accesible in the Documents panel.  That panel should be tabbed as well, separating the types of documents that stored there, and filterable by creator (Estate, Tax, etc.), type (i.e., PDF, MD, Image, TXT, JSON, etc.), sortable by date, name, and other obvious triggers as you see fit.
+ 
+--------------------------------------------------------------------------------------------------------------------------------
+We are going to clean up the UX a little bit.  In Estate and Strategy the previous chats should be collapsed completely, but can be expanded with a disclosure toggle.  A summary of the remembered state should be displayed above the chat box, in an italic font with a subdued color.
