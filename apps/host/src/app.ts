@@ -24,6 +24,7 @@ import {
   assertType,
   EstateFile,
   HouseholdProfile,
+  type HouseholdProfileInput,
   InvestmentPlan,
   parseDateInput,
   parseMoneyInput,
@@ -246,7 +247,7 @@ export interface App {
    * one (the GUI never has the full id to send back); pass
    * `clear_ssn: true` to actually remove it.
    */
-  saveProfile(input: HouseholdProfile & { clear_ssn?: boolean }): void;
+  saveProfile(input: HouseholdProfileInput & { clear_ssn?: boolean }): void;
   /** The Credentials page: which keys are set (presence only -- values never leave the host). */
   credentialsStatus(): CredentialsStatus;
   /** Store a global credential (Anthropic / Plaid / Enable Banking); validated before storing; Anthropic takes effect without a restart. */
@@ -801,7 +802,7 @@ export function createApp(opts: AppOptions): App {
       if (rest.spouse != null) rest.spouse = normRel(rest.spouse);
       rest.children = rest.children.map(normRel);
       rest.others = rest.others.map(normRel);
-      const next: HouseholdProfile = {
+      const next = {
         ...rest,
         person: {
           ...rest.person,

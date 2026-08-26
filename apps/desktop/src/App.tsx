@@ -273,7 +273,7 @@ function PeopleEditor({ d, setD, disabled }: { d: ProfileDraft; setD: (fn: (d: P
   );
 }
 
-function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; save: () => Promise<void>; busy: boolean; error: string | null; saved: boolean } {
+function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; save: () => Promise<boolean>; busy: boolean; error: string | null; saved: boolean } {
   const [d, setDraft] = useState<ProfileDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -285,11 +285,15 @@ function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d:
     setSaved(false);
     setDraft((x) => (x === null ? x : fn(x)));
   };
-  const save = async () => {
-    if (d === null) return;
+  // Returns whether the save landed. A refused field (an unreadable
+  // date, say) must leave the draft exactly as typed -- the caller may
+  // only refresh other panels on success, since a tick bump reloads the
+  // stored profile over the draft.
+  const save = async (): Promise<boolean> => {
+    if (d === null) return false;
     if (d.legal_name.trim() === "") {
       setError("Your full legal name is the one required field.");
-      return;
+      return false;
     }
     setBusy(true);
     setError(null);
@@ -297,8 +301,10 @@ function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d:
       const r = await api.profileSave(saveInputFrom(d));
       setDraft(draftFrom(r));
       setSaved(true);
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -347,7 +353,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
       <PeopleEditor d={d} setD={setD} disabled={busy} />
       {error !== null && <div className="banner">{error}</div>}
       <div className="actions" style={{ marginTop: 10 }}>
-        <button disabled={busy} onClick={() => { void save().then(onChanged); }}>{busy ? "saving…" : "Save profile"}</button>
+        <button disabled={busy} onClick={() => { void save().then((ok) => { if (ok) onChanged(); }); }}>{busy ? "saving…" : "Save profile"}</button>
         {saved && <span className="pill low">saved</span>}
       </div>
       <ProfileIntake setD={setD} disabled={busy} />
@@ -2761,7 +2767,7 @@ function EstateWizard({ tick, onChanged }: { tick: number; onChanged: () => void
           <PeopleEditor d={d} setD={setD} disabled={busy} />
           {error !== null && <div className="banner">{error}</div>}
           <div className="actions" style={{ marginTop: 8 }}>
-            <button disabled={busy} onClick={() => { void save().then(onChanged); }}>{busy ? "saving…" : "Save"}</button>
+            <button disabled={busy} onClick={() => { void save().then((ok) => { if (ok) onChanged(); }); }}>{busy ? "saving…" : "Save"}</button>
             {saved && <span className="pill low">saved</span>}
           </div>
         </>
