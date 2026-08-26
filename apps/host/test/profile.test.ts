@@ -170,3 +170,38 @@ describe("freeform dates in profile saves", () => {
     }
   });
 });
+
+describe("tax profile from the GUI", () => {
+  test("friendly rates and amounts normalize; the reserve must be a real account; garbage refuses by name", async () => {
+    const app = createApp({ dataDir: tmp() });
+    try {
+      // No accounts yet: the reserve check fails in plain words.
+      expect(() =>
+        app.saveTaxProfile({ tax_year: 2026, ordinary_rate: "24%", ltcg_rate: "15", prior_year_tax: "$18,500", prior_year_agi_over_150k: true, withholding_annual: "12000", reserve_account: "acct.x.y" }),
+      ).toThrow(/isn't a known account/);
+
+      const inst = app.addInstitution({ name: "Bank", mode: "managed" });
+      const saved = await app.saveManagedAccount(inst.institution_id, { name: "Savings", type: "savings", value: "$25,000" });
+      const p = app.saveTaxProfile({
+        tax_year: 2026,
+        ordinary_rate: "24%",
+        ltcg_rate: "0.15",
+        prior_year_tax: "$18,500",
+        prior_year_agi_over_150k: true,
+        withholding_annual: "12,000",
+        reserve_account: saved.account.account_id,
+      });
+      expect(p).toMatchObject({ ordinary_rate: "0.24", ltcg_rate: "0.15", prior_year_tax: "18500", withholding_annual: "12000", prestage_lead_days: 30 });
+      expect(app.taxProfile()?.reserve_account).toBe(saved.account.account_id);
+
+      expect(() =>
+        app.saveTaxProfile({ tax_year: 2026, ordinary_rate: "240%", ltcg_rate: "15", prior_year_tax: "1", prior_year_agi_over_150k: false, withholding_annual: "1", reserve_account: saved.account.account_id }),
+      ).toThrow(/doesn't look like a tax rate/);
+      expect(() =>
+        app.saveTaxProfile({ tax_year: 2026, ordinary_rate: "24", ltcg_rate: "15", prior_year_tax: "a lot", prior_year_agi_over_150k: false, withholding_annual: "1", reserve_account: saved.account.account_id }),
+      ).toThrow(/couldn't read "a lot"/);
+    } finally {
+      app.close();
+    }
+  });
+});
