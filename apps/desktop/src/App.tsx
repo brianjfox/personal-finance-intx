@@ -336,7 +336,11 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
 
 /** Free-text intake: the model proposes fields into the UNSAVED form; the operator reviews and saves. */
 function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; disabled: boolean }) {
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(() => DRAFTS.get("profile-intake") ?? "");
+  const setText = (v: string) => {
+    DRAFTS.set("profile-intake", v);
+    setTextState(v);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -480,24 +484,19 @@ const INFERENCE_TASKS: ReadonlyArray<readonly [string, string, string]> = [
   ["strategy", "Strategy", "the Strategist chat"],
 ];
 
+/** Configure any number of AI providers; assign a default and one per task. Keys go to the Keychain. */
 function InferenceCard({ tick }: { tick: number }) {
-  const [engine, setEngine] = useState<"anthropic" | "local">("anthropic");
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8080/v1");
-  const [model, setModel] = useState("");
-  const [tasks, setTasks] = useState<Record<string, { engine: string; model: string }>>({});
+  type S = import("./api").InferenceState;
+  const [state, setState] = useState<S | null>(null);
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [addSel, setAddSel] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    api.inference().then((s) => {
-      setEngine(s.engine);
-      if (s.base_url !== undefined) setBaseUrl(s.base_url);
-      if (s.model !== undefined) setModel(s.model);
-      const t: Record<string, { engine: string; model: string }> = {};
-      for (const [id] of INFERENCE_TASKS) t[id] = { engine: s.tasks?.[id]?.engine ?? "default", model: s.tasks?.[id]?.model ?? "" };
-      setTasks(t);
-    }).catch(() => {});
+    api.inference().then(setState).catch(() => setState(null));
   }, [tick]);
+  if (state === null) return null;
   const act = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
@@ -510,84 +509,124 @@ function InferenceCard({ tick }: { tick: number }) {
       setBusy(false);
     }
   };
+  const setProvider = (i: number, patch: Partial<S["providers"][number]>) =>
+    setState((x) => (x === null ? x : { ...x, providers: x.providers.map((p, j) => (j === i ? { ...p, ...patch } : p)) }));
+  const addProvider = () => {
+    if (addSel === "") return;
+    const preset = addSel === "__other__" ? undefined : state.presets.find((pr) => pr.id === addSel);
+    const base = preset ?? { id: "other", label: "Other provider", kind: "openai-compatible" as const, base_url: "https://", model: "" };
+    let id = base.id;
+    let n = 2;
+    while (state.providers.some((p) => p.id === id)) id = `${base.id}-${n++}`;
+    setState((x) => (x === null ? x : { ...x, providers: [...x.providers, { id, kind: base.kind, label: base.label, base_url: base.base_url, model: base.model }] }));
+    setAddSel("");
+  };
+  const removeProvider = (id: string) =>
+    setState((x) => {
+      if (x === null || x.providers.length <= 1) return x;
+      const providers = x.providers.filter((p) => p.id !== id);
+      const fallback = providers[0]!.id;
+      const tasks = Object.fromEntries(Object.entries(x.tasks ?? {}).filter(([, v]) => v !== id));
+      return { ...x, providers, default: x.default === id ? fallback : x.default, tasks };
+    });
   const save = () =>
     act(async () => {
-      const taskPayload: Record<string, { engine: string; model?: string }> = {};
-      for (const [id, choice] of Object.entries(tasks)) {
-        if (choice.engine !== "default") taskPayload[id] = { engine: choice.engine, ...(choice.model.trim() !== "" ? { model: choice.model.trim() } : {}) };
-      }
-      await api.inferenceSave({
-        ...(engine === "local" ? { engine, base_url: baseUrl, model } : { engine }),
-        ...(Object.keys(taskPayload).length > 0 ? { tasks: taskPayload } : {}),
-      });
-      setStatus("Saved. New turns use these engines immediately -- no restart.");
+      const r = await api.inferenceSave(
+        { version: "2", providers: state.providers, default: state.default, ...(state.tasks !== undefined && Object.keys(state.tasks).length > 0 ? { tasks: state.tasks } : {}) },
+        keys,
+      );
+      setState(r);
+      setKeys({});
+      setStatus("Saved. New turns use these providers immediately — no restart.");
     });
-  const test = (task?: string) =>
+  const test = (provider?: string) =>
     act(async () => {
-      const r = await api.inferenceTest(task);
-      setStatus(`${task !== undefined ? `${task}: ` : ""}${r.ok ? `Working: ${r.detail}` : `Not working: ${r.detail}`}`);
+      const r = await api.inferenceTest(provider !== undefined ? { provider } : undefined);
+      setStatus(`${provider ?? "default"}: ${r.ok ? `working — ${r.detail}` : `not working — ${r.detail}`}`);
     });
+  const providerName = (id: string): string => state.providers.find((p) => p.id === id)?.label ?? id;
   return (
     <div className="queue-item">
       <div className="head">
-        <b>AI engine</b>
-        <span className="pill info">{engine === "local" ? "local — private" : "Anthropic cloud"}</span>
+        <b>AI providers</b>
+        <span className="pill info">{providerName(state.default)} by default</span>
       </div>
       <div className="small muted">
-        Powers the Strategist and Estate Planner chats, proposals, and the profile intake. With a local engine, nothing
-        you discuss ever leaves this Mac — at the cost of a much less capable model.
+        Configure as many providers as you like; each of Profile, Estate, Tax, and Strategy can use its own. Keys are
+        pasted once and stored in your Mac's Keychain — never shown again. A local server means nothing you discuss
+        leaves this Mac.
       </div>
-      <label style={{ display: "block", marginTop: 8 }}>
-        <input type="radio" checked={engine === "anthropic"} disabled={busy} onChange={() => setEngine("anthropic")} /> Anthropic cloud (Claude)
-        <div className="small muted" style={{ marginLeft: 20 }}>Uses the Anthropic API key above. The most capable option.</div>
-      </label>
-      <label style={{ display: "block", marginTop: 4 }}>
-        <input type="radio" checked={engine === "local"} disabled={busy} onChange={() => setEngine("local")} /> Local — Apple MLX or any OpenAI-compatible server
-        <div className="small muted" style={{ marginLeft: 20 }}>
-          e.g. <code>mlx_lm.server --model mlx-community/Qwen2.5-14B-Instruct-4bit</code> (address http://127.0.0.1:8080/v1), or LM
-          Studio's local server. Pick a tool-capable model; advisory quality will be well below Claude's.
+      {state.providers.map((p, i) => (
+        <div key={p.id} style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+          <div className="actions">
+            <b style={{ minWidth: 170 }}>{p.label}</b>
+            <span className={`pill ${state.key_set[p.id] === true ? "low" : "medium"}`}>{state.key_set[p.id] === true ? "ready" : "needs a key"}</span>
+            <button className="secondary" disabled={busy} onClick={() => void test(p.id)}>Test</button>
+            {state.providers.length > 1 && (
+              <button className="secondary" disabled={busy} onClick={() => removeProvider(p.id)}>Remove</button>
+            )}
+          </div>
+          <div className="actions" style={{ marginTop: 4 }}>
+            <input style={{ flex: 1 }} placeholder="Server address" value={p.base_url} disabled={busy} onChange={(e) => setProvider(i, { base_url: e.target.value })} />
+            <input style={{ width: 240 }} placeholder="Model name" value={p.model} disabled={busy} onChange={(e) => setProvider(i, { model: e.target.value })} />
+            <input
+              style={{ width: 220 }}
+              type="password"
+              placeholder={state.key_set[p.id] === true ? "key stored — type to replace" : "API key"}
+              value={keys[p.id] ?? ""}
+              disabled={busy}
+              onChange={(e) => setKeys((k) => ({ ...k, [p.id]: e.target.value }))}
+            />
+          </div>
         </div>
-      </label>
-      {engine === "local" && (
-        <div className="actions" style={{ marginTop: 6 }}>
-          <input style={{ flex: 1 }} placeholder="Server address — http://127.0.0.1:8080/v1" value={baseUrl} disabled={busy} onChange={(e) => setBaseUrl(e.target.value)} />
-          <input style={{ width: 280 }} placeholder="Model name (as the server knows it)" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)} />
-        </div>
-      )}
+      ))}
+      <div className="actions" style={{ marginTop: 10 }}>
+        <select value={addSel} disabled={busy} onChange={(e) => setAddSel(e.target.value)}>
+          <option value="">Add a provider…</option>
+          {state.presets.map((pr) => (
+            <option key={pr.id} value={pr.id}>{pr.label}</option>
+          ))}
+          <option value="__other__">Other OpenAI compatible Provider</option>
+        </select>
+        <button className="secondary" disabled={busy || addSel === ""} onClick={addProvider}>Add</button>
+      </div>
       <div style={{ marginTop: 10 }}>
-        <div className="small muted" style={{ marginBottom: 4 }}>
-          <b>Per-task engines</b> — each area can use its own provider (e.g. a small local model for Profile, Claude for
-          Strategy). "Use default" follows the choice above.
+        <div className="small muted" style={{ marginBottom: 4 }}><b>Assignments</b></div>
+        <div className="actions" style={{ marginTop: 4 }}>
+          <span style={{ width: 70, display: "inline-block" }}>Default</span>
+          <select value={state.default} disabled={busy} onChange={(e) => setState((x) => (x === null ? x : { ...x, default: e.target.value }))}>
+            {state.providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.label} — {p.model}</option>
+            ))}
+          </select>
         </div>
         {INFERENCE_TASKS.map(([id, label, hint]) => (
           <div key={id} className="actions" style={{ marginTop: 4 }}>
             <span style={{ width: 70, display: "inline-block" }}>{label}</span>
             <select
-              value={tasks[id]?.engine ?? "default"}
+              value={state.tasks?.[id] ?? ""}
               disabled={busy}
-              onChange={(e) => setTasks((t) => ({ ...t, [id]: { engine: e.target.value, model: t[id]?.model ?? "" } }))}
+              onChange={(e) =>
+                setState((x) => {
+                  if (x === null) return x;
+                  const tasks = { ...(x.tasks ?? {}) };
+                  if (e.target.value === "") delete tasks[id];
+                  else tasks[id] = e.target.value;
+                  return { ...x, tasks };
+                })
+              }
             >
-              <option value="default">Use default</option>
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="local">Local server</option>
+              <option value="">Use default</option>
+              {state.providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.label} — {p.model}</option>
+              ))}
             </select>
-            {(tasks[id]?.engine ?? "default") !== "default" && (
-              <input
-                style={{ width: 260 }}
-                placeholder="model override (optional)"
-                value={tasks[id]?.model ?? ""}
-                disabled={busy}
-                onChange={(e) => setTasks((t) => ({ ...t, [id]: { engine: t[id]?.engine ?? "default", model: e.target.value } }))}
-              />
-            )}
-            <button className="secondary" disabled={busy} onClick={() => void test(id)}>Test</button>
             <span className="small muted">{hint}</span>
           </div>
         ))}
       </div>
       <div className="actions" style={{ marginTop: 8 }}>
         <button disabled={busy} onClick={() => void save()}>{busy ? "…" : "Save"}</button>
-        <button className="secondary" disabled={busy} onClick={() => void test()}>Test default</button>
       </div>
       {status !== null && <div className="banner" style={{ marginTop: 8 }}>{status}</div>}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
@@ -2294,10 +2333,17 @@ function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: bo
 // Phase 3: the Strategist chat. The model narrates; every figure comes
 // from a tool result recorded as evidence, each number clickable back to
 // its facts. Chat is a tool inside the product, not the product.
+/** Unsent drafts survive page/tab switches (component unmounts) for the whole session. */
+const DRAFTS = new Map<string, string>();
+
 /** One agent's transcript + a proper composer (4-6 lines, wrapping; Enter sends, Shift+Enter = new line). */
 function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact: (id: string) => void; intro?: string }) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState(() => DRAFTS.get(`chat:${agent}`) ?? "");
+  const setText = (v: string) => {
+    DRAFTS.set(`chat:${agent}`, v);
+    setTextState(v);
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {

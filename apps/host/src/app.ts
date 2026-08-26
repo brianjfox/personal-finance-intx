@@ -88,11 +88,12 @@ import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
 import { createConnectors, type ConnectorConfig } from "./connect";
-import { readInferenceSettings, resolveTaskSource, testInference, writeInferenceSettings, type InferenceSettings, type InferenceTask } from "./inference";
+import { INFERENCE_SERVICE, PROVIDER_PRESETS, providerForTask, readInferenceSettings, resolveTaskSource, sourceForProvider, testInference, writeInferenceSettings, type InferenceSettings, type InferenceTask } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
 import { fxRates, type FxRates } from "./fx";
 import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
 import {
+  ANTHROPIC_SERVICE,
   credentialsStatus,
   deleteConnectionTokens,
   deleteCredential,
@@ -229,12 +230,12 @@ export interface App {
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** Display FX: current ECB rates into the preferred currency (cached ~12h; stale-marked offline). */
   getFx(): Promise<FxRates>;
-  /** Which AI engine answers: Anthropic's cloud, or a local OpenAI-compatible server (Apple MLX, LM Studio). */
-  getInferenceSettings(): InferenceSettings;
-  /** Switch engines; validated (local http only to loopback). Applies to the next turn -- no restart. */
-  setInferenceSettings(settings: InferenceSettings): InferenceSettings;
-  /** One tiny round-trip to the configured engine (optionally a task's engine), for the GUI's Test buttons. */
-  testInference(task?: InferenceTask): Promise<{ ok: boolean; detail: string }>;
+  /** The provider registry + which providers have a stored key (presence only) + the preset catalog. */
+  getInferenceSettings(): InferenceSettings & { key_set: Record<string, boolean>; presets: typeof PROVIDER_PRESETS };
+  /** Save the registry (and any pasted keys -> Keychain, never echoed). Applies to the next turn -- no restart. */
+  setInferenceSettings(settings: InferenceSettings, keys?: Record<string, string>): InferenceSettings;
+  /** One tiny round-trip -- a task's provider, a named provider, or the default -- for the GUI's Test buttons. */
+  testInference(target?: { task?: InferenceTask; provider?: string }): Promise<{ ok: boolean; detail: string }>;
   /** The household profile, redacted: the tax id never leaves the host (last four digits only). */
   getProfile(): (ReturnType<typeof redactProfile> & { configured: true }) | { configured: false };
   /** Free-text -> proposed profile fields (model-assisted; the GUI merges into the unsaved form for review). */
@@ -444,16 +445,22 @@ export function createApp(opts: AppOptions): App {
   const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
   const actions = buildActions(actx);
   const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
+  const anthropicKey = (): string | null => {
+    const env = process.env["ANTHROPIC_API_KEY"] ?? "";
+    if (env !== "") return env;
+    return secrets.get(ANTHROPIC_SERVICE, "anthropic");
+  };
+  const resolveOpts = () => ({ secrets, anthropicKey });
   /** The model a task's workflow definition names (no key needed -- settings only). */
   const modelFor = (task?: InferenceTask): string => {
-    const s = inferenceSettings();
-    const choice = task !== undefined ? s.tasks?.[task] : undefined;
-    const engine = choice === undefined || choice.engine === "default" ? s.engine : choice.engine;
-    if (engine === "local") return choice?.model ?? s.model ?? "local";
-    return choice?.model ?? opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
+    try {
+      return providerForTask(inferenceSettings(), task).model;
+    } catch {
+      return opts.model ?? process.env["FIN_MODEL"] ?? "claude-sonnet-5";
+    }
   };
   const model_ = (): string => modelFor(undefined);
-  const resolveSourceFor = (task?: InferenceTask): InferenceSource => resolveTaskSource(inferenceSettings(), task, anthropicSourceFromEnv);
+  const resolveSourceFor = (task?: InferenceTask): InferenceSource => resolveTaskSource(inferenceSettings(), task, resolveOpts());
   const resolveSource = (): InferenceSource => resolveSourceFor(undefined);
   /** Which per-task engine a chat agent follows. */
   const taskOfAgent = (agentId: string): InferenceTask | undefined =>
@@ -704,14 +711,36 @@ export function createApp(opts: AppOptions): App {
       });
     },
     getInferenceSettings() {
-      return inferenceSettings();
+      const s = inferenceSettings();
+      const key_set: Record<string, boolean> = {};
+      for (const p of s.providers) {
+        key_set[p.id] =
+          secrets.get(INFERENCE_SERVICE, `key:${p.id}`) !== null ||
+          (p.kind === "anthropic" && anthropicKey() !== null) ||
+          /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(p.base_url);
+      }
+      return { ...s, key_set, presets: PROVIDER_PRESETS };
     },
-    setInferenceSettings(settings) {
-      return writeInferenceSettings(dataDir, settings);
+    setInferenceSettings(settings, keys) {
+      const saved = writeInferenceSettings(dataDir, settings);
+      if (keys !== undefined) {
+        for (const [id, key] of Object.entries(keys)) {
+          if (key.trim() === "") continue;
+          if (!saved.providers.some((p) => p.id === id)) continue;
+          storeSecret(INFERENCE_SERVICE, `key:${id}`, key.trim());
+        }
+      }
+      return saved;
     },
-    async testInference(task) {
+    async testInference(target) {
       try {
-        const source = opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSourceFor(task);
+        let source: InferenceSource;
+        if (opts.inferenceSource !== undefined) source = opts.inferenceSource();
+        else if (target?.provider !== undefined) {
+          const p = inferenceSettings().providers.find((x) => x.id === target.provider);
+          if (p === undefined) throw new Error(`provider ${target.provider} isn't configured`);
+          source = sourceForProvider(p, resolveOpts());
+        } else source = resolveSourceFor(target?.task);
         return await testInference(source);
       } catch (e) {
         return { ok: false, detail: e instanceof Error ? e.message : String(e) };

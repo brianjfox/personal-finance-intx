@@ -12,7 +12,7 @@ import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
 import type { App } from "./app";
-import { InferenceSettings, type InferenceTask } from "./inference";
+import { InferenceSettingsV2, type InferenceTask } from "./inference";
 
 export interface IpcOptions {
   app: App;
@@ -85,8 +85,8 @@ const CredentialDeleteBody = type({ id: "'anthropic' | 'plaid' | 'enablebanking'
 const TokensDeleteBody = type({ institution_id: "string > 0" });
 const ProfileBody = HouseholdProfile.and(type({ "clear_ssn?": "boolean" }));
 const ExtractBody = type({ text: "string > 0" });
-const InferenceBody = InferenceSettings;
-const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'" });
+const InferenceBody = type({ settings: InferenceSettingsV2, "keys?": "Record<string, string>" });
+const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'", "provider?": "string" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   const { app } = opts;
@@ -212,12 +212,18 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/inference" && req.method === "POST") {
           const body = InferenceBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          return json(app.setInferenceSettings(body));
+          app.setInferenceSettings(body.settings, body.keys);
+          return json(app.getInferenceSettings());
         }
         if (p === "/api/inference/test" && req.method === "POST") {
           const body = InferenceTestBody(await req.json().catch(() => ({})));
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          return json(await app.testInference(body.task as InferenceTask | undefined));
+          return json(
+            await app.testInference({
+              ...(body.task !== undefined ? { task: body.task as InferenceTask } : {}),
+              ...(body.provider !== undefined ? { provider: body.provider } : {}),
+            }),
+          );
         }
         if (p === "/api/credentials" && req.method === "GET") return json(app.credentialsStatus());
         if (p === "/api/credentials/set" && req.method === "POST") {
