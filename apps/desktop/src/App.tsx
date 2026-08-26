@@ -870,7 +870,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
               existing={ob.institutions.map((i) => i.name)}
             />
           ) : (
-            <p><button onClick={() => setAdding(true)}>Connect another institution</button></p>
+            <p><button onClick={() => setAdding(true)}>Add asset, or connect an institution</button></p>
           )}
         </>
       )}
@@ -1028,7 +1028,7 @@ function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () 
     ) : null;
   return (
     <div className="queue-item">
-      <div className="head"><b>Connect an institution</b></div>
+      <div className="head"><b>Add an asset, or connect an institution</b></div>
       <div className="actions" style={{ marginTop: 8 }}>
         <input
           style={{ flex: 1, maxWidth: 320 }}
