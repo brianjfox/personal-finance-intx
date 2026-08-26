@@ -22,6 +22,8 @@ export interface FinToolEnv {
   evidence: (e: ChatEvidence) => void;
   /** Record a journal entry id written during this turn. */
   journal: (id: string) => void;
+  /** Save a drafted document (markdown) into the vault under this agent's name. */
+  saveDocument: (opts: { title: string; content: string }) => { document_id: string; filename: string };
 }
 
 /** The env shape the @fin bundles are constructed against. */
