@@ -344,9 +344,12 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const run = async () => {
     const t = text.trim();
     if (t === "") return;
+    setText("");
+    setPending(t);
     setBusy(true);
     setError(null);
     setResult(null);
@@ -394,10 +397,11 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
         (filled.length > 0 ? `Filled in: ${filled.join(", ")}. Review above and press Save profile.` : "Nothing new found in that.") +
           (patch.note !== undefined ? ` (${patch.note})` : ""),
       );
-      setText("");
     } catch (e) {
       setError(String(e));
+      setText(t); // the draft comes back rather than being lost
     } finally {
+      setPending(null);
       setBusy(false);
     }
   };
@@ -424,7 +428,12 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
         />
         <button disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill in the form"}</button>
       </div>
-      {busy && <Thinking label="Reading what you wrote and filling in the form" />}
+      {pending !== null && (
+        <div style={{ marginTop: 8 }}>
+          <div className="pending-msg small">{pending}</div>
+          <Thinking label="Reading what you wrote and filling in the form" />
+        </div>
+      )}
       {result !== null && <div className="banner" style={{ marginTop: 8 }}>{result}</div>}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <p className="small muted" style={{ marginTop: 4 }}>
@@ -2491,6 +2500,7 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
     DRAFTS.set(`chat:${agent}`, v);
     setTextState(v);
   };
+  const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
@@ -2500,15 +2510,19 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
   const send = async () => {
     const t = text.trim();
     if (t === "") return;
+    // Optimistic: the question appears highlighted at once, the box empties.
+    setText("");
+    setPending(t);
     setBusy(true);
     setError(null);
     try {
       await api.chatSend(agent, t);
-      setText("");
       load();
     } catch (e) {
       setError(String(e));
+      setText(t); // the draft comes back rather than being lost
     } finally {
+      setPending(null);
       setBusy(false);
     }
   };
@@ -2527,7 +2541,13 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
       )}
       {showHistory && earlier.map((t) => <ChatTurnCard key={t.message_id} t={t} openFact={openFact} />)}
       {latest !== null && <ChatTurnCard t={latest} openFact={openFact} />}
-      {busy && <Thinking label={`The ${agent === "estate_planner" ? "Estate Planner" : "Strategist"} is thinking`} />}
+      {pending !== null && (
+        <div className="queue-item">
+          <div className="small muted">you · just now</div>
+          <div className="pending-msg">{pending}</div>
+          <Thinking label={`The ${agent === "estate_planner" ? "Estate Planner" : "Strategist"} is thinking`} />
+        </div>
+      )}
       {error !== null && <div className="banner">{error}</div>}
       {summary !== null && (
         <p className="small muted" style={{ fontStyle: "italic", marginBottom: 4 }}>{summary}</p>
