@@ -424,6 +424,7 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
         />
         <button disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill in the form"}</button>
       </div>
+      {busy && <Thinking label="Reading what you wrote and filling in the form" />}
       {result !== null && <div className="banner" style={{ marginTop: 8 }}>{result}</div>}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <p className="small muted" style={{ marginTop: 4 }}>
@@ -1763,6 +1764,27 @@ function DocumentLink({ path, children }: { path: string; children: React.ReactN
   );
 }
 
+/**
+ * Shown wherever the app is waiting on an inference provider, so a long
+ * think (local models especially) never looks like a hang. The elapsed
+ * counter appears after a few seconds.
+ */
+function Thinking({ label }: { label: string }) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSecs((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="thinking small muted">
+      <span className="spinner" />
+      <span>
+        {label}…{secs >= 3 ? ` ${secs}s` : ""}
+      </span>
+    </div>
+  );
+}
+
 function FactLink({ id, children, openFact }: { id: string; children: React.ReactNode; openFact: (id: string) => void }) {
   return (
     <span className="fact" title={`fact ${id}`} onClick={() => openFact(id)}>
@@ -2000,6 +2022,7 @@ function ApprovalsSection({ tick, onChanged, openFact }: { tick: number; onChang
         <button disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
         <span className="small muted"> drift vs the written plan · auditor re-runs every figure · execution stays disabled</span>
       </p>
+      {busy && <Thinking label="The Market Manager is drafting and the Auditor is re-running its figures" />}
       {queue.length === 0 && <p className="muted">No proposals await your signature.</p>}
       {queue.map((q) => (
         <ApprovalItem key={q.recommendation.id} q={q} onChanged={onChanged} openFact={openFact} />
@@ -2504,6 +2527,7 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
       )}
       {showHistory && earlier.map((t) => <ChatTurnCard key={t.message_id} t={t} openFact={openFact} />)}
       {latest !== null && <ChatTurnCard t={latest} openFact={openFact} />}
+      {busy && <Thinking label={`The ${agent === "estate_planner" ? "Estate Planner" : "Strategist"} is thinking`} />}
       {error !== null && <div className="banner">{error}</div>}
       {summary !== null && (
         <p className="small muted" style={{ fontStyle: "italic", marginBottom: 4 }}>{summary}</p>

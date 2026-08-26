@@ -71,3 +71,8 @@ th.sortable:hover { color: var(--accent); }
 
 /* Chat composer: 4-6 lines tall, wraps, grows only by hand. */
 textarea.chat-input { flex: 1; min-height: 96px; max-height: 150px; resize: vertical; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
+
+/* Inference activity: the app is alive while a model thinks. */
+.thinking { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-style: italic; }
+.spinner { width: 14px; height: 14px; flex: none; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; display: inline-block; animation: fin-spin .8s linear infinite; }
+@keyframes fin-spin { to { transform: rotate(360deg); } }
