@@ -9,10 +9,11 @@ import type { AccountPayload, EntityPayload, TitlingPayload } from "@fin/contrac
 import { defineTool, type BaseEnv } from "@intx/agent";
 
 import { finBundle, OBJECT_SCHEMA, type FinTool } from "./bundle";
+import { saveDraftTool } from "./draft";
 import { householdProfileTool } from "./profile";
 import type { FinAgentEnvExtras } from "./env";
 
-export const ESTATE_TOOL_NAMES = ["registry_read", "document_read", "emit_finding", "household_profile"] as const;
+export const ESTATE_TOOL_NAMES = ["registry_read", "document_read", "emit_finding", "household_profile", "save_draft"] as const;
 
 const registryRead: FinTool = {
   definition: {
@@ -120,5 +121,5 @@ export const estateTools = defineTool<BaseEnv & FinAgentEnvExtras>({
   id: "fin/estate",
   requires: ["fin"],
   definitions: ESTATE_TOOL_NAMES.map((name) => ({ name })),
-  factory: (env) => finBundle(env.fin, [registryRead, documentRead, emitFinding, householdProfileTool]),
+  factory: (env) => finBundle(env.fin, [registryRead, documentRead, emitFinding, householdProfileTool, saveDraftTool]),
 });

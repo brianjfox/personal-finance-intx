@@ -36,7 +36,7 @@ import { createWorkflowStepInvoker } from "@intx/workflow-host";
 
 export interface FinStepInvokerOptions {
   dataDir: string;
-  actx: Pick<ActionContext, "ledger" | "clock" | "taxProfile" | "estateFile" | "plan" | "profile">;
+  actx: Pick<ActionContext, "ledger" | "vault" | "clock" | "taxProfile" | "estateFile" | "plan" | "profile">;
   authorize: WorkflowAuthorizeFn;
   /** Resolve the live inference source; called per turn, throws loudly without a key. */
   source: (agentId?: string) => InferenceSource;
@@ -72,6 +72,7 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
         taxProfile: () => opts.actx.taxProfile?.() ?? null,
         estateFile: () => opts.actx.estateFile?.() ?? null,
         profile: () => opts.actx.profile?.() ?? null,
+        saveDocument: ({ title, content }) => saveDraftDocument(opts.actx.vault, req.agent.id, title, content, opts.actx.clock),
         plan: () => opts.actx.plan?.() ?? null,
         evidence: (e) => current.evidence.push(e),
         journal: (id) => current.journal.push(id),
@@ -113,6 +114,38 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
     }
     return result;
   };
+}
+
+/** Agent id -> the principal a drafted document is recorded under. */
+const DRAFT_PRINCIPALS: Record<string, "estate_planner" | "strategist"> = {
+  "estate-planner": "estate_planner",
+  strategist: "strategist",
+};
+
+/** Store an agent-drafted markdown document in the vault, provenance intact. */
+export function saveDraftDocument(
+  vault: import("@fin/vault").Vault,
+  agentId: string,
+  title: string,
+  content: string,
+  clock: () => Date,
+): { document_id: string; filename: string } {
+  const principal = DRAFT_PRINCIPALS[agentId];
+  if (principal === undefined) throw new Error(`agent ${agentId} may not save drafts`);
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "draft";
+  const filename = `${slug}-${clock().toISOString().slice(0, 10)}.md`;
+  const r = vault.ingest({
+    bytes: new TextEncoder().encode(content),
+    filename,
+    mime: "text/markdown",
+    kind: "draft",
+    source_id: `agent.${principal}`,
+    institution_id: null,
+    account_id: null,
+    tax_year: null,
+    ingested_by: principal,
+  });
+  return { document_id: r.id, filename };
 }
 
 /**

@@ -6,7 +6,7 @@ import { Principal } from "./principals";
 import { Id, IsoDateTime, Subject } from "./scalars";
 
 export const DocumentKind = type(
-  "'statement' | 'tax_form' | 'trade_confirm' | 'deed' | 'policy' | 'trust' | 'will' | 'snapshot' | 'export' | 'other'",
+  "'statement' | 'tax_form' | 'trade_confirm' | 'deed' | 'policy' | 'trust' | 'will' | 'snapshot' | 'export' | 'draft' | 'other'",
 );
 export type DocumentKind = typeof DocumentKind.infer;
 

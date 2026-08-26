@@ -2645,8 +2645,42 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
   );
 }
 
+type DocTab = "all" | "drafts" | "data" | "records";
+type DocSortKey = "name" | "kind" | "creator" | "size" | "date";
+
+const CREATOR_LABELS: Record<string, string> = {
+  estate_planner: "Estate Planner",
+  strategist: "Strategist",
+  assets_manager: "Institutions & feeds",
+  operator: "You",
+};
+const creatorLabel = (id: string): string => CREATOR_LABELS[id] ?? id;
+
+/** mime/extension -> a coarse, filterable file type. */
+function fileTypeOf(d: Doc): string {
+  const m = d.mime.toLowerCase();
+  const ext = (d.filename.split(".").pop() ?? "").toLowerCase();
+  if (m.includes("pdf") || ext === "pdf") return "PDF";
+  if (m.includes("markdown") || ext === "md") return "Markdown";
+  if (m.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "heic", "webp"].includes(ext)) return "Image";
+  if (m.includes("json") || ext === "json") return "JSON";
+  if (m.includes("csv") || ext === "csv") return "CSV";
+  if (m.startsWith("text/") || ext === "txt") return "Text";
+  return ext !== "" ? ext.toUpperCase() : "Other";
+}
+
+function docTabOf(d: Doc): DocTab {
+  if (d.kind === "draft") return "drafts";
+  if (d.kind === "snapshot" || d.kind === "export") return "data";
+  return "records"; // statements, tax forms, deeds, wills, policies, ...
+}
+
 function Documents({ tick }: { tick: number }) {
   const [docs, setDocs] = useState<Doc[]>([]);
+  const [tab, setTab] = useState<DocTab>("all");
+  const [creator, setCreator] = useState("");
+  const [ftype, setFtype] = useState("");
+  const [sort, setSort] = useState<{ key: DocSortKey; dir: 1 | -1 }>({ key: "date", dir: -1 });
   const [exported, setExported] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -2663,6 +2697,31 @@ function Documents({ tick }: { tick: number }) {
       setBusy(false);
     }
   };
+  const clickSort = (key: DocSortKey) =>
+    setSort((s0) => (s0.key === key ? { key, dir: s0.dir === 1 ? -1 : 1 } : { key, dir: key === "date" || key === "size" ? -1 : 1 }));
+  const Th = ({ k, label, num }: { k: DocSortKey; label: string; num?: boolean }) => (
+    <th className={`sortable${num === true ? " num" : ""}`} onClick={() => clickSort(k)}>
+      {label}
+      {sort.key === k ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
+    </th>
+  );
+  const creators = [...new Set(docs.map((d) => d.ingested_by))].sort();
+  const ftypes = [...new Set(docs.map(fileTypeOf))].sort();
+  const counts = new Map<DocTab, number>();
+  for (const d of docs) counts.set(docTabOf(d), (counts.get(docTabOf(d)) ?? 0) + 1);
+  const rows = docs
+    .filter((d) => (tab === "all" ? true : docTabOf(d) === tab))
+    .filter((d) => (creator === "" ? true : d.ingested_by === creator))
+    .filter((d) => (ftype === "" ? true : fileTypeOf(d) === ftype))
+    .sort((a, b) => {
+      switch (sort.key) {
+        case "name": return sort.dir * a.filename.localeCompare(b.filename);
+        case "kind": return sort.dir * (a.kind.localeCompare(b.kind) || a.filename.localeCompare(b.filename));
+        case "creator": return sort.dir * (a.ingested_by.localeCompare(b.ingested_by) || a.filename.localeCompare(b.filename));
+        case "size": return sort.dir * (a.bytes - b.bytes);
+        case "date": return sort.dir * a.ingested_at.localeCompare(b.ingested_at);
+      }
+    });
   return (
     <>
       <h2>Document vault</h2>
@@ -2671,14 +2730,48 @@ function Documents({ tick }: { tick: number }) {
         <span className="small muted"> everything as CSV + PDF + originals, readable with no software from this project (deck slide 21)</span>
       </p>
       {exported !== null && <div className="banner">{exported}</div>}
+      <p>
+        {(
+          [
+            ["all", "All"],
+            ["drafts", "Drafts"],
+            ["data", "Statements & data"],
+            ["records", "Records"],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} className={tab === id ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab(id)}>
+            {label}
+            {id !== "all" && (counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
+          </button>
+        ))}
+      </p>
+      <div className="actions" style={{ marginBottom: 8 }}>
+        <select value={creator} onChange={(e) => setCreator(e.target.value)}>
+          <option value="">All creators</option>
+          {creators.map((c) => (
+            <option key={c} value={c}>{creatorLabel(c)}</option>
+          ))}
+        </select>
+        <select value={ftype} onChange={(e) => setFtype(e.target.value)}>
+          <option value="">All types</option>
+          {ftypes.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        {(creator !== "" || ftype !== "") && (
+          <button className="secondary" onClick={() => { setCreator(""); setFtype(""); }}>Clear filters</button>
+        )}
+        <span className="small muted">{rows.length} of {docs.length} documents</span>
+      </div>
       <table>
-        <thead><tr><th>File</th><th>Kind</th><th>Source</th><th className="num">Bytes</th><th>Ingested</th><th>sha256</th></tr></thead>
+        <thead><tr><Th k="name" label="File" /><Th k="kind" label="Kind" /><th>Type</th><Th k="creator" label="Creator" /><Th k="size" label="Bytes" num /><Th k="date" label="Ingested" /><th>sha256</th></tr></thead>
         <tbody>
-          {docs.map((d) => (
+          {rows.map((d) => (
             <tr key={d.id}>
               <td><DocumentLink path={`/api/document/${d.id}/bytes`}>{d.filename}</DocumentLink></td>
               <td>{d.kind}</td>
-              <td className="small">{d.source_id}</td>
+              <td className="small">{fileTypeOf(d)}</td>
+              <td className="small">{creatorLabel(d.ingested_by)}</td>
               <td className="num">{d.bytes}</td>
               <td className="small">{when(d.ingested_at)}</td>
               <td className="small muted">{d.sha256.slice(0, 16)}…</td>
