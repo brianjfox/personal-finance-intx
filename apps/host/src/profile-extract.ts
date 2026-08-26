@@ -6,7 +6,7 @@
 // parse), validated before it leaves the host, and the rules are
 // explicit: only what the text states, never invented dates.
 
-import { HouseholdProfile, redactProfile, type ProfileRelation } from "@fin/contracts";
+import { HouseholdProfile, parseDateInput, redactProfile, type ProfileRelation } from "@fin/contracts";
 import { type } from "arktype";
 import type { InferenceSource } from "@intx/types/runtime";
 
@@ -185,7 +185,10 @@ function scrub(input: unknown): unknown {
     if (typeof rr["legal_name"] !== "string" || rr["legal_name"].trim() === "") return null;
     const rel: Record<string, unknown> = { legal_name: (rr["legal_name"] as string).trim() };
     for (const k of ["relationship", "note"]) if (typeof rr[k] === "string" && (rr[k] as string).trim() !== "") rel[k] = (rr[k] as string).trim();
-    if (typeof rr["date_of_birth"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rr["date_of_birth"] as string)) rel["date_of_birth"] = rr["date_of_birth"];
+    if (typeof rr["date_of_birth"] === "string") {
+      const d = parseDateInput(rr["date_of_birth"] as string);
+      if (d !== null) rel["date_of_birth"] = d;
+    }
     return rel as unknown as ProfileRelation;
   };
   const i = input as Record<string, unknown>;
@@ -193,7 +196,12 @@ function scrub(input: unknown): unknown {
     const p: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(i["person"] as Record<string, unknown>)) {
       if (typeof v !== "string" || v.trim() === "") continue;
-      if (k === "date_of_birth" && !/^\d{4}-\d{2}-\d{2}$/.test(v)) continue;
+      if (k === "date_of_birth") {
+        const d = parseDateInput(v);
+        if (d === null) continue;
+        p[k] = d;
+        continue;
+      }
       p[k] = v.trim();
     }
     if (Object.keys(p).length > 0) out["person"] = p;

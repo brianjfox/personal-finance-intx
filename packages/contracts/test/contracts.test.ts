@@ -240,3 +240,29 @@ describe("parseMoneyInput", () => {
     expect(parseMoneyInput("")).toBeNull();
   });
 });
+
+describe("parseDateInput", () => {
+  const { parseDateInput } = require("../src/dates") as typeof import("../src/dates");
+  test("freeform forms all land on ISO", () => {
+    expect(parseDateInput("Jul 30 1959")).toBe("1959-07-30");
+    expect(parseDateInput("July 30, 1959")).toBe("1959-07-30");
+    expect(parseDateInput("jul. 30th, 1959")).toBe("1959-07-30");
+    expect(parseDateInput("30 Jul 1959")).toBe("1959-07-30");
+    expect(parseDateInput("30th of July, 1959")).toBe("1959-07-30");
+    expect(parseDateInput("1959-07-30")).toBe("1959-07-30");
+    expect(parseDateInput("1959-7-3")).toBe("1959-07-03");
+    expect(parseDateInput("7/30/1959")).toBe("1959-07-30"); // US month-first
+    expect(parseDateInput("30/7/1959")).toBe("1959-07-30"); // day-first when month-first impossible
+    expect(parseDateInput("Nov 2, 2000")).toBe("2000-11-02");
+    expect(parseDateInput("November 25 2025")).toBe("2025-11-25");
+  });
+  test("impossible or unreadable dates refuse", () => {
+    expect(parseDateInput("Feb 30 2001")).toBeNull();
+    expect(parseDateInput("Feb 29 2024")).toBe("2024-02-29"); // leap
+    expect(parseDateInput("Feb 29 2023")).toBeNull();
+    expect(parseDateInput("Jul 30")).toBeNull(); // no year: never guessed
+    expect(parseDateInput("Smarch 5 1990")).toBeNull();
+    expect(parseDateInput("")).toBeNull();
+    expect(parseDateInput("soon")).toBeNull();
+  });
+});
