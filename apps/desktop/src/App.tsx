@@ -3,7 +3,7 @@
 // 19). The exception queue is the home screen in Phase 1; in Phase 4 the
 // approval queue joins it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fxState, money, moneyNative, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
 
@@ -366,11 +366,13 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const intakeRef = useRef<HTMLDivElement | null>(null);
   const run = async () => {
     const t = text.trim();
     if (t === "") return;
     setText("");
     setPending(t);
+    requestAnimationFrame(() => intakeRef.current?.scrollIntoView({ block: "end", behavior: "smooth" }));
     setBusy(true);
     setError(null);
     setResult(null);
@@ -450,7 +452,7 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
         <button disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill in the form"}</button>
       </div>
       {pending !== null && (
-        <div style={{ marginTop: 8 }}>
+        <div ref={intakeRef} style={{ marginTop: 8 }}>
           <div className="pending-msg small">{pending}</div>
           <Thinking label="Reading what you wrote and filling in the form" />
         </div>
@@ -2524,18 +2526,30 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
   const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollToComposer = () => {
+    requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" }));
+  };
   const load = useCallback(() => {
     api.chatTranscript(agent).then(setTurns).catch(() => setTurns([]));
   }, [agent]);
   useEffect(load, [load]);
+  // A reply landing (turn count grows) also brings the composer back into view.
+  const prevTurnCount = useRef<number | null>(null);
+  useEffect(() => {
+    if (prevTurnCount.current !== null && turns.length > prevTurnCount.current) scrollToComposer();
+    prevTurnCount.current = turns.length;
+  }, [turns.length]);
   const send = async () => {
     const t = text.trim();
     if (t === "") return;
-    // Optimistic: the question appears highlighted at once, the box empties.
+    // Optimistic: the question appears highlighted at once, the box empties,
+    // and the panel scrolls so the spinner AND the composer are in view.
     setText("");
     setPending(t);
     setBusy(true);
     setError(null);
+    scrollToComposer();
     try {
       await api.chatSend(agent, t);
       load();
@@ -2573,7 +2587,7 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
       {summary !== null && (
         <p className="small muted" style={{ fontStyle: "italic", marginBottom: 4 }}>{summary}</p>
       )}
-      <div className="actions" style={{ alignItems: "flex-end" }}>
+      <div ref={bottomRef} className="actions" style={{ alignItems: "flex-end" }}>
         <textarea
           className="chat-input"
           rows={5}
