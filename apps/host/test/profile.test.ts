@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { memorySecretStore } from "@fin/institutions";
 import { householdProfileTool } from "@fin/tools";
 
 import { createApp } from "../src/app";
@@ -134,7 +135,8 @@ describe("free-text profile intake", () => {
   test("no AI key means the Credentials-page message, not a crash", async () => {
     const saved = process.env["ANTHROPIC_API_KEY"];
     delete process.env["ANTHROPIC_API_KEY"];
-    const app = createApp({ dataDir: tmp() });
+    // A memory store isolates the test from the developer's real Keychain.
+    const app = createApp({ dataDir: tmp(), connectors: { secrets: memorySecretStore() } });
     try {
       expect(app.extractProfile("hello")).rejects.toThrow(/Credentials page/);
     } finally {

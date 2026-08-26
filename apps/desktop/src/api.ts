@@ -136,6 +136,16 @@ export interface ProfileSave {
   clear_ssn?: boolean;
 }
 
+export interface ProviderRow { id: string; kind: "anthropic" | "openai-compatible"; label: string; base_url: string; model: string }
+export interface InferenceState {
+  version: "2";
+  providers: ProviderRow[];
+  default: string;
+  tasks?: Record<string, string>;
+  key_set: Record<string, boolean>;
+  presets: Array<{ id: string; label: string; kind: "anthropic" | "openai-compatible"; base_url: string; model: string; keyless?: boolean }>;
+}
+
 export interface ManagedAccount {
   account_id: string; name: string; type: string; currency: string; value: string; updated_at: string; closed_at?: string;
 }
@@ -245,11 +255,11 @@ export const api = {
       note?: string;
     }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
-  inference: () =>
-    get<{ engine: "anthropic" | "local"; base_url?: string; model?: string; tasks?: Record<string, { engine: string; model?: string; base_url?: string }> }>("/api/inference"),
-  inferenceSave: (input: { engine: "anthropic" | "local"; base_url?: string; model?: string; tasks?: Record<string, { engine: string; model?: string; base_url?: string }> }) =>
-    post<{ engine: string }>("/api/inference", input),
-  inferenceTest: (task?: string) => post<{ ok: boolean; detail: string }>("/api/inference/test", task !== undefined ? { task } : {}),
+  inference: () => get<InferenceState>("/api/inference"),
+  inferenceSave: (settings: InferenceState["providers"] extends unknown ? { version: "2"; providers: ProviderRow[]; default: string; tasks?: Record<string, string> } : never, keys?: Record<string, string>) =>
+    post<InferenceState>("/api/inference", { settings, ...(keys !== undefined ? { keys } : {}) }),
+  inferenceTest: (target?: { task?: string; provider?: string }) =>
+    post<{ ok: boolean; detail: string }>("/api/inference/test", target ?? {}),
   credentials: () =>
     get<{
       slots: Array<{ id: string; label: string; note: string; configured: boolean; fields: Array<{ account: string; label: string; multiline: boolean; set: boolean }> }>;
