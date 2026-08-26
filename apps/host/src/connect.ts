@@ -133,7 +133,7 @@ export function createConnectors(cfg: ConnectorConfig) {
     async ebAuthStart(opts: { name: string; institutionId?: string; country: string; bank: string; redirectUrl?: string; validDays?: number }): Promise<{ url: string; state: string }> {
       const redirect = opts.redirectUrl ?? cfg.ebRedirectUrl;
       if (redirect === undefined) {
-        throw new Error("enablebanking: no redirect URL configured -- register one with your Enable Banking application and set it here");
+        throw new Error("enablebanking: no redirect URL -- enter the one registered with your Enable Banking application (enablebanking.com -> API applications -> Redirect URLs)");
       }
       const state = crypto.randomUUID();
       const validUntil = new Date(clock().getTime() + (opts.validDays ?? 180) * 86_400_000).toISOString();

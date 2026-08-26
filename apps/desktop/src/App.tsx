@@ -1427,6 +1427,15 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
   const [state, setState] = useState<string | null>(null);
   const [consentUrl, setConsentUrl] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  // Registered with the Enable Banking application (enablebanking.com -> API
+  // applications -> Redirect URLs); the same one every time, so remember it.
+  const [redirect, setRedirect] = useState(() => {
+    try {
+      return localStorage.getItem("fin.eb.redirect") ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const act = async (label: string, fn: () => Promise<void>) => {
@@ -1449,10 +1458,19 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
   const start = () =>
     act("start", async () => {
       if (institutionId === null && name.trim() === "") throw new Error("Give the connection a name first.");
+      if (redirect.trim() === "") {
+        throw new Error("Enter the redirect URL registered with your Enable Banking application (enablebanking.com \u2192 API applications → Redirect URLs), in the box below the bank picker.");
+      }
+      try {
+        localStorage.setItem("fin.eb.redirect", redirect.trim());
+      } catch {
+        /* private mode */
+      }
       const r = await api.ebStart({
         ...(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() }),
         country: country.trim().toUpperCase(),
         bank,
+        redirect_url: redirect.trim(),
       });
       setState(r.state);
       setConsentUrl(r.url);
@@ -1489,11 +1507,23 @@ function EbConnect({ name, institutionId, preset, onDone }: { name: string; inst
           {busy === "start" ? "opening…" : "Open the bank's consent page"}
         </button>
       </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input
+          style={{ flex: 1 }}
+          placeholder="Redirect URL registered with your Enable Banking application"
+          value={redirect}
+          onChange={(e) => setRedirect(e.target.value)}
+        />
+      </div>
+      <p className="small muted" style={{ marginTop: 2 }}>
+        Step 1: the exact redirect URL from your application on enablebanking.com (API applications → Redirect URLs). The bank sends you there
+        after you approve; then paste what it gave you below.
+      </p>
       {consentUrl !== null && <ExternalLinkNote url={consentUrl} />}
       <div className="actions" style={{ marginTop: 6 }}>
         <input
           style={{ flex: 1 }}
-          placeholder="Paste the code (or the whole address) the bank redirected you to"
+          placeholder="Step 2 — after approving: paste the code (or the whole address) the bank redirected you to"
           value={code}
           onChange={(e) => setCode(e.target.value)}
         />
