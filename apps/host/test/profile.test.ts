@@ -73,7 +73,7 @@ describe("household profile", () => {
 
     const empty = await householdProfileTool.handler({}, { profile: () => null } as never);
     expect(empty.result["configured"]).toBe(false);
-    expect(JSON.stringify(empty.result)).toContain("Profile page");
+    expect(JSON.stringify(empty.result)).toContain("People page");
   });
 });
 

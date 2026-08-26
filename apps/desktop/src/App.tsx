@@ -59,7 +59,7 @@ export function App() {
             ["dashboard", "Dashboard", "📊", null],
             ["institutions", "Assets, Cash & Holdings", "🏦", null],
             ["credentials", "Credentials", "🔑", null],
-            ["profile", "Profile", "👤", null],
+            ["profile", "People", "👥", null],
             ["tax", "Tax calendar", "🧾", null],
             ["strategy", "Strategy", "🧭", null],
             ["estate", "Estate", "🏛️", null],
@@ -315,7 +315,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
   if (d === null) return <p className="muted">Host unreachable.</p>;
   return (
     <>
-      <h2>Profile</h2>
+      <h2>People</h2>
       <p className="small muted">
         Who you are, and the people your estate and tax planning must know about. Stored only on this Mac. The Estate
         Planner and Strategist can read everything here <b>except your tax id</b>, which is never shown to any model.
@@ -515,7 +515,7 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
 
 /** Which AI engine answers: Anthropic's cloud, or a local server (Apple MLX, LM Studio) so nothing leaves this Mac. */
 const INFERENCE_TASKS: ReadonlyArray<readonly [string, string, string]> = [
-  ["profile", "Profile", "the free-text intake on the Profile page — works well on small local models"],
+  ["profile", "People", "the free-text intake on the People page — works well on small local models"],
   ["estate", "Estate", "the Estate Planner chat and its drafts"],
   ["tax", "Tax", "reserved: tax math is deterministic today; applies when model-backed tax planning arrives"],
   ["strategy", "Strategy", "the Strategist chat"],
@@ -2776,8 +2776,8 @@ function EstateWizard({ tick, onChanged }: { tick: number; onChanged: () => void
       </div>
       <div className="small muted">
         An estate planner needs to know who exists before what-goes-where: spouse, children, and anyone else your will
-        should name. Saved to your Profile; the full identity details (residence, citizenship, tax id) live on the
-        Profile page.
+        should name. Saved with your household details; residence, citizenship, and tax id live on the
+        People page.
       </div>
       {open && (
         <>
