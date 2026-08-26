@@ -104,7 +104,7 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
           agent: spec.agent as ChatAgent,
           message_id: message.message_id,
           message: message.text,
-          reply: typeof output.reply === "string" ? output.reply : JSON.stringify(output.reply ?? ""),
+          reply: sanitizeReply(typeof output.reply === "string" ? output.reply : JSON.stringify(output.reply ?? "")),
           evidence: current.evidence,
           journal_ids: current.journal,
           at: opts.actx.clock().toISOString(),
@@ -113,6 +113,21 @@ export function createFinStepInvoker(opts: FinStepInvokerOptions): StepInvoker {
     }
     return result;
   };
+}
+
+/**
+ * Some local models (gpt-oss via mlx_lm.server) leak their raw "harmony"
+ * channel scaffolding into the text. Keep only the final channel's
+ * content and strip the control tokens; a reply without them is
+ * untouched.
+ */
+export function sanitizeReply(reply: string): string {
+  let out = reply;
+  const final = /<\|channel\|>final<\|message\|>/.exec(out);
+  if (final !== null) out = out.slice(final.index + final[0].length);
+  out = out.replace(/<\|channel\|>analysis<\|message\|>[\s\S]*?(<\|end\|>|$)/g, "");
+  out = out.replace(/<\|[a-z_]+\|>/g, "");
+  return out.trim() === "" ? reply : out.trim();
 }
 
 /** Extract `{ text, message_id }` from a first input or an input-resume decision. */

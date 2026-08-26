@@ -68,3 +68,51 @@ describe("inference settings", () => {
     }
   });
 });
+
+describe("engine switches reach standing chats", () => {
+  test("changing the engine retires the standing run; the next message starts fresh; transcript survives", async () => {
+    const { phase3Adapters, writePhase3Config } = await import("./fixtures/phase3-fixture");
+    const { scriptedAgentFactory } = await import("./fixtures/scripted-agent");
+    const dataDir = tmp();
+    writePhase3Config(dataDir);
+    const app = createApp({
+      dataDir,
+      adapters: phase3Adapters(new Date()),
+      pollMs: 20,
+      agentFactory: scriptedAgentFactory(),
+      inferenceSource: () => {
+        // Fingerprint follows the settings file, like resolveSource would.
+        const s = readInferenceSettings(dataDir);
+        return s.engine === "local"
+          ? { id: `local:${s.model as string}`, provider: "openai-compatible", baseURL: s.base_url as string, apiKey: "x", model: s.model as string }
+          : { id: "anthropic:claude-sonnet-5", provider: "anthropic", baseURL: "http://localhost:1", apiKey: "x", model: "claude-sonnet-5" };
+      },
+    });
+    try {
+      const t1 = await app.sendChat({ agent: "strategist", text: "net worth?", wait: true, timeoutMs: 30_000 });
+      expect(t1.turn).not.toBeNull();
+      const run1 = (await app.activeChatRun("strategist"))?.runId;
+      expect(run1).toBeDefined();
+
+      writeInferenceSettings(dataDir, { engine: "local", base_url: "http://127.0.0.1:8080/v1", model: "test-model" });
+      const t2 = await app.sendChat({ agent: "strategist", text: "and now?", wait: true, timeoutMs: 30_000 });
+      expect(t2.turn).not.toBeNull();
+      const run2 = (await app.activeChatRun("strategist"))?.runId;
+      expect(run2).toBeDefined();
+      expect(run2).not.toBe(run1); // the stale-engine run was retired
+
+      const runs = await app.listRuns();
+      expect(runs.find((r) => r.runId === run1)?.status).toBe("cancelled");
+      // Both turns remain visible: the transcript lives in the ledger, not the run.
+      const transcript = app.chatTranscript("strategist");
+      expect(transcript.map((t) => t.message)).toEqual(["net worth?", "and now?"]);
+
+      // Same engine again: the run is NOT churned.
+      const t3 = await app.sendChat({ agent: "strategist", text: "third", wait: true, timeoutMs: 30_000 });
+      expect(t3.turn).not.toBeNull();
+      expect((await app.activeChatRun("strategist"))?.runId).toBe(run2);
+    } finally {
+      app.close();
+    }
+  }, 60_000);
+});

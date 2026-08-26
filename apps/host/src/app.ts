@@ -553,8 +553,20 @@ export function createApp(opts: AppOptions): App {
   // Standing runs this process is driving; failures land here loudly
   // rather than as unhandled rejections.
   const standing = new Map<string, Promise<RunResult>>();
+  /** Live run handles for standing runs, so an engine switch can retire one. */
+  const liveRuns = new Map<string, ReturnType<FsHost["run"]>>();
+  /** Which engine (source id) a standing chat run's agent was built against. */
+  const chatEngineByRun = new Map<string, string>();
+  const sourceFingerprint = (): string => {
+    try {
+      return (opts.inferenceSource !== undefined ? opts.inferenceSource() : resolveSource()).id;
+    } catch {
+      return "unconfigured";
+    }
+  };
   function drive(definition: WorkflowDefinition, runId: string, triggerPayload?: unknown): Promise<RunResult> {
     const run = host.run(definition, { runId, ...(triggerPayload !== undefined ? { triggerPayload } : {}) });
+    liveRuns.set(runId, run);
     const p = run.complete;
     standing.set(runId, p);
     p.then(
@@ -566,7 +578,11 @@ export function createApp(opts: AppOptions): App {
       (e: unknown) => {
         process.stderr.write(`fin-host: standing run ${runId} crashed: ${String(e)}\n`);
       },
-    ).finally(() => standing.delete(runId));
+    ).finally(() => {
+      standing.delete(runId);
+      liveRuns.delete(runId);
+      chatEngineByRun.delete(runId);
+    });
     return p;
   }
 
@@ -925,7 +941,10 @@ export function createApp(opts: AppOptions): App {
         if (isStandingRun(runId)) {
           // A standing run (tax year, chat): start driving it (parked
           // gates re-arm) and report it as running -- it may stay parked
-          // for months and must not block startup.
+          // for months and must not block startup. A chat run resumed now
+          // is built against the CURRENT engine; record that so sendChat
+          // can retire it if the engine changes later.
+          if (chatSpecOf(runId) !== null) chatEngineByRun.set(runId, sourceFingerprint());
           drive(def, runId);
           out.push({ ...s, status: "running" });
           continue;
@@ -1121,10 +1140,28 @@ export function createApp(opts: AppOptions): App {
     async sendChat(o) {
       const spec = chatWorkflowSpec(o.agent);
       const messageId = newId("msg");
-      const active = await this.activeChatRun(o.agent);
+      let active = await this.activeChatRun(o.agent);
+      // A standing run's agent keeps the inference env it was born with.
+      // When the engine (or model) has changed since, retire the run and
+      // start fresh -- the visible transcript lives in the ledger and is
+      // unaffected; only the run's working context restarts.
+      const fp = sourceFingerprint();
+      if (active !== null && chatEngineByRun.get(active.runId) !== fp) {
+        const handle = liveRuns.get(active.runId);
+        if (handle !== undefined) {
+          try {
+            await handle.cancel("supervisor-operator", "AI engine changed -- restarting the conversation runtime");
+          } catch {
+            /* already settling */
+          }
+          await standing.get(active.runId)?.catch(() => undefined);
+        }
+        active = null;
+      }
       let runId: string;
       if (active === null) {
         runId = `${spec.runIdPrefix}_${newId("r").slice(2)}`;
+        chatEngineByRun.set(runId, fp);
         drive(buildChatWorkflow(o.agent, model_()).definition, runId, { run_key: runId, text: o.text, message_id: messageId });
       } else {
         runId = active.runId;
