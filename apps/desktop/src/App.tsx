@@ -2336,9 +2336,51 @@ function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: bo
 /** Unsent drafts survive page/tab switches (component unmounts) for the whole session. */
 const DRAFTS = new Map<string, string>();
 
-/** One agent's transcript + a proper composer (4-6 lines, wrapping; Enter sends, Shift+Enter = new line). */
+/** One recorded exchange, rendered identically in the collapsed history and the live view. */
+function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => void }) {
+  return (
+    <div className="queue-item">
+      <div className="small muted">you · {when(t.at)}</div>
+      <div style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>{t.message}</div>
+      <div className="small muted">{t.agent}</div>
+      <div style={{ whiteSpace: "pre-wrap" }}>{t.reply}</div>
+      {t.evidence.map((e, i) => (
+        <div key={i} className="small" style={{ marginTop: 6 }}>
+          <span className="pill info">{e.tool}</span>{" "}
+          {e.fact_ids.slice(0, 8).map((id) => (
+            <FactLink key={id} id={id} openFact={openFact}>
+              <span className="muted">{id.slice(0, 14)}… </span>
+            </FactLink>
+          ))}
+          {e.fact_ids.length > 8 && <span className="muted">(+{e.fact_ids.length - 8} facts)</span>}
+        </div>
+      ))}
+      {t.journal_ids.length > 0 && <div className="small muted">journaled: {t.journal_ids.join(", ")}</div>}
+    </div>
+  );
+}
+
+/** What the agent is carrying forward, computed from the recorded transcript -- no model call. */
+function memorySummary(turns: ChatTurn[]): string | null {
+  if (turns.length === 0) return null;
+  const first = turns[0]!;
+  const last = turns[turns.length - 1]!;
+  const journaled = turns.reduce((n, t) => n + t.journal_ids.length, 0);
+  const since = first.at.slice(0, 10);
+  const lastMsg = last.message.replace(/\s+/g, " ").trim();
+  const gist = lastMsg.length > 90 ? `${lastMsg.slice(0, 90)}…` : lastMsg;
+  return `Remembering ${turns.length} exchange${turns.length === 1 ? "" : "s"} since ${since}${journaled > 0 ? `, ${journaled} journaled` : ""} — last asked: “${gist}”`;
+}
+
+/**
+ * One agent's transcript + a proper composer (4-6 lines, wrapping;
+ * Enter sends, Shift+Enter = new line). Earlier exchanges collapse
+ * behind a disclosure; only the latest stays in view, with a subdued
+ * summary of the remembered state above the composer.
+ */
 function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact: (id: string) => void; intro?: string }) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [text, setTextState] = useState(() => DRAFTS.get(`chat:${agent}`) ?? "");
   const setText = (v: string) => {
     DRAFTS.set(`chat:${agent}`, v);
@@ -2365,30 +2407,25 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
       setBusy(false);
     }
   };
+  const earlier = turns.slice(0, -1);
+  const latest = turns.length > 0 ? turns[turns.length - 1]! : null;
+  const summary = memorySummary(turns);
   return (
     <>
       {turns.length === 0 && intro !== undefined && <p className="muted">{intro}</p>}
-      {turns.map((t) => (
-        <div key={t.message_id} className="queue-item">
-          <div className="small muted">you · {when(t.at)}</div>
-          <div style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>{t.message}</div>
-          <div className="small muted">{t.agent}</div>
-          <div style={{ whiteSpace: "pre-wrap" }}>{t.reply}</div>
-          {t.evidence.map((e, i) => (
-            <div key={i} className="small" style={{ marginTop: 6 }}>
-              <span className="pill info">{e.tool}</span>{" "}
-              {e.fact_ids.slice(0, 8).map((id) => (
-                <FactLink key={id} id={id} openFact={openFact}>
-                  <span className="muted">{id.slice(0, 14)}… </span>
-                </FactLink>
-              ))}
-              {e.fact_ids.length > 8 && <span className="muted">(+{e.fact_ids.length - 8} facts)</span>}
-            </div>
-          ))}
-          {t.journal_ids.length > 0 && <div className="small muted">journaled: {t.journal_ids.join(", ")}</div>}
-        </div>
-      ))}
+      {earlier.length > 0 && (
+        <p>
+          <button className="secondary" onClick={() => setShowHistory((h) => !h)}>
+            {showHistory ? "▾ Hide" : "▸ Show"} earlier conversation ({earlier.length})
+          </button>
+        </p>
+      )}
+      {showHistory && earlier.map((t) => <ChatTurnCard key={t.message_id} t={t} openFact={openFact} />)}
+      {latest !== null && <ChatTurnCard t={latest} openFact={openFact} />}
       {error !== null && <div className="banner">{error}</div>}
+      {summary !== null && (
+        <p className="small muted" style={{ fontStyle: "italic", marginBottom: 4 }}>{summary}</p>
+      )}
       <div className="actions" style={{ alignItems: "flex-end" }}>
         <textarea
           className="chat-input"
