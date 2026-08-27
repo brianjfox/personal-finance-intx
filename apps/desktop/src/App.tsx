@@ -194,7 +194,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
 
 export function App() {
   const gate = useUserGate();
-  const [page, setPage] = useState<Page>("queue");
+  const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
   const [factId, setFactId] = useState<string | null>(null);
@@ -249,8 +249,8 @@ export function App() {
         <h1>{navCollapsed ? "I·H" : "Interchange · Household"}</h1>
         {(
           [
-            ["queue", "Queue", "📥", queue.length],
             ["dashboard", "Dashboard", "📊", null],
+            ["queue", "Queue", "📥", queue.length],
             ["institutions", "Assets, Cash & Holdings", "🏦", null],
             ["credentials", "Credentials", "🔑", null],
             ["profile", "People", "👥", null],
