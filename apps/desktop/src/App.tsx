@@ -27,7 +27,7 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
     }
   });
   const refresh = useCallback(() => {
-    api.users().then(setState).catch(() => setState({ multi: false, users: [] }));
+    api.users().then((r) => setState({ multi: r.multi_user, users: r.users })).catch(() => setState({ multi: false, users: [] }));
   }, []);
   useEffect(refresh, [refresh]);
   if (session !== null) setApiToken(session.token);

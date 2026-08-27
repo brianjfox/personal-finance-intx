@@ -2,9 +2,12 @@
   "name": "financial-interchange",
   "private": true,
   "version": "0.0.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "tsc -b --noEmit && tsc --noEmit -p apps/desktop",
     "test": "bun test"
   },
   "devDependencies": {
