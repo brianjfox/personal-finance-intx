@@ -2183,6 +2183,11 @@ function FactLink({ id, children, openFact }: { id: string; children: React.Reac
 
 type AccountSortKey = "account" | "type" | "value" | "observed";
 
+/** Long account names lose their middle: >70 chars becomes 32 + "..." + 32 (67), full name on hover. */
+function chopMiddle(name: string): string {
+  return name.length > 70 ? `${name.slice(0, 32)}...${name.slice(-32)}` : name;
+}
+
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [nw, setNw] = useState<NetWorth | null>(null);
   const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
@@ -2260,7 +2265,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         <tbody>
           {lines.map((l) => (
             <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
-              <td>{l.name}<div className="small muted">{l.account_id}</div></td>
+              <td title={l.name}>{chopMiddle(l.name)}<div className="small muted">{l.account_id}</div></td>
               <td>{l.type}</td>
               <td className="num">
                 {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
