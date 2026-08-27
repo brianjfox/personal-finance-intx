@@ -30,6 +30,12 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
     api.users().then((r) => setState({ multi: r.multi_user, users: r.users })).catch(() => setState({ multi: false, users: [] }));
   }, []);
   useEffect(refresh, [refresh]);
+  // A 401 anywhere (host restart, session expiry) drops the session.
+  useEffect(() => {
+    const onUnauthorized = () => setSession(null);
+    window.addEventListener("fin:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("fin:unauthorized", onUnauthorized);
+  }, []);
   if (session !== null) setApiToken(session.token);
   const store = (token: string | null, user: { id: string; name: string } | null) => {
     try {
@@ -64,8 +70,9 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
       void api.logout().catch(() => {});
       setApiToken(null);
       store(null, null);
-      // Reload so no component carries the signed-out user's state.
-      location.reload();
+      // Dropping the session unmounts the whole app body (it's keyed by
+      // user), so no component carries the signed-out user's state.
+      setSession(null);
     },
     refresh,
   };
@@ -194,6 +201,23 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
 
 export function App() {
   const gate = useUserGate();
+  if (!gate.ready) {
+    return <div className="app"><main><p className="muted">Starting…</p></main></div>;
+  }
+  if (gate.multi && gate.current === null) {
+    return (
+      <div className="app">
+        <main>
+          <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
+        </main>
+      </div>
+    );
+  }
+  // Keyed by user: signing out or switching remounts everything fresh.
+  return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} />;
+}
+
+function AppBody({ user, signOut }: { user: { id: string; name: string } | null; signOut: () => void }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
@@ -233,16 +257,6 @@ export function App() {
       return !c;
     });
   };
-  if (!gate.ready) return <div className="app"><main><p className="muted">Starting…</p></main></div>;
-  if (gate.multi && gate.current === null) {
-    return (
-      <div className="app">
-        <main>
-          <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
-        </main>
-      </div>
-    );
-  }
   return (
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <nav>
@@ -267,13 +281,13 @@ export function App() {
             {count !== null && count > 0 ? <span className="badge">{count}</span> : null}
           </a>
         ))}
-        {gate.multi && gate.current !== null && (
-          <a title={`Signed in as ${gate.current.name} — sign out`} onClick={gate.signOut} style={{ marginTop: "auto" }}>
+        {user !== null && (
+          <a title={`Signed in as ${user.name} — sign out`} onClick={signOut} style={{ marginTop: "auto" }}>
             <span className="icon">👤</span>
-            <span className="label">{gate.current.name} · sign out</span>
+            <span className="label">{user.name} · sign out</span>
           </a>
         )}
-        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav} style={gate.multi && gate.current !== null ? { marginTop: 0 } : undefined}>
+        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav} style={user !== null ? { marginTop: 0 } : undefined}>
           {navCollapsed ? "»" : "« Collapse"}
         </button>
       </nav>
