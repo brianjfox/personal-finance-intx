@@ -9,10 +9,13 @@
     "dev": "bun ./src/index.html"
   },
   "dependencies": {
+    "dompurify": "^3",
+    "marked": "^15",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },
   "devDependencies": {
+    "@types/dompurify": "^3.2.0",
     "@types/react": "19.1.12",
     "@types/react-dom": "19.1.9"
   }
