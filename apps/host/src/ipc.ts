@@ -207,6 +207,14 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
             }),
           );
         }
+        if (p === "/api/delete-all-data" && req.method === "POST") {
+          // The factory reset. The GUI confirms with typed text before
+          // calling; afterwards the host exits so nothing re-creates
+          // files, and the next launch starts from nothing.
+          app.deleteAllData();
+          setTimeout(() => process.exit(0), 400);
+          return json({ ok: true });
+        }
         if (p === "/api/profile" && req.method === "GET") return json(app.getProfile());
         if (p === "/api/profile" && req.method === "POST") {
           const body = ProfileBody(await req.json());
