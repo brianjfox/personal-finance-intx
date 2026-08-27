@@ -831,8 +831,8 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
     <>
       <h2>Assets, Cash &amp; Holdings</h2>
       <p className="small muted">
-        Connections are read-only: nothing here can move money or change your accounts. Deleting a connection only stops
-        updates — everything already recorded stays in your history.
+        Connections are read-only: nothing here can move money or change your accounts. Deleting a connection removes its
+        cash and holdings from your totals — the record of what was observed stays in your history.
       </p>
       <p>
         {(
@@ -1672,7 +1672,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
         </button>
         {confirmDelete ? (
           <>
-            <span className="small">Delete this connection? Your history is kept; we just stop updating from it.</span>
+            <span className="small">Delete this connection? Its cash and holdings leave your totals; the history of what was observed is kept.</span>
             <button disabled={busy !== null} onClick={() => void act("delete", () => api.deleteInstitution(inst.institution_id))}>
               Yes, delete
             </button>

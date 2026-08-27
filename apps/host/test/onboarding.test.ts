@@ -140,17 +140,62 @@ describe("GUI onboarding (managed institutions)", () => {
     }
   });
 
-  test("delete keeps history: the connection goes away, the recorded facts do not", async () => {
+  test("delete removes the money from the totals but keeps the history", async () => {
     const dataDir = tmp();
     const app = createApp({ dataDir });
     try {
       const entry = app.addInstitution({ name: "Short Lived", mode: "managed" });
       await app.saveManagedAccount(entry.institution_id, { name: "Cash", type: "checking", value: "100" });
+      expect(views.netWorth(app.ledger).assets).toBe("100");
+      const beforeRemoval = new Date().toISOString();
+      await Bun.sleep(10);
+
       expect(app.removeInstitution(entry.institution_id)).toBe(true);
       const ob = app.institutionsOverview();
       expect(ob.institutions).toHaveLength(0);
       expect(ob.hasFacts).toBe(true);
-      expect(views.netWorth(app.ledger).lines).toHaveLength(1);
+      // The cash is gone from today's totals...
+      const now = views.netWorth(app.ledger);
+      expect(now.lines).toHaveLength(0);
+      expect(now.assets).toBe("0");
+      // ...but as of any moment before the removal, it's still there.
+      const then = views.netWorth(app.ledger, { observedAt: beforeRemoval });
+      expect(then.lines).toHaveLength(1);
+      expect(then.assets).toBe("100");
+    } finally {
+      app.close();
+    }
+  });
+
+  test("delete also removes the institution's positions from the views", async () => {
+    const dataDir = tmp();
+    const app = createApp({ dataDir });
+    try {
+      const keep = app.addInstitution({ name: "Keeper", mode: "managed" });
+      await app.saveManagedAccount(keep.institution_id, { name: "Cash", type: "checking", value: "50" });
+      const entry = app.addInstitution({ name: "Broker", mode: "files" });
+      const snapshot = {
+        institution_id: entry.institution_id,
+        accounts: [{
+          account_id: "acct.broker.main",
+          name: "Brokerage",
+          type: "brokerage",
+          currency: "USD",
+          as_of: new Date().toISOString(),
+          balances: [],
+          positions: [{ instrument: { symbol: "VTI", name: "Total Stock Market ETF", asset_class: "etf" }, quantity: "10", price: "200", market_value: "2000", cost_basis: null }],
+        }],
+      };
+      app.storeInstitutionFile(entry.institution_id, "statement.json", new TextEncoder().encode(JSON.stringify(snapshot)));
+      const run = await app.refreshInstitution(entry.institution_id);
+      expect(run.status).toBe("completed");
+      expect(views.positions(app.ledger).some((p) => p.account_id === "acct.broker.main")).toBe(true);
+
+      expect(app.removeInstitution(entry.institution_id)).toBe(true);
+      expect(views.positions(app.ledger).some((p) => p.account_id === "acct.broker.main")).toBe(false);
+      expect(views.consolidatedPositions(app.ledger).some((p) => p.symbol === "VTI")).toBe(false);
+      // The other institution's account is untouched.
+      expect(views.netWorth(app.ledger).assets).toBe("50");
     } finally {
       app.close();
     }
