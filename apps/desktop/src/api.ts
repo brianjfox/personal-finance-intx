@@ -150,8 +150,17 @@ export interface ManagedAccount {
   account_id: string; name: string; type: string; currency: string; value: string; updated_at: string; closed_at?: string;
 }
 
+// Which user this GUI session acts as; every request carries it.
+let apiUser: string | null = null;
+export function setApiUser(id: string | null): void {
+  apiUser = id;
+}
+const userHeaders = (): Record<string, string> => (apiUser !== null ? { "x-fin-user": apiUser } : {});
+
+export interface UserInfo { id: string; name: string; created_at: string }
+
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+  const r = await fetch(path, { headers: userHeaders() });
   if (!r.ok) {
     // Host errors carry a plain-words message; show it, not just the status.
     const body = await r.text().catch(() => "");
@@ -166,7 +175,7 @@ async function get<T>(path: string): Promise<T> {
   return (await r.json()) as T;
 }
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...userHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) });
   if (!r.ok) {
     const text = await r.text().catch(() => "");
     let detail = text;
@@ -225,7 +234,7 @@ export const api = {
   setInstitutionEnabled: (id: string, enabled: boolean) => post<{ changed: boolean }>(`/api/institution/${id}/enabled`, { enabled }),
   refreshInstitution: (id: string) => post<{ runId: string; status: string }>(`/api/institution/${id}/refresh`),
   uploadInstitutionFile: async (id: string, filename: string, bytes: ArrayBuffer) => {
-    const r = await fetch(`/api/institution/${id}/upload?filename=${encodeURIComponent(filename)}`, { method: "POST", body: bytes });
+    const r = await fetch(`/api/institution/${id}/upload?filename=${encodeURIComponent(filename)}`, { method: "POST", headers: userHeaders(), body: bytes });
     if (!r.ok) throw new Error(`upload: ${r.status} ${await r.text()}`);
     return (await r.json()) as { filename: string; runId: string; status: string; problems: string[] };
   },
@@ -261,6 +270,8 @@ export const api = {
     }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
   deleteAllData: () => post<{ ok: boolean }>("/api/delete-all-data", {}),
+  users: () => get<{ multi_user: boolean; users: UserInfo[] }>("/api/users"),
+  addUser: (name: string) => post<UserInfo>("/api/users", { name }),
   inference: () => get<InferenceState>("/api/inference"),
   inferenceSave: (settings: InferenceState["providers"] extends unknown ? { version: "2"; providers: ProviderRow[]; default: string; tasks?: Record<string, string> } : never, keys?: Record<string, string>) =>
     post<InferenceState>("/api/inference", { settings, ...(keys !== undefined ? { keys } : {}) }),

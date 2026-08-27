@@ -136,7 +136,7 @@ function validate(slot: CredentialSlot, values: Record<string, string>): void {
   }
 }
 
-export function setCredential(secrets: SecretStore, id: string, values: Record<string, string>): SlotStatus["id"] {
+export function setCredential(secrets: SecretStore, id: string, values: Record<string, string>, mirrorEnv = true): SlotStatus["id"] {
   const slot = CREDENTIAL_SLOTS.find((s) => s.id === id);
   if (slot === undefined) throw new Error(`unknown credential ${id}`);
   if (secrets.set === undefined) throw new Error("the configured secret store cannot persist credentials");
@@ -144,8 +144,9 @@ export function setCredential(secrets: SecretStore, id: string, values: Record<s
   for (const f of slot.fields) {
     secrets.set(slot.service, f.account, (values[f.account] as string).trim().replace(/\\n/g, "\n"));
   }
-  // Mirror into the running host so it takes effect without a restart.
-  if (slot.env !== undefined) process.env[slot.env] = (values[slot.fields[0]!.account] as string).trim();
+  // Mirror into the running host so it takes effect without a restart --
+  // but never when several users share the process (the env is global).
+  if (mirrorEnv && slot.env !== undefined) process.env[slot.env] = (values[slot.fields[0]!.account] as string).trim();
   return slot.id;
 }
 

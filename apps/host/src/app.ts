@@ -130,6 +130,12 @@ export interface AppOptions {
   model?: string;
   /** Connector config (Plaid / Enable Banking): secret store, base-URL overrides (tests/mocks), redirect URL. */
   connectors?: Partial<ConnectorConfig>;
+  /** May the Anthropic key fall back to ANTHROPIC_API_KEY in the environment? Default true; false for scoped (non-primary) users, whose keys must be their own. */
+  envAnthropicFallback?: boolean;
+  /** Mirror saved credentials into this process's env (the no-restart path)? Default true; false when several users share the process. */
+  mirrorCredentialEnv?: boolean;
+  /** Gate for deleteAllData's all-services Keychain sweep (unsafe when other users' scoped items share the services). Default: sweep. */
+  keychainSweepOnWipe?: () => boolean;
 }
 
 export interface RunSummary {
@@ -478,8 +484,10 @@ export function createApp(opts: AppOptions): App {
   const actions = buildActions(actx);
   const inferenceSettings = (): InferenceSettings => readInferenceSettings(dataDir);
   const anthropicKey = (): string | null => {
-    const env = process.env["ANTHROPIC_API_KEY"] ?? "";
-    if (env !== "") return env;
+    if (opts.envAnthropicFallback !== false) {
+      const env = process.env["ANTHROPIC_API_KEY"] ?? "";
+      if (env !== "") return env;
+    }
     return secrets.get(ANTHROPIC_SERVICE, "anthropic");
   };
   const resolveOpts = () => ({ secrets, anthropicKey });
@@ -858,7 +866,7 @@ export function createApp(opts: AppOptions): App {
       return credentialsStatus(secrets, loaded.entries);
     },
     setCredential(id, values) {
-      setCredential(secrets, id, values);
+      setCredential(secrets, id, values, opts.mirrorCredentialEnv !== false);
     },
     deleteCredential(id) {
       return deleteCredential(secrets, id);
@@ -1436,7 +1444,7 @@ export function createApp(opts: AppOptions): App {
       // item of the app's Keychain services until none remain. Only with
       // the real store -- an injected one (tests) must never touch the
       // machine's Keychain.
-      if (process.platform === "darwin" && opts.connectors?.secrets === undefined) {
+      if (process.platform === "darwin" && (opts.keychainSweepOnWipe?.() ?? opts.connectors?.secrets === undefined)) {
         for (const service of ["fin-interchange", "fin-inference", "fin-plaid", "fin-enablebanking", "fin-coinbase", "fin-kraken"]) {
           for (let i = 0; i < 100; i++) {
             const r = spawnSync("security", ["delete-generic-password", "-s", service], { encoding: "utf8" });

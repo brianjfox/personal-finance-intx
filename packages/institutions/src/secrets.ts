@@ -105,6 +105,21 @@ export function defaultSecretStore(): SecretStore {
   };
 }
 
+/**
+ * One user's slice of a shared store: every account is prefixed with
+ * the user's scope, so two users' "anthropic" keys are different
+ * Keychain items. The service names stay the same (they're the app's
+ * identity); only the account carries the user.
+ */
+export function scopedSecretStore(base: SecretStore, scope: string): SecretStore {
+  const acct = (account: string): string => `${scope}.${account}`;
+  return {
+    get: (service, account) => base.get(service, acct(account)),
+    ...(base.set !== undefined ? { set: (service: string, account: string, value: string) => base.set!(service, acct(account), value) } : {}),
+    ...(base.delete !== undefined ? { delete: (service: string, account: string) => base.delete!(service, acct(account)) } : {}),
+  };
+}
+
 /** In-memory store for tests and for capturing tokens mid-connect-flow. */
 export function memorySecretStore(initial: Record<string, string> = {}): SecretStore & { dump(): Record<string, string> } {
   const m = new Map(Object.entries(initial));
