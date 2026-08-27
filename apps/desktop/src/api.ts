@@ -171,7 +171,7 @@ function handleUnauthorized(status: number): void {
   }
 }
 
-export interface UserInfo { id: string; name: string; created_at: string; password_set: boolean }
+export interface UserInfo { id: string; name: string; created_at: string; password_set: boolean; encrypted: boolean }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: userHeaders() });

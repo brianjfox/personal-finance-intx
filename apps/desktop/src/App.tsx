@@ -123,7 +123,8 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
       <h2>Who's using Financial Interchange?</h2>
       <p className="small muted">
         Each person signs in with their own password and sees only their own ledger, documents, agents, and keys — all
-        on this Mac.
+        on this Mac, in a store encrypted with that password (AES-256). Signing out locks it. There is no recovery: a
+        forgotten password means the data stays locked.
       </p>
       {!adding && users.map((u) => (
         <p key={u.id}>
@@ -135,7 +136,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
               setError(null);
             }}
           >
-            👤 {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
+            {u.encrypted ? "🔒" : "👤"} {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
           </button>
         </p>
       ))}
