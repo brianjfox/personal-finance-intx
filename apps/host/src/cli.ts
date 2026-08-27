@@ -32,6 +32,7 @@ import { resolveFinding, views } from "@fin/ledger";
 import { createApp } from "./app";
 import { seedDemo } from "./demo";
 import { startIpc } from "./ipc";
+import { createUserManager, resolveSingleUserDir } from "./users";
 
 function defaultDataDir(): string {
   const env = process.env["FIN_DATA_DIR"];
@@ -64,7 +65,14 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string>
 
 async function main(argv: string[]): Promise<number> {
   const { cmd, flags, rest } = parseArgs(argv);
-  const dataDir = flags["data"] ?? defaultDataDir();
+  const rootDir = flags["data"] ?? defaultDataDir();
+  // Every command except `serve` works on ONE household. A root that has
+  // migrated to users/ resolves to its first user unless --user says who.
+  const dataDir = cmd === "serve"
+    ? rootDir
+    : flags["user"] !== undefined
+      ? path.join(rootDir, "users", flags["user"])
+      : resolveSingleUserDir(rootDir);
 
   switch (cmd) {
     case "init": {
@@ -311,17 +319,17 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "serve": {
-      const app = createApp({ dataDir });
-      const resumed = await app.resumeInFlight();
+      const users = createUserManager({ rootDir: rootDir });
+      const resumed = await users.resumeAll();
       const guiDir = flags["gui"] ?? path.resolve(import.meta.dir, "../../desktop/dist");
-      const server = startIpc({ app, port: Number(flags["port"] ?? 7777), guiDir });
-      console.log(JSON.stringify({ listening: server.url.href, dataDir, resumed: resumed.map((r) => `${r.runId}:${r.status}`), gui: guiDir }));
+      const server = startIpc({ users, port: Number(flags["port"] ?? 7777), guiDir });
+      console.log(JSON.stringify({ listening: server.url.href, dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
       await new Promise<void>((resolve) => {
         process.on("SIGINT", () => resolve());
         process.on("SIGTERM", () => resolve());
       });
       await server.stop();
-      app.close();
+      users.closeAll();
       return 0;
     }
     default:

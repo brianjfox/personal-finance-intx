@@ -13,9 +13,13 @@ import { type } from "arktype";
 
 import type { App } from "./app";
 import { InferenceSettingsV2, type InferenceTask } from "./inference";
+import type { UserManager } from "./users";
 
 export interface IpcOptions {
-  app: App;
+  /** Single-household mode (tests, CLI one-offs). */
+  app?: App;
+  /** Multi-user mode: requests carry x-fin-user and each user gets their own App. */
+  users?: UserManager;
   port?: number;
   hostname?: string;
   /** Directory holding the built GUI (index.html + assets). */
@@ -99,8 +103,10 @@ const ExtractBody = type({ text: "string > 0" });
 const InferenceBody = type({ settings: InferenceSettingsV2, "keys?": "Record<string, string>" });
 const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'", "provider?": "string" });
 
+const UserAddBody = type({ name: "string > 0" });
+
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
-  const { app } = opts;
+  if (opts.app === undefined && opts.users === undefined) throw new Error("startIpc: pass app or users");
   const operator = opts.operator ?? process.env["USER"] ?? "operator";
   const guiDir = opts.guiDir ?? null;
   const running = new Map<string, Promise<unknown>>();
@@ -119,7 +125,21 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
       const q = url.searchParams;
       const asOf = { ...(q.get("effective_at") ? { effectiveAt: q.get("effective_at") as string } : {}), ...(q.get("observed_at") ? { observedAt: q.get("observed_at") as string } : {}) };
       try {
-        if (p === "/api/health") return json({ ok: true, dataDir: app.dataDir, now: new Date().toISOString() });
+        // User plumbing first: these must work before any user exists.
+        if (p === "/api/health") {
+          return json({ ok: true, dataDir: opts.users?.rootDir ?? opts.app!.dataDir, now: new Date().toISOString() });
+        }
+        if (p === "/api/users" && req.method === "GET") {
+          return json({ multi_user: opts.users !== undefined, users: opts.users?.list() ?? [] });
+        }
+        if (p === "/api/users" && req.method === "POST") {
+          if (opts.users === undefined) return json({ error: "this host runs single-user" }, 400);
+          const body = UserAddBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(opts.users.add(body.name), 201);
+        }
+        const userId = req.headers.get("x-fin-user") ?? undefined;
+        const app = opts.users !== undefined ? opts.users.appFor(userId) : opts.app!;
         if (p === "/api/fx") return json(await app.getFx());
         if (p === "/api/net-worth") {
           const fx = await app.getFx();
@@ -208,10 +228,16 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           );
         }
         if (p === "/api/delete-all-data" && req.method === "POST") {
-          // The factory reset. The GUI confirms with typed text before
-          // calling; afterwards the host exits so nothing re-creates
-          // files, and the next launch starts from nothing.
-          app.deleteAllData();
+          // The factory reset for THIS user. The GUI confirms with typed
+          // text before calling; afterwards the host exits so nothing
+          // re-creates files, and the next launch starts clean.
+          if (opts.users !== undefined) {
+            const u = opts.users.list().find((x) => userId !== undefined ? x.id === userId : true);
+            if (u === undefined) return json({ error: "no such user" }, 400);
+            opts.users.deleteUser(u.id);
+          } else {
+            app.deleteAllData();
+          }
           setTimeout(() => process.exit(0), 400);
           return json({ ok: true });
         }

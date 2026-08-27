@@ -5,11 +5,98 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fxState, money, moneyNative, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus } from "./api";
+import { api, fxState, money, moneyNative, setApiUser, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 
 type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents";
 
+/**
+ * Who is using the app. Multi-user hosts gate everything behind this:
+ * each user has their own ledger, documents, agents, and keys.
+ */
+function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: UserInfo | null; pick: (id: string) => void; switchUser: () => void; refresh: () => void } {
+  const [state, setState] = useState<{ multi: boolean; users: UserInfo[] } | null>(null);
+  const [picked, setPicked] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("fin.user");
+    } catch {
+      return null;
+    }
+  });
+  const [choosing, setChoosing] = useState(false);
+  const refresh = useCallback(() => {
+    api.users().then(setState).catch(() => setState({ multi: false, users: [] }));
+  }, []);
+  useEffect(refresh, [refresh]);
+  if (state === null) return { ready: false, multi: false, users: [], current: null, pick: () => {}, switchUser: () => {}, refresh };
+  if (!state.multi) {
+    setApiUser(null);
+    return { ready: true, multi: false, users: [], current: null, pick: () => {}, switchUser: () => {}, refresh };
+  }
+  const current = !choosing ? state.users.find((u) => u.id === picked) ?? (state.users.length === 1 ? state.users[0]! : null) : null;
+  if (current !== null) setApiUser(current.id);
+  return {
+    ready: true,
+    multi: true,
+    users: state.users,
+    current,
+    pick: (id: string) => {
+      try {
+        localStorage.setItem("fin.user", id);
+      } catch {
+        /* private mode */
+      }
+      const switchingAway = choosing && picked !== null && picked !== id;
+      setApiUser(id);
+      setPicked(id);
+      setChoosing(false);
+      // A real switch reloads so no component carries the previous user's state.
+      if (switchingAway) location.reload();
+    },
+    switchUser: () => setChoosing(true),
+    refresh,
+  };
+}
+
+/** The gate screen: who's here? Pick a user or add one. */
+function UserGate({ users, onPick, onAdded }: { users: UserInfo[]; onPick: (id: string) => void; onAdded: () => void }) {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = async () => {
+    if (name.trim() === "") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const u = await api.addUser(name.trim());
+      onAdded();
+      onPick(u.id);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ maxWidth: 460, margin: "80px auto" }}>
+      <h2>Who's using Financial Interchange?</h2>
+      <p className="small muted">
+        Each person gets their own ledger, documents, agents, and keys — fully separate, all on this Mac.
+      </p>
+      {users.map((u) => (
+        <p key={u.id}>
+          <button style={{ width: "100%", textAlign: "left" }} onClick={() => onPick(u.id)}>👤 {u.name}</button>
+        </p>
+      ))}
+      <div className="actions" style={{ marginTop: 16 }}>
+        <input style={{ flex: 1 }} placeholder={users.length === 0 ? "Your name — e.g. Brian" : "Add another person — their name"} value={name} disabled={busy} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
+        <button disabled={busy || name.trim() === ""} onClick={() => void add()}>{busy ? "adding…" : users.length === 0 ? "Start" : "Add"}</button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 export function App() {
+  const gate = useUserGate();
   const [page, setPage] = useState<Page>("queue");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
@@ -49,6 +136,16 @@ export function App() {
       return !c;
     });
   };
+  if (!gate.ready) return <div className="app"><main><p className="muted">Starting…</p></main></div>;
+  if (gate.multi && gate.current === null) {
+    return (
+      <div className="app">
+        <main>
+          <UserGate users={gate.users} onPick={gate.pick} onAdded={gate.refresh} />
+        </main>
+      </div>
+    );
+  }
   return (
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <nav>
@@ -73,7 +170,13 @@ export function App() {
             {count !== null && count > 0 ? <span className="badge">{count}</span> : null}
           </a>
         ))}
-        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav}>
+        {gate.multi && gate.current !== null && (
+          <a title={`Signed in as ${gate.current.name} — switch user`} onClick={gate.switchUser} style={{ marginTop: "auto" }}>
+            <span className="icon">👤</span>
+            <span className="label">{gate.current.name} · switch</span>
+          </a>
+        )}
+        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav} style={gate.multi && gate.current !== null ? { marginTop: 0 } : undefined}>
           {navCollapsed ? "»" : "« Collapse"}
         </button>
       </nav>
