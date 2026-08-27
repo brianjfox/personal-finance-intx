@@ -2344,8 +2344,8 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
           <tbody>
             {sortPositions(rows, sort).map((p) => (
               <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
-                <td className="small">{p.account_id}</td>
-                <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
+                <td className="small" title={p.account_id}>{chopMiddle(p.account_id)}</td>
+                <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
                 <td className="num">{p.quantity}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
@@ -2362,7 +2362,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
           <tbody>
             {sortPositions(bundled, sort).map((p) => (
               <tr key={`${p.symbol}|${p.currency}`} className={p.provisional ? "prov" : ""}>
-                <td>{p.symbol}<div className="small muted">{p.name ?? p.asset_class}</div></td>
+                <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
                 <td className="small" title={p.account_ids.join("\n")}>{p.accounts} account{p.accounts === 1 ? "" : "s"}</td>
                 <td className="num">{p.quantity}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
