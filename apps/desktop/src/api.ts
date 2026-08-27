@@ -167,7 +167,9 @@ function handleUnauthorized(status: number): void {
     } catch {
       /* private mode */
     }
-    location.reload();
+    // The user gate listens and drops the session (a reload can be a
+    // no-op inside the desktop webview).
+    window.dispatchEvent(new Event("fin:unauthorized"));
   }
 }
 
