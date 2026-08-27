@@ -473,6 +473,73 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
 
 type CredentialsData = Awaited<ReturnType<typeof api.credentials>>;
 
+
+/** The factory reset: everything on disk and every Keychain secret, after typed confirmation. */
+function DeleteAllDataCard() {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [wiped, setWiped] = useState(false);
+  const wipe = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteAllData();
+      try {
+        localStorage.clear();
+      } catch {
+        /* private mode */
+      }
+      setWiped(true);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+  if (wiped) {
+    return (
+      <div className="queue-item" style={{ marginTop: 18 }}>
+        <div className="head"><b>Everything has been deleted</b></div>
+        <p>
+          The ledger, documents, profile, settings, and every stored key are gone. Quit the app (⌘Q) and relaunch
+          to start fresh.
+        </p>
+        <p className="small muted">
+          One thing this cannot do: revoke access on the other side. If you had connected banks or exchanges, also
+          remove this app's access in their own settings (Plaid-connected banks, Enable Banking consents, Coinbase and
+          Kraken API keys).
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="queue-item" style={{ marginTop: 18 }}>
+      <div className="head">
+        <b>Delete all data</b>
+        {!open && <button className="secondary" onClick={() => setOpen(true)}>Delete all data…</button>}
+      </div>
+      <div className="small muted">
+        The factory reset: removes the entire ledger and its history, all documents, your profile, every setting, and
+        every key from the Keychain. This cannot be undone.
+      </div>
+      {open && (
+        <>
+          <p className="small" style={{ marginTop: 8 }}>Type <b>DELETE</b> to confirm.</p>
+          <div className="actions">
+            <input style={{ width: 160 }} placeholder="DELETE" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
+            <button disabled={busy || text.trim() !== "DELETE"} onClick={() => void wipe()}>
+              {busy ? "deleting…" : "Delete everything"}
+            </button>
+            <button className="secondary" disabled={busy} onClick={() => { setOpen(false); setText(""); }}>Cancel</button>
+          </div>
+        </>
+      )}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
 function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
   const [data, setData] = useState<CredentialsData | null>(null);
   useEffect(() => {
@@ -507,6 +574,7 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
           </table>
         </>
       )}
+      <DeleteAllDataCard />
     </>
   );
 }

@@ -260,6 +260,7 @@ export const api = {
       note?: string;
     }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
+  deleteAllData: () => post<{ ok: boolean }>("/api/delete-all-data", {}),
   inference: () => get<InferenceState>("/api/inference"),
   inferenceSave: (settings: InferenceState["providers"] extends unknown ? { version: "2"; providers: ProviderRow[]; default: string; tasks?: Record<string, string> } : never, keys?: Record<string, string>) =>
     post<InferenceState>("/api/inference", { settings, ...(keys !== undefined ? { keys } : {}) }),

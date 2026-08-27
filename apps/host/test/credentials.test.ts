@@ -94,3 +94,30 @@ describe("credentials over the secret store", () => {
     }
   });
 });
+
+describe("delete all data", () => {
+  test("wipes the data dir and every stored secret; the injected store never touches the real Keychain", async () => {
+    const dataDir = tmp();
+    const secrets = memorySecretStore({
+      "fin-plaid/client_id": "cid",
+      "fin-plaid/secret": "sec",
+      "fin-inference/key:openai": "sk-live",
+    });
+    const app = createApp({ dataDir, connectors: { secrets } });
+    try {
+      const entry = app.addInstitution({ name: "Wipe Me", mode: "managed" });
+      await app.saveManagedAccount(entry.institution_id, { name: "Cash", type: "checking", value: "5" });
+      const plaidEntry = addInstitutionEntry(dataDir, { name: "Plaid Bank", adapter: "plaid", options: {} });
+      app.reloadInstitutions();
+      secrets.set!("fin-plaid", `access_token:${plaidEntry.institution_id}`, "tok");
+      expect(fs.existsSync(path.join(dataDir, "ledger.db"))).toBe(true);
+
+      app.deleteAllData();
+      expect(fs.existsSync(dataDir)).toBe(false);
+      const left = Object.keys(secrets.dump()).filter((k) => k.startsWith("fin-"));
+      expect(left).toEqual([]);
+    } finally {
+      try { app.close(); } catch { /* ledger already closed by the wipe */ }
+    }
+  });
+});

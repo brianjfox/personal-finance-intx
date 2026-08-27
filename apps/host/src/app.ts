@@ -8,6 +8,7 @@
 //   <dataDir>/institutions/<id>/inbox/   file-drop inboxes (jsondrop/csvdrop)
 //   <dataDir>/runs|blobs|effects/  the workflow host (fs-host)
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -340,6 +341,12 @@ export interface App {
   /** The break-glass export (slide 21): CSVs, documents, the operating guide. */
   exportBreakGlass(opts?: { outDir?: string }): BreakGlassResult;
   close(): void;
+  /**
+   * The factory reset: every Keychain secret the app ever stored, then
+   * the whole data directory. Unrecoverable. The caller is expected to
+   * exit afterwards -- the App object is unusable once this returns.
+   */
+  deleteAllData(): void;
 }
 
 export interface InstitutionAccountRow {
@@ -1412,6 +1419,33 @@ export function createApp(opts: AppOptions): App {
     },
     close() {
       ledger.close();
+    },
+    deleteAllData() {
+      // Keychain first, while the registry still knows the connections.
+      for (const e of loaded.entries) {
+        try { deleteConnectionTokens(secrets, e); } catch { /* already gone */ }
+      }
+      for (const slot of ["anthropic", "plaid", "enablebanking"] as const) {
+        try { deleteCredential(secrets, slot); } catch { /* already gone */ }
+      }
+      try {
+        const providerIds = new Set([...inferenceSettings().providers.map((prov) => prov.id), ...PROVIDER_PRESETS.map((prov) => prov.id)]);
+        for (const id of providerIds) secrets.delete?.(INFERENCE_SERVICE, `key:${id}`);
+      } catch { /* settings unreadable: the CLI sweep below still runs */ }
+      // Sweep for strays (older layouts, session tokens): delete every
+      // item of the app's Keychain services until none remain. Only with
+      // the real store -- an injected one (tests) must never touch the
+      // machine's Keychain.
+      if (process.platform === "darwin" && opts.connectors?.secrets === undefined) {
+        for (const service of ["fin-interchange", "fin-inference", "fin-plaid", "fin-enablebanking", "fin-coinbase", "fin-kraken"]) {
+          for (let i = 0; i < 100; i++) {
+            const r = spawnSync("security", ["delete-generic-password", "-s", service], { encoding: "utf8" });
+            if (r.status !== 0) break;
+          }
+        }
+      }
+      ledger.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
     },
   };
 
