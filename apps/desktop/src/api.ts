@@ -150,18 +150,33 @@ export interface ManagedAccount {
   account_id: string; name: string; type: string; currency: string; value: string; updated_at: string; closed_at?: string;
 }
 
-// Which user this GUI session acts as; every request carries it.
-let apiUser: string | null = null;
-export function setApiUser(id: string | null): void {
-  apiUser = id;
+// The session token from login; every request carries it. Identity is
+// the SESSION's -- the host ignores anything else the client asserts.
+let apiToken: string | null = null;
+export function setApiToken(token: string | null): void {
+  apiToken = token;
 }
-const userHeaders = (): Record<string, string> => (apiUser !== null ? { "x-fin-user": apiUser } : {});
+const userHeaders = (): Record<string, string> => (apiToken !== null ? { authorization: `Bearer ${apiToken}` } : {});
 
-export interface UserInfo { id: string; name: string; created_at: string }
+/** A 401 means the session died (host restart, expiry): back to the login screen. */
+function handleUnauthorized(status: number): void {
+  if (status === 401 && apiToken !== null) {
+    apiToken = null;
+    try {
+      localStorage.removeItem("fin.token");
+    } catch {
+      /* private mode */
+    }
+    location.reload();
+  }
+}
+
+export interface UserInfo { id: string; name: string; created_at: string; password_set: boolean }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: userHeaders() });
   if (!r.ok) {
+    handleUnauthorized(r.status);
     // Host errors carry a plain-words message; show it, not just the status.
     const body = await r.text().catch(() => "");
     let detail = body;
@@ -177,6 +192,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...userHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) });
   if (!r.ok) {
+    handleUnauthorized(r.status);
     const text = await r.text().catch(() => "");
     let detail = text;
     try {
@@ -271,7 +287,10 @@ export const api = {
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
   deleteAllData: () => post<{ ok: boolean }>("/api/delete-all-data", {}),
   users: () => get<{ multi_user: boolean; users: UserInfo[] }>("/api/users"),
-  addUser: (name: string) => post<UserInfo>("/api/users", { name }),
+  addUser: (name: string, password: string) => post<{ user: UserInfo; token: string | null }>("/api/users", { name, password }),
+  login: (user: string, password: string) => post<{ token: string; user: UserInfo }>("/api/login", { user, password }),
+  setPassword: (user: string, password: string) => post<{ user: UserInfo; token: string | null }>("/api/set-password", { user, password }),
+  logout: () => post<{ ok: boolean }>("/api/logout", {}),
   inference: () => get<InferenceState>("/api/inference"),
   inferenceSave: (settings: InferenceState["providers"] extends unknown ? { version: "2"; providers: ProviderRow[]; default: string; tasks?: Record<string, string> } : never, keys?: Record<string, string>) =>
     post<InferenceState>("/api/inference", { settings, ...(keys !== undefined ? { keys } : {}) }),

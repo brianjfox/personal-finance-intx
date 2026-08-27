@@ -5,91 +5,187 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fxState, money, moneyNative, setApiUser, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, fxState, money, moneyNative, setApiToken, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 
 type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents";
 
 /**
- * Who is using the app. Multi-user hosts gate everything behind this:
- * each user has their own ledger, documents, agents, and keys.
+ * Who is using the app. Multi-user hosts put a real login in front:
+ * username + password -> a session token; every request carries the
+ * token, and the host serves only that user's data.
  */
-function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: UserInfo | null; pick: (id: string) => void; switchUser: () => void; refresh: () => void } {
+function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: { id: string; name: string } | null; enter: (token: string, user: { id: string; name: string }) => void; signOut: () => void; refresh: () => void } {
   const [state, setState] = useState<{ multi: boolean; users: UserInfo[] } | null>(null);
-  const [picked, setPicked] = useState<string | null>(() => {
+  const [session, setSession] = useState<{ token: string; id: string; name: string } | null>(() => {
     try {
-      return localStorage.getItem("fin.user");
+      const token = localStorage.getItem("fin.token");
+      const id = localStorage.getItem("fin.user");
+      const name = localStorage.getItem("fin.user_name");
+      return token !== null && id !== null ? { token, id, name: name ?? id } : null;
     } catch {
       return null;
     }
   });
-  const [choosing, setChoosing] = useState(false);
   const refresh = useCallback(() => {
     api.users().then(setState).catch(() => setState({ multi: false, users: [] }));
   }, []);
   useEffect(refresh, [refresh]);
-  if (state === null) return { ready: false, multi: false, users: [], current: null, pick: () => {}, switchUser: () => {}, refresh };
+  if (session !== null) setApiToken(session.token);
+  const store = (token: string | null, user: { id: string; name: string } | null) => {
+    try {
+      if (token === null || user === null) {
+        localStorage.removeItem("fin.token");
+        localStorage.removeItem("fin.user");
+        localStorage.removeItem("fin.user_name");
+      } else {
+        localStorage.setItem("fin.token", token);
+        localStorage.setItem("fin.user", user.id);
+        localStorage.setItem("fin.user_name", user.name);
+      }
+    } catch {
+      /* private mode */
+    }
+  };
+  if (state === null) return { ready: false, multi: false, users: [], current: null, enter: () => {}, signOut: () => {}, refresh };
   if (!state.multi) {
-    setApiUser(null);
-    return { ready: true, multi: false, users: [], current: null, pick: () => {}, switchUser: () => {}, refresh };
+    return { ready: true, multi: false, users: [], current: null, enter: () => {}, signOut: () => {}, refresh };
   }
-  const current = !choosing ? state.users.find((u) => u.id === picked) ?? (state.users.length === 1 ? state.users[0]! : null) : null;
-  if (current !== null) setApiUser(current.id);
   return {
     ready: true,
     multi: true,
     users: state.users,
-    current,
-    pick: (id: string) => {
-      try {
-        localStorage.setItem("fin.user", id);
-      } catch {
-        /* private mode */
-      }
-      const switchingAway = choosing && picked !== null && picked !== id;
-      setApiUser(id);
-      setPicked(id);
-      setChoosing(false);
-      // A real switch reloads so no component carries the previous user's state.
-      if (switchingAway) location.reload();
+    current: session === null ? null : { id: session.id, name: session.name },
+    enter: (token, user) => {
+      setApiToken(token);
+      store(token, user);
+      setSession({ token, ...user });
     },
-    switchUser: () => setChoosing(true),
+    signOut: () => {
+      void api.logout().catch(() => {});
+      setApiToken(null);
+      store(null, null);
+      // Reload so no component carries the signed-out user's state.
+      location.reload();
+    },
     refresh,
   };
 }
 
-/** The gate screen: who's here? Pick a user or add one. */
-function UserGate({ users, onPick, onAdded }: { users: UserInfo[]; onPick: (id: string) => void; onAdded: () => void }) {
+/** The login screen: pick who you are, prove it; or add a new person. */
+function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (token: string, user: { id: string; name: string }) => void; onChanged: () => void }) {
+  const [who, setWho] = useState<UserInfo | null>(users.length === 1 ? users[0]! : null);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [adding, setAdding] = useState(users.length === 0);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const add = async () => {
-    if (name.trim() === "") return;
+  const act = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);
     try {
-      const u = await api.addUser(name.trim());
-      onAdded();
-      onPick(u.id);
+      await fn();
     } catch (e) {
       setError(String(e));
       setBusy(false);
     }
   };
+  const signIn = (u: UserInfo) =>
+    act(async () => {
+      const r = await api.login(u.id, password);
+      onEnter(r.token, { id: r.user.id, name: r.user.name });
+    });
+  const create = (u: UserInfo) =>
+    act(async () => {
+      if (password.length < 4) throw new Error("The password needs at least 4 characters.");
+      if (password !== confirm) throw new Error("The two passwords don't match.");
+      const r = await api.setPassword(u.id, password);
+      if (r.token === null) throw new Error("Password set — sign in now.");
+      onEnter(r.token, { id: r.user.id, name: r.user.name });
+    });
+  const addUser = () =>
+    act(async () => {
+      if (name.trim() === "") throw new Error("Enter a name.");
+      if (password.length < 4) throw new Error("The password needs at least 4 characters.");
+      if (password !== confirm) throw new Error("The two passwords don't match.");
+      const r = await api.addUser(name.trim(), password);
+      onChanged();
+      if (r.token === null) throw new Error("User added — sign in now.");
+      onEnter(r.token, { id: r.user.id, name: r.user.name });
+    });
+  const submit = () => {
+    if (adding) return void addUser();
+    if (who === null) return;
+    return who.password_set ? void signIn(who) : void create(who);
+  };
   return (
     <div style={{ maxWidth: 460, margin: "80px auto" }}>
       <h2>Who's using Financial Interchange?</h2>
       <p className="small muted">
-        Each person gets their own ledger, documents, agents, and keys — fully separate, all on this Mac.
+        Each person signs in with their own password and sees only their own ledger, documents, agents, and keys — all
+        on this Mac.
       </p>
-      {users.map((u) => (
+      {!adding && users.map((u) => (
         <p key={u.id}>
-          <button style={{ width: "100%", textAlign: "left" }} onClick={() => onPick(u.id)}>👤 {u.name}</button>
+          <button
+            className={who?.id === u.id ? "" : "secondary"}
+            style={{ width: "100%", textAlign: "left" }}
+            onClick={() => {
+              setWho(u);
+              setError(null);
+            }}
+          >
+            👤 {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
+          </button>
         </p>
       ))}
-      <div className="actions" style={{ marginTop: 16 }}>
-        <input style={{ flex: 1 }} placeholder={users.length === 0 ? "Your name — e.g. Brian" : "Add another person — their name"} value={name} disabled={busy} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void add(); }} />
-        <button disabled={busy || name.trim() === ""} onClick={() => void add()}>{busy ? "adding…" : users.length === 0 ? "Start" : "Add"}</button>
-      </div>
+      {adding && (
+        <div className="actions" style={{ marginTop: 8 }}>
+          <input style={{ flex: 1 }} placeholder="Name — e.g. Brian" value={name} disabled={busy} onChange={(e) => setName(e.target.value)} />
+        </div>
+      )}
+      {(adding || who !== null) && (
+        <>
+          <div className="actions" style={{ marginTop: 8 }}>
+            <input
+              style={{ flex: 1 }}
+              type="password"
+              placeholder={adding || !(who?.password_set ?? false) ? "Choose a password" : `Password for ${who!.name}`}
+              value={password}
+              disabled={busy}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+            {(adding || !(who?.password_set ?? false)) && (
+              <input
+                style={{ flex: 1 }}
+                type="password"
+                placeholder="Repeat it"
+                value={confirm}
+                disabled={busy}
+                onChange={(e) => setConfirm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+            )}
+          </div>
+          <div className="actions" style={{ marginTop: 8 }}>
+            <button disabled={busy} onClick={submit}>
+              {busy ? "…" : adding ? "Create user" : who?.password_set ?? false ? "Sign in" : "Set password & sign in"}
+            </button>
+          </div>
+        </>
+      )}
+      <p style={{ marginTop: 16 }}>
+        {users.length > 0 && (
+          <button className="secondary" disabled={busy} onClick={() => { setAdding((a) => !a); setError(null); setPassword(""); setConfirm(""); }}>
+            {adding ? "Back to sign-in" : "Add a person…"}
+          </button>
+        )}
+      </p>
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
@@ -141,7 +237,7 @@ export function App() {
     return (
       <div className="app">
         <main>
-          <UserGate users={gate.users} onPick={gate.pick} onAdded={gate.refresh} />
+          <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
         </main>
       </div>
     );
@@ -171,9 +267,9 @@ export function App() {
           </a>
         ))}
         {gate.multi && gate.current !== null && (
-          <a title={`Signed in as ${gate.current.name} — switch user`} onClick={gate.switchUser} style={{ marginTop: "auto" }}>
+          <a title={`Signed in as ${gate.current.name} — sign out`} onClick={gate.signOut} style={{ marginTop: "auto" }}>
             <span className="icon">👤</span>
-            <span className="label">{gate.current.name} · switch</span>
+            <span className="label">{gate.current.name} · sign out</span>
           </a>
         )}
         <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav} style={gate.multi && gate.current !== null ? { marginTop: 0 } : undefined}>
