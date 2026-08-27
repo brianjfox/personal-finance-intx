@@ -3,6 +3,8 @@
 // 19). The exception queue is the home screen in Phase 1; in Phase 4 the
 // approval queue joins it.
 
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fxState, money, moneyNative, setApiToken, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
@@ -2859,6 +2861,12 @@ function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: bo
 /** Unsent drafts survive page/tab switches (component unmounts) for the whole session. */
 const DRAFTS = new Map<string, string>();
 
+/** Agent replies are markdown; render them as such (sanitized -- model output is not trusted HTML). */
+function Markdown({ text }: { text: string }) {
+  const html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));
+  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 /** One recorded exchange, rendered identically in the collapsed history and the live view. */
 function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => void }) {
   return (
@@ -2866,7 +2874,7 @@ function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => 
       <div className="small muted">you · {when(t.at)}</div>
       <div style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>{t.message}</div>
       <div className="small muted">{t.agent}</div>
-      <div style={{ whiteSpace: "pre-wrap" }}>{t.reply}</div>
+      <Markdown text={t.reply} />
       {t.evidence.map((e, i) => (
         <div key={i} className="small" style={{ marginTop: 6 }}>
           <span className="pill info">{e.tool}</span>{" "}
