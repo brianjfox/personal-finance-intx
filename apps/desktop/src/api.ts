@@ -190,7 +190,7 @@ async function get<T>(path: string): Promise<T> {
   return (await r.json()) as T;
 }
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...userHeaders() }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...userHeaders() }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   if (!r.ok) {
     handleUnauthorized(r.status);
     const text = await r.text().catch(() => "");
