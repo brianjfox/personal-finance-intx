@@ -12,6 +12,7 @@
 // users/primary, which keeps the UNscoped Keychain accounts it always
 // had -- nothing needs re-pasting.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -20,14 +21,34 @@ import { type } from "arktype";
 
 import { createApp, type App, type AppOptions } from "./app";
 
+const PasswordRecord = type({ salt: "string", hash: "string", n: "number", r: "number", p: "number" });
+
 export const UserInfo = type({
   id: /^[a-z][a-z0-9_]{0,40}$/,
   name: "string > 0",
   created_at: "string",
   /** Keychain account prefix; null = the unscoped legacy accounts (the migrated primary). */
   secret_scope: "string | null",
+  /** scrypt parameters + digest. Absent until the user sets one (migrated users start without). */
+  "password?": PasswordRecord,
 });
 export type UserInfo = typeof UserInfo.infer;
+
+/** What leaves the host about a user: never the password record. */
+export interface PublicUser { id: string; name: string; created_at: string; password_set: boolean }
+const publicUser = (u: UserInfo): PublicUser => ({ id: u.id, name: u.name, created_at: u.created_at, password_set: u.password !== undefined });
+
+const SCRYPT = { n: 16384, r: 8, p: 1 } as const;
+function hashPassword(password: string): typeof PasswordRecord.infer {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 32, { N: SCRYPT.n, r: SCRYPT.r, p: SCRYPT.p }).toString("hex");
+  return { salt, hash, ...SCRYPT };
+}
+function verifyPassword(rec: typeof PasswordRecord.infer, password: string): boolean {
+  const got = crypto.scryptSync(password, rec.salt, 32, { N: rec.n, r: rec.r, p: rec.p });
+  const want = Buffer.from(rec.hash, "hex");
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
 
 const UsersFile = type({ version: "'1'", users: UserInfo.array() });
 type UsersFile = typeof UsersFile.infer;
@@ -104,15 +125,22 @@ export interface UserManagerOptions {
 
 export interface UserManager {
   rootDir: string;
-  list(): UserInfo[];
+  list(): PublicUser[];
   count(): number;
-  add(name: string): UserInfo;
+  add(name: string, password?: string): PublicUser;
   /** The App for a user id; undefined falls back to the first user. Throws in plain words otherwise. */
   appFor(id?: string): App;
   /** Wipe one user's data and secrets and drop them from the registry. */
   deleteUser(id: string): void;
   resumeAll(): Promise<Array<{ user: string; runId: string; status: string }>>;
   closeAll(): void;
+  /** First-time password for a user who has none (the migrated primary). Refuses if one is set. */
+  setPassword(idOrName: string, password: string): PublicUser;
+  /** Username (id or display name, case-insensitive) + password -> a session token, or null. */
+  login(idOrName: string, password: string): { token: string; user: PublicUser } | null;
+  /** The user behind a session token; null when the token is unknown or expired. */
+  sessionUser(token: string): PublicUser | null;
+  logout(token: string): void;
 }
 
 export function createUserManager(opts: UserManagerOptions): UserManager {
@@ -121,6 +149,12 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
   const base = opts.secrets ?? defaultSecretStore();
   let file = loadUsers(root, clock);
   const apps = new Map<string, App>();
+  // Sessions live only as long as the host process: relaunching the app
+  // means logging in again. Idle sessions expire.
+  const sessions = new Map<string, { id: string; lastSeen: number }>();
+  const SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
+  const findUser = (idOrName: string): UserInfo | undefined =>
+    file.users.find((u) => u.id === idOrName) ?? file.users.find((u) => u.name.toLowerCase() === idOrName.trim().toLowerCase());
 
   const bootApp = (u: UserInfo): App => {
     const cached = apps.get(u.id);
@@ -146,18 +180,25 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
 
   return {
     rootDir: root,
-    list: () => file.users.map((u) => ({ ...u })),
+    list: () => file.users.map(publicUser),
     count: () => file.users.length,
-    add(name) {
+    add(name, password) {
       const trimmed = name.trim();
       if (trimmed === "") throw new Error("give the user a name");
+      if (password !== undefined && password.length < 4) throw new Error("the password needs at least 4 characters");
       const id = idFor(trimmed, new Set(file.users.map((u) => u.id)));
-      const u: UserInfo = { id, name: trimmed, created_at: clock().toISOString(), secret_scope: `u.${id}` };
+      const u: UserInfo = {
+        id,
+        name: trimmed,
+        created_at: clock().toISOString(),
+        secret_scope: `u.${id}`,
+        ...(password !== undefined ? { password: hashPassword(password) } : {}),
+      };
       fs.mkdirSync(userDir(root, id), { recursive: true });
       file = { ...file, users: [...file.users, u] };
       writeUsersFile(root, file);
       bootApp(u);
-      return u;
+      return publicUser(u);
     },
     appFor(id) {
       const u = id === undefined ? file.users[0] : file.users.find((x) => x.id === id);
@@ -172,6 +213,7 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       const app = bootApp(u);
       app.deleteAllData();
       apps.delete(id);
+      for (const [token, sess] of sessions) if (sess.id === id) sessions.delete(token);
       file = { ...file, users: file.users.filter((x) => x.id !== id) };
       writeUsersFile(root, file);
     },
@@ -182,6 +224,37 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
         for (const r of resumed) out.push({ user: u.id, runId: r.runId, status: r.status });
       }
       return out;
+    },
+    setPassword(idOrName, password) {
+      const u = findUser(idOrName);
+      if (u === undefined) throw new Error(`unknown user ${idOrName}`);
+      if (u.password !== undefined) throw new Error(`${u.name} already has a password`);
+      if (password.length < 4) throw new Error("the password needs at least 4 characters");
+      const updated: UserInfo = { ...u, password: hashPassword(password) };
+      file = { ...file, users: file.users.map((x) => (x.id === u.id ? updated : x)) };
+      writeUsersFile(root, file);
+      return publicUser(updated);
+    },
+    login(idOrName, password) {
+      const u = findUser(idOrName);
+      if (u === undefined || u.password === undefined || !verifyPassword(u.password, password)) return null;
+      const token = crypto.randomBytes(32).toString("hex");
+      sessions.set(token, { id: u.id, lastSeen: Date.now() });
+      return { token, user: publicUser(u) };
+    },
+    sessionUser(token) {
+      const sess = sessions.get(token);
+      if (sess === undefined) return null;
+      if (Date.now() - sess.lastSeen > SESSION_IDLE_MS) {
+        sessions.delete(token);
+        return null;
+      }
+      sess.lastSeen = Date.now();
+      const u = file.users.find((x) => x.id === sess.id);
+      return u === undefined ? null : publicUser(u);
+    },
+    logout(token) {
+      sessions.delete(token);
     },
     closeAll() {
       for (const app of apps.values()) {

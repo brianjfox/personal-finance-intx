@@ -13,7 +13,7 @@ import { type } from "arktype";
 
 import type { App } from "./app";
 import { InferenceSettingsV2, type InferenceTask } from "./inference";
-import type { UserManager } from "./users";
+import { userDir, type UserManager } from "./users";
 
 export interface IpcOptions {
   /** Single-household mode (tests, CLI one-offs). */
@@ -103,7 +103,9 @@ const ExtractBody = type({ text: "string > 0" });
 const InferenceBody = type({ settings: InferenceSettingsV2, "keys?": "Record<string, string>" });
 const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'", "provider?": "string" });
 
-const UserAddBody = type({ name: "string > 0" });
+const UserAddBody = type({ name: "string > 0", "password?": "string" });
+const LoginBody = type({ user: "string > 0", password: "string" });
+const SetPasswordBody = type({ user: "string > 0", password: "string" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
   if (opts.app === undefined && opts.users === undefined) throw new Error("startIpc: pass app or users");
@@ -136,10 +138,51 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (opts.users === undefined) return json({ error: "this host runs single-user" }, 400);
           const body = UserAddBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          return json(opts.users.add(body.name), 201);
+          if (body.password === undefined || body.password === "") return json({ error: "a password is required" }, 400);
+          const made = opts.users.add(body.name, body.password);
+          // Creating yourself signs you in.
+          const sess = opts.users.login(made.id, body.password);
+          return json({ user: made, token: sess?.token ?? null }, 201);
         }
-        const userId = req.headers.get("x-fin-user") ?? undefined;
-        const app = opts.users !== undefined ? opts.users.appFor(userId) : opts.app!;
+        if (p === "/api/login" && req.method === "POST" && opts.users !== undefined) {
+          const body = LoginBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          const target = opts.users.list().find((u) => u.id === body.user || u.name.toLowerCase() === body.user.trim().toLowerCase());
+          if (target !== undefined && !target.password_set) {
+            return json({ error: `${target.name} has no password yet -- set one first`, needs_password: true }, 409);
+          }
+          const sess = opts.users.login(body.user, body.password);
+          if (sess === null) return json({ error: "wrong username or password" }, 401);
+          return json(sess);
+        }
+        if (p === "/api/set-password" && req.method === "POST" && opts.users !== undefined) {
+          // First-time only (the migrated user); once set, it cannot be
+          // changed this way -- the manager refuses.
+          const body = SetPasswordBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          const u = opts.users.setPassword(body.user, body.password);
+          const sess = opts.users.login(u.id, body.password);
+          return json({ user: u, token: sess?.token ?? null });
+        }
+        if (p === "/api/logout" && req.method === "POST" && opts.users !== undefined) {
+          const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+          opts.users.logout(token);
+          return json({ ok: true });
+        }
+        // Identity comes from the SESSION, never from anything the client
+        // asserts: a user sees exactly their own data. Only /api/ needs
+        // it -- the GUI's static files stay public (they hold no data).
+        let app: App = null as unknown as App;
+        if (p.startsWith("/api/")) {
+          if (opts.users !== undefined) {
+            const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+            const me = token === "" ? null : opts.users.sessionUser(token);
+            if (me === null) return json({ error: "login required" }, 401);
+            app = opts.users.appFor(me.id);
+          } else {
+            app = opts.app!;
+          }
+        }
         if (p === "/api/fx") return json(await app.getFx());
         if (p === "/api/net-worth") {
           const fx = await app.getFx();
@@ -232,7 +275,7 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           // text before calling; afterwards the host exits so nothing
           // re-creates files, and the next launch starts clean.
           if (opts.users !== undefined) {
-            const u = opts.users.list().find((x) => userId !== undefined ? x.id === userId : true);
+            const u = opts.users.list().find((x) => userDir(opts.users!.rootDir, x.id) === app.dataDir);
             if (u === undefined) return json({ error: "no such user" }, 400);
             opts.users.deleteUser(u.id);
           } else {

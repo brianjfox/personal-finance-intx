@@ -79,7 +79,7 @@ describe("legacy migration", () => {
       expect(() => users.appFor(undefined)).toThrow(/no users yet/);
       const u = users.add("Brian Fox");
       expect(u.id).toBe("brian_fox");
-      expect(u.secret_scope).toBe("u.brian_fox");
+      expect(u.password_set).toBe(false);
       expect(users.appFor("brian_fox").dataDir).toBe(userDir(root, "brian_fox"));
       // Same display name again: the id gets a counter.
       expect(users.add("Brian Fox").id).toBe("brian_fox_2");
@@ -132,32 +132,84 @@ describe("user isolation", () => {
   });
 });
 
-describe("multi-user IPC", () => {
-  test("requests route by x-fin-user; /api/users lists and adds", async () => {
+describe("multi-user IPC with login", () => {
+  test("no session -> 401; login issues a token; identity is the session's, never a client header", async () => {
     const root = tmp();
     const users = createUserManager({ rootDir: root, secrets: memorySecretStore() });
     const server = startIpc({ users, port: 0 });
-    const call = (p: string, user: string | null, body?: unknown): Promise<Response> =>
+    const call = (p: string, opts: { token?: string; headers?: Record<string, string>; body?: unknown } = {}): Promise<Response> =>
       fetch(`http://127.0.0.1:${server.port}${p}`, {
-        method: body === undefined ? "GET" : "POST",
-        headers: { "content-type": "application/json", ...(user !== null ? { "x-fin-user": user } : {}) },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        method: opts.body === undefined ? "GET" : "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(opts.token !== undefined ? { authorization: `Bearer ${opts.token}` } : {}),
+          ...(opts.headers ?? {}),
+        },
+        ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
       });
     try {
-      expect(((await (await call("/api/users", null)).json()) as { multi_user: boolean }).multi_user).toBe(true);
-      const a = (await (await call("/api/users", null, { name: "Alice" })).json()) as { id: string };
-      const b = (await (await call("/api/users", null, { name: "Bob" })).json()) as { id: string };
+      // Creating a user requires a password and signs them in.
+      expect((await call("/api/users", { body: { name: "Alice" } })).status).toBe(400); // no password
+      const a = (await (await call("/api/users", { body: { name: "Alice", password: "alice-pw" } })).json()) as { user: { id: string }; token: string };
+      const b = (await (await call("/api/users", { body: { name: "Bob", password: "bob-pw" } })).json()) as { user: { id: string }; token: string };
+      expect(a.token).not.toBe(b.token);
 
-      const made = await call("/api/institutions", a.id, { name: "Alice Bank", mode: "managed" });
+      // Without a session, data is unreachable; the public surface is only users+health.
+      expect((await call("/api/institutions")).status).toBe(401);
+      expect((await call("/api/net-worth")).status).toBe(401);
+      expect((await call("/api/health")).status).toBe(200);
+      expect((await call("/api/users")).status).toBe(200);
+
+      // Wrong password: refused. Right password: a session.
+      expect((await call("/api/login", { body: { user: "alice", password: "nope" } })).status).toBe(401);
+      const login = (await (await call("/api/login", { body: { user: "Alice", password: "alice-pw" } })).json()) as { token: string };
+
+      // Each session sees only its own data.
+      const made = await call("/api/institutions", { token: login.token, body: { name: "Alice Bank", mode: "managed" } });
       expect(made.status).toBe(201);
-      const listA = (await (await call("/api/institutions", a.id)).json()) as unknown[];
-      const listB = (await (await call("/api/institutions", b.id)).json()) as unknown[];
-      expect(listA).toHaveLength(1);
-      expect(listB).toHaveLength(0);
+      expect((await (await call("/api/institutions", { token: login.token })).json()) as unknown[]).toHaveLength(1);
+      expect((await (await call("/api/institutions", { token: b.token })).json()) as unknown[]).toHaveLength(0);
 
-      // An unknown user is refused in plain words; health needs no user.
-      expect((await call("/api/institutions", "nobody")).status).toBe(500);
-      expect((await call("/api/health", null)).status).toBe(200);
+      // A spoofed user header changes nothing: identity is the session's.
+      const spoofed = (await (await call("/api/institutions", { token: b.token, headers: { "x-fin-user": a.user.id } })).json()) as unknown[];
+      expect(spoofed).toHaveLength(0);
+
+      // Logout kills the session.
+      await call("/api/logout", { token: login.token, body: {} });
+      expect((await call("/api/institutions", { token: login.token })).status).toBe(401);
+    } finally {
+      server.stop(true);
+      users.closeAll();
+    }
+  });
+
+  test("a migrated user without a password sets one exactly once, via the login screen's flow", async () => {
+    const root = tmp();
+    const legacy = createApp({ dataDir: root });
+    legacy.addInstitution({ name: "Old Bank", mode: "managed" });
+    legacy.close();
+    const users = createUserManager({ rootDir: root, secrets: memorySecretStore() });
+    const server = startIpc({ users, port: 0 });
+    const post = (p: string, body: unknown, token?: string): Promise<Response> =>
+      fetch(`http://127.0.0.1:${server.port}${p}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(token !== undefined ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      });
+    try {
+      // Login before a password exists: a plain-words 409, so the GUI shows the set-password form.
+      const early = await post("/api/login", { user: "primary", password: "whatever" });
+      expect(early.status).toBe(409);
+      expect(((await early.json()) as { needs_password: boolean }).needs_password).toBe(true);
+
+      const set = (await (await post("/api/set-password", { user: "primary", password: "first-pw" })).json()) as { token: string };
+      const r = await fetch(`http://127.0.0.1:${server.port}/api/institutions`, { headers: { authorization: `Bearer ${set.token}` } });
+      expect(((await r.json()) as unknown[])).toHaveLength(1); // the migrated data, theirs alone
+
+      // Once set, it cannot be overwritten by this route.
+      expect((await post("/api/set-password", { user: "primary", password: "evil-pw" })).status).toBe(500);
+      expect(users.login("primary", "first-pw")).not.toBeNull();
+      expect(users.login("primary", "evil-pw")).toBeNull();
     } finally {
       server.stop(true);
       users.closeAll();
