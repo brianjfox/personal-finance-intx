@@ -702,7 +702,9 @@ export function createApp(opts: AppOptions): App {
           category: typeof e.options?.["category"] === "string" ? (e.options["category"] as string) : null,
         };
       });
-      return { institutions, hasFacts: nw.lines.length > 0 };
+      // "Has facts" must survive deletions: closed accounts leave the
+      // totals but their history still exists.
+      return { institutions, hasFacts: nw.lines.length > 0 || accts.length > 0 };
     },
     addInstitution(input) {
       const entry = addInstitutionEntry(dataDir, {
@@ -719,9 +721,38 @@ export function createApp(opts: AppOptions): App {
     },
     removeInstitution(institutionId) {
       // A deleted connection's tokens are no longer needed: remove them
-      // from the Keychain too (the ledger history stays, as always).
+      // from the Keychain too.
       const entry = loaded.entries.find((e) => e.institution_id === institutionId);
       if (entry !== undefined) deleteConnectionTokens(secrets, entry);
+      // Close the books: every open account of this institution gets a
+      // superseding account fact with closed_at, so its cash and holdings
+      // drop out of net worth and positions NOW -- while every earlier
+      // fact stays queryable as of its own time.
+      const now = clock();
+      const open = views.accounts(ledger).filter((a) => a.institution_id === institutionId && a.closed_at === null);
+      if (open.length > 0) {
+        ledger.commit({
+          batchId: `close:${institutionId}:${now.toISOString()}`,
+          writer: "assets_manager",
+          note: `institution ${institutionId} removed by the operator`,
+          facts: open.map((a) => {
+            const prior = ledger.asOf({ kind: "account", subject: a.account_id })[0];
+            return {
+              kind: "account" as const,
+              subject: a.account_id,
+              key: "account",
+              payload: { ...(prior?.payload ?? {}), closed_at: now.toISOString().slice(0, 10) },
+              observed_at: now.toISOString(),
+              effective_at: now.toISOString(),
+              source_id: institutionId,
+              source_doc_id: null,
+              supersedes: prior?.id ?? null,
+              writer: "assets_manager" as const,
+              provisional: false,
+            };
+          }),
+        });
+      }
       const removed = removeInstitutionEntry(dataDir, institutionId);
       if (removed) loaded = reloadRegistry();
       return removed;

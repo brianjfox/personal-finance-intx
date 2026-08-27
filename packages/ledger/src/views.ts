@@ -28,6 +28,8 @@ export interface AccountView {
   type: AccountPayload["type"];
   currency: string;
   masked_number: string | null;
+  /** Set when the account is closed (or its institution was removed): it holds no value now. */
+  closed_at: string | null;
   provisional: boolean;
   observed_at: string;
 }
@@ -103,6 +105,7 @@ export function accounts(ledger: Ledger, opts: AsOfOpts = {}): AccountView[] {
       type: p.type,
       currency: p.currency,
       masked_number: p.masked_number ?? null,
+      closed_at: p.closed_at ?? null,
       provisional: f.provisional,
       observed_at: f.observed_at,
     };
@@ -128,9 +131,12 @@ export function balances(ledger: Ledger, opts: AsOfOpts & { subject?: string } =
 }
 
 export function positions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): PositionView[] {
+  const { subject: _subject, ...acctOpts } = opts;
+  const closed = new Set(accounts(ledger, acctOpts).filter((a) => a.closed_at !== null).map((a) => a.account_id));
   return ledger
     .asOf({ kind: "position", ...opts })
     .filter((f) => !decimal.isZero((f.payload as PositionPayload).quantity))
+    .filter((f) => !closed.has((f.payload as PositionPayload).account_id))
     .map((f) => {
       const p = f.payload as PositionPayload;
       return {
@@ -265,6 +271,7 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string; r
   let anyProvisional = false;
 
   for (const a of accts) {
+    if (a.closed_at !== null) continue; // closed: holds no value now (history keeps its earlier facts)
     const myBals = bals.filter((b) => b.account_id === a.account_id);
     const myPoss = poss.filter((p) => p.account_id === a.account_id);
     const isLiability = LIABILITY_ACCOUNT_TYPES.has(a.type);
