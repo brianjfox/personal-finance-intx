@@ -490,7 +490,8 @@ export function createApp(opts: AppOptions): App {
     }
     return secrets.get(ANTHROPIC_SERVICE, "anthropic");
   };
-  const resolveOpts = () => ({ secrets, anthropicKey });
+  const anthropicWorkspace = (): string | null => secrets.get(ANTHROPIC_SERVICE, "workspace_id");
+  const resolveOpts = () => ({ secrets, anthropicKey, anthropicWorkspace });
   /** The model a task's workflow definition names (no key needed -- settings only). */
   const modelFor = (task?: InferenceTask): string => {
     try {

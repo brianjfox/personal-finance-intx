@@ -18,6 +18,8 @@ export interface CredentialField {
   label: string;
   /** Render as a multi-line box (PEM blocks). */
   multiline: boolean;
+  /** May be left empty (e.g. the Anthropic workspace id, needed only for identity-linked keys). */
+  optional?: boolean;
 }
 
 export interface CredentialSlot {
@@ -35,8 +37,11 @@ export const CREDENTIAL_SLOTS: readonly CredentialSlot[] = [
     id: "anthropic",
     label: "AI assistant — Anthropic API key",
     service: ANTHROPIC_SERVICE,
-    fields: [{ account: "anthropic", label: "API key", multiline: false }],
-    note: "Powers the Strategist/Estate chats and model-drafted proposals. Everything else works without it. Takes effect immediately.",
+    fields: [
+      { account: "anthropic", label: "API key", multiline: false },
+      { account: "workspace_id", label: "Workspace ID — only for identity-linked keys (wrkspc_...)", multiline: false, optional: true },
+    ],
+    note: "Powers the Strategist/Estate chats and model-drafted proposals. Everything else works without it. Takes effect immediately. If your key is identity-linked, also paste the Workspace ID from console.anthropic.com.",
     env: "ANTHROPIC_API_KEY",
   },
   {
@@ -107,7 +112,7 @@ export function connectionSecretAccounts(e: InstitutionEntry): Array<{ service: 
 export function credentialsStatus(secrets: SecretStore, entries: InstitutionEntry[]): CredentialsStatus {
   const slots = CREDENTIAL_SLOTS.map((s) => {
     const fields = s.fields.map((f) => ({ ...f, set: secrets.get(s.service, f.account) !== null }));
-    return { id: s.id, label: s.label, note: s.note, configured: fields.every((f) => f.set), fields };
+    return { id: s.id, label: s.label, note: s.note, configured: fields.every((f) => f.set || f.optional === true), fields };
   });
   const tokens = entries
     .map((e) => ({ e, accounts: connectionSecretAccounts(e) }))
@@ -125,7 +130,7 @@ export function credentialsStatus(secrets: SecretStore, entries: InstitutionEntr
 function validate(slot: CredentialSlot, values: Record<string, string>): void {
   for (const f of slot.fields) {
     const v = (values[f.account] ?? "").trim();
-    if (v === "") throw new Error(`missing ${f.label}`);
+    if (v === "" && f.optional !== true) throw new Error(`missing ${f.label}`);
   }
   if (slot.id === "enablebanking") {
     try {
@@ -142,7 +147,13 @@ export function setCredential(secrets: SecretStore, id: string, values: Record<s
   if (secrets.set === undefined) throw new Error("the configured secret store cannot persist credentials");
   validate(slot, values);
   for (const f of slot.fields) {
-    secrets.set(slot.service, f.account, (values[f.account] as string).trim().replace(/\\n/g, "\n"));
+    const v = (values[f.account] ?? "").trim();
+    if (v === "" && f.optional === true) {
+      // Submitting an optional field empty clears it.
+      secrets.delete?.(slot.service, f.account);
+      continue;
+    }
+    secrets.set(slot.service, f.account, v.replace(/\\n/g, "\n"));
   }
   // Mirror into the running host so it takes effect without a restart --
   // but never when several users share the process (the env is global).

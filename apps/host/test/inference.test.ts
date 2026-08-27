@@ -180,3 +180,78 @@ describe("provider switches reach standing chats", () => {
     }
   }, 60_000);
 });
+
+describe("identity-linked Anthropic keys (workspace id)", () => {
+  test("with a workspace configured, anthropic requests carry anthropic-workspace-id via the loopback forwarder", async () => {
+    let seenWorkspace: string | null = null;
+    let seenKey: string | null = null;
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/v1/messages") {
+          seenWorkspace = req.headers.get("anthropic-workspace-id");
+          seenKey = req.headers.get("x-api-key");
+          return Response.json({ content: [{ type: "text", text: "OK" }] });
+        }
+        return new Response("nope", { status: 404 });
+      },
+    });
+    try {
+      const s = settingsWith({});
+      s.providers[0]!.base_url = `http://127.0.0.1:${upstream.port}`;
+      const src = resolveTaskSource(s, "estate", {
+        secrets: memorySecretStore(),
+        anthropicKey: () => "sk-ant-linked",
+        anthropicWorkspace: () => "wrkspc_abc123",
+      });
+      expect(src.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(src.baseURL).not.toBe(`http://127.0.0.1:${upstream.port}`); // it's the forwarder
+      expect(src.id).toContain("@wrkspc_abc123"); // engine fingerprint changes with the workspace
+
+      const r = await fetch(`${src.baseURL}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": src.apiKey, "content-type": "application/json" },
+        body: JSON.stringify({ model: src.model, max_tokens: 8, messages: [] }),
+      });
+      expect(r.status).toBe(200);
+      expect(seenWorkspace ?? "").toBe("wrkspc_abc123");
+      expect(seenKey ?? "").toBe("sk-ant-linked"); // the key travels in the caller's own headers
+
+      // Without a workspace, the source points straight at the API.
+      const plain = resolveTaskSource(s, "estate", { secrets: memorySecretStore(), anthropicKey: () => "sk" });
+      expect(plain.baseURL).toBe(`http://127.0.0.1:${upstream.port}`);
+      expect(plain.id).not.toContain("@");
+    } finally {
+      const { stopAnthropicProxies } = await import("../src/anthropic-proxy");
+      stopAnthropicProxies();
+      upstream.stop(true);
+    }
+  });
+
+  test("the workspace id is an optional credential field: saves without it, stores it, clears it", () => {
+    const secrets = memorySecretStore();
+    const app = createApp({ dataDir: tmp(), connectors: { secrets } });
+    // setCredential mirrors the key into process.env; keep the suite's env clean.
+    const savedEnvKey = process.env["ANTHROPIC_API_KEY"];
+    try {
+      app.setCredential("anthropic", { anthropic: "sk-ant-x", workspace_id: "" });
+      let slot = app.credentialsStatus().slots.find((s) => s.id === "anthropic")!;
+      expect(slot.configured).toBe(true); // optional field absent is still set up
+      expect(slot.fields.find((f) => f.account === "workspace_id")?.set).toBe(false);
+
+      app.setCredential("anthropic", { anthropic: "sk-ant-x", workspace_id: "wrkspc_1" });
+      expect(secrets.dump()["fin-interchange/workspace_id"]).toBe("wrkspc_1");
+      slot = app.credentialsStatus().slots.find((s) => s.id === "anthropic")!;
+      expect(slot.fields.find((f) => f.account === "workspace_id")?.set).toBe(true);
+
+      app.setCredential("anthropic", { anthropic: "sk-ant-x", workspace_id: "" });
+      expect(secrets.dump()["fin-interchange/workspace_id"]).toBeUndefined();
+    } finally {
+      if (savedEnvKey === undefined) delete process.env["ANTHROPIC_API_KEY"];
+      else process.env["ANTHROPIC_API_KEY"] = savedEnvKey;
+      app.close();
+    }
+  });
+});

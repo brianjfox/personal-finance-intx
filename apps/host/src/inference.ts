@@ -19,6 +19,8 @@ import { defaultSecretStore, type SecretStore } from "@fin/institutions";
 import { type } from "arktype";
 import type { InferenceSource } from "@intx/types/runtime";
 
+import { anthropicProxyBaseURL } from "./anthropic-proxy";
+
 export const INFERENCE_TASKS = ["profile", "estate", "tax", "strategy"] as const;
 export type InferenceTask = (typeof INFERENCE_TASKS)[number];
 
@@ -151,6 +153,8 @@ export interface ResolveOptions {
   secrets?: SecretStore;
   /** The app's existing Anthropic key resolution (env, then Keychain). */
   anthropicKey: () => string | null;
+  /** Workspace id for identity-linked Anthropic keys (null when not needed). */
+  anthropicWorkspace?: () => string | null;
 }
 
 /** Provider config -> the InferenceSource the runtime consumes. Throws plain words when a key is missing. */
@@ -162,7 +166,20 @@ export function sourceForProvider(p: ProviderConfig, opts: ResolveOptions): Infe
   if (apiKey === null || apiKey === "") {
     throw new Error(`${p.label}: no API key stored -- add it on the Credentials page (AI providers)`);
   }
-  return { id: `${p.id}:${p.model}`, provider: p.kind, baseURL: p.base_url, apiKey, model: p.model };
+  // Identity-linked Anthropic keys need an anthropic-workspace-id header
+  // on every request; the runtime's adapter can't add one, so those
+  // sources route through a loopback forwarder that does. The workspace
+  // is part of the source id, so standing chats restart when it changes.
+  let baseURL = p.base_url;
+  let id = `${p.id}:${p.model}`;
+  if (p.kind === "anthropic") {
+    const ws = opts.anthropicWorkspace?.() ?? null;
+    if (ws !== null && ws !== "") {
+      baseURL = anthropicProxyBaseURL(ws, p.base_url);
+      id = `${id}@${ws}`;
+    }
+  }
+  return { id, provider: p.kind, baseURL, apiKey, model: p.model };
 }
 
 /** Task -> its assigned provider (or the default). */
