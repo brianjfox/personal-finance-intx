@@ -2265,7 +2265,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         <tbody>
           {lines.map((l) => (
             <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
-              <td title={l.name}>{chopMiddle(l.name)}<div className="small muted">{l.account_id}</div></td>
+              <td title={l.name}>{chopMiddle(l.name)}<div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
               <td>{l.type}</td>
               <td className="num">
                 {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
