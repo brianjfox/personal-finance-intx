@@ -207,8 +207,14 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
+export interface CashFlowMonth { month: string; inflow: string; outflow: string; net: string; txns: number }
+export interface CashFlowView {
+  currency: string; months: CashFlowMonth[]; fx_missing: string[]; excluded_internal: number; provisional: boolean;
+}
+
 export const api = {
   netWorth: () => get<NetWorth>("/api/net-worth"),
+  cashFlow: (months = 12) => get<CashFlowView>(`/api/cashflow?months=${months}`),
   positions: () => get<Position[]>("/api/positions"),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),

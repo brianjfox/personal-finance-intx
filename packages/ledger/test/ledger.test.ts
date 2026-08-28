@@ -381,3 +381,79 @@ describe("consolidated positions view", () => {
     l.close();
   });
 });
+
+describe("cash flow view", () => {
+  const txn = (
+    id: string,
+    amount: string,
+    posted: string,
+    extra: Record<string, unknown> = {},
+  ): FactInput => ({
+    kind: "transaction",
+    subject: "acct.demo.checking",
+    key: `txn:${id}`,
+    payload: {
+      account_id: "acct.demo.checking",
+      txn_id: id,
+      posted_at: posted,
+      amount,
+      currency: "USD",
+      type: "debit",
+      description: "test txn",
+      ...extra,
+    },
+    observed_at: T1,
+    effective_at: posted,
+    source_id: "inst.demo",
+    source_doc_id: null,
+    supersedes: null,
+    writer: "cash_flow",
+    provisional: false,
+  });
+
+  test("buckets by month; internal legs and rate-less currencies excluded", () => {
+    const l = openLedger(":memory:");
+    l.commit({
+      batchId: "cf1",
+      writer: "cash_flow",
+      facts: [
+        txn("t1", "5000", "2026-02-10T00:00:00.000Z", { type: "income" }),
+        txn("t2", "-1200.50", "2026-02-15T00:00:00.000Z"),
+        txn("t3", "-800", "2026-03-03T00:00:00.000Z"),
+        // one leg of a transfer between household accounts: internal
+        txn("t4", "-999", "2026-03-05T00:00:00.000Z", { type: "transfer_out", transfer_group: "g1" }),
+        // asset conversion inside the account: internal
+        txn("t5", "-100", "2026-03-06T00:00:00.000Z", { type: "buy" }),
+        // no EUR rate given: excluded and named
+        txn("t6", "-70", "2026-03-07T00:00:00.000Z", { currency: "EUR" }),
+        // outside the 3-month window: ignored
+        txn("t7", "-42", "2025-11-07T00:00:00.000Z"),
+      ],
+    });
+    const v = views.cashFlow(l, { months: 3, now: new Date("2026-03-15T00:00:00.000Z") });
+    expect(v.months.map((m) => m.month)).toEqual(["2026-01", "2026-02", "2026-03"]);
+    const [jan, feb, mar] = v.months;
+    expect(jan!.txns).toBe(0);
+    expect(feb!.inflow).toBe("5000");
+    expect(feb!.outflow).toBe("1200.5");
+    expect(feb!.net).toBe("3799.5");
+    expect(feb!.txns).toBe(2);
+    expect(mar!.inflow).toBe("0");
+    expect(mar!.outflow).toBe("800");
+    expect(mar!.txns).toBe(1);
+    expect(v.excluded_internal).toBe(2);
+    expect(v.fx_missing).toEqual(["EUR"]);
+  });
+
+  test("foreign transactions convert at the given rate", () => {
+    const l = openLedger(":memory:");
+    l.commit({
+      batchId: "cf2",
+      writer: "cash_flow",
+      facts: [txn("e1", "-70", "2026-03-07T00:00:00.000Z", { currency: "EUR" })],
+    });
+    const v = views.cashFlow(l, { months: 1, now: new Date("2026-03-15T00:00:00.000Z"), rates: { EUR: "1.1" } });
+    expect(v.months[0]!.outflow).toBe("77");
+    expect(v.fx_missing).toEqual([]);
+  });
+});

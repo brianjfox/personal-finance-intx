@@ -74,6 +74,55 @@ export function HorizonChart({ base, rate, yearStart, yearEnd, height = 200 }: {
   );
 }
 
+export interface FlowBar { label: string; inflow: number; outflow: number }
+
+/**
+ * The paired-bar cash-flow chart from the design: inflow rises above the
+ * baseline in green, outflow drops below it as a hollow dark bar.
+ */
+export function PairedBars({ bars, height = 240 }: { bars: FlowBar[]; height?: number }) {
+  const W = 1000;
+  const H = height;
+  const ml = 56;
+  const mr = 12;
+  const mt = 12;
+  const mb = 26;
+  const maxIn = Math.max(...bars.map((b) => b.inflow), 0);
+  const maxOut = Math.max(...bars.map((b) => b.outflow), 0);
+  const top = (maxIn > 0 ? maxIn : 1) * 1.12;
+  const bottom = (maxOut > 0 ? maxOut : top * 0.25) * 1.12;
+  const plotH = H - mt - mb;
+  const zero = mt + (top / (top + bottom)) * plotH;
+  const py = (v: number) => zero - (v / (top + bottom)) * plotH;
+  const slot = (W - ml - mr) / bars.length;
+  const bw = Math.min(slot * 0.52, 64);
+  const yTicks = [top * 0.66, top * 0.33, 0, -bottom * 0.5];
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} aria-hidden="true">
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={ml} x2={W - mr} y1={py(v)} y2={py(v)} stroke={v === 0 ? "rgba(128,128,128,0.5)" : GRID} strokeWidth="1" />
+          <text x={ml - 8} y={py(v) + 3} textAnchor="end" fontSize="11" fill={AXIS}>{compact(v)}</text>
+        </g>
+      ))}
+      {bars.map((b, i) => {
+        const cx = ml + slot * i + slot / 2;
+        const inH = Math.max(zero - py(b.inflow), 0);
+        const outH = Math.max(py(-b.outflow) - zero, 0);
+        return (
+          <g key={b.label + String(i)}>
+            {b.inflow > 0 && <rect x={cx - bw / 2} y={zero - inH} width={bw} height={inH} rx="3" fill={GREEN} />}
+            {b.outflow > 0 && (
+              <rect x={cx - bw / 2} y={zero} width={bw} height={outH} rx="3" style={{ fill: "var(--n700)", stroke: "var(--t3)", strokeWidth: 1 }} />
+            )}
+            <text x={cx} y={H - 8} textAnchor="middle" fontSize="11" fill={AXIS}>{b.label}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export interface DonutSlice { label: string; value: number; color: string }
 
 /** The allocation donut: one ring, slices by market value, hollow center. */

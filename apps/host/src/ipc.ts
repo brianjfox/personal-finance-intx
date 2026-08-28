@@ -206,6 +206,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const fx = await app.getFx();
           return json(views.netWorth(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates }));
         }
+        if (p === "/api/cashflow") {
+          const fx = await app.getFx();
+          const months = Number(q.get("months") ?? 12);
+          return json(views.cashFlow(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates, ...(Number.isFinite(months) ? { months } : {}) }));
+        }
         if (p === "/api/accounts") return json(views.accounts(app.ledger, asOf));
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
         if (p === "/api/positions") {

@@ -11,6 +11,7 @@ import {
   type BalancePayload,
   type ObligationPayload,
   type PositionPayload,
+  type TransactionPayload,
 } from "@fin/contracts";
 
 import type { Ledger, StoredFact } from "./ledger";
@@ -341,6 +342,94 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string; r
 /** Subject -> current transaction facts (one per txn key). */
 export function transactions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): StoredFact[] {
   return ledger.asOf({ kind: "transaction", ...opts });
+}
+
+export interface CashFlowMonth {
+  /** Calendar month, "YYYY-MM". */
+  month: string;
+  /** Money into the household this month (display currency, >= 0). */
+  inflow: string;
+  /** Money out of the household this month (magnitude, >= 0). */
+  outflow: string;
+  net: string;
+  /** Transaction facts behind the two bars. */
+  txns: number;
+}
+
+export interface CashFlowView {
+  currency: string;
+  /** Oldest -> newest, one entry per calendar month, ending at the current month. */
+  months: CashFlowMonth[];
+  /** Native currencies with no conversion rate; their transactions are excluded. */
+  fx_missing: string[];
+  /** Legs skipped as internal movement (transfers between household accounts, buys/sells/swaps). */
+  excluded_internal: number;
+  provisional: boolean;
+}
+
+/**
+ * Household cash flow by calendar month, from the transaction facts the
+ * connectors re-observe on a rolling window each nightly. Only money that
+ * actually enters or leaves the household counts: legs of transfers
+ * between household accounts (transfer_group), and asset conversions
+ * inside an account (buy / sell / swap), are internal and excluded.
+ */
+export function cashFlow(
+  ledger: Ledger,
+  opts: AsOfOpts & { currency?: string; rates?: Record<string, string>; months?: number; now?: Date } = {},
+): CashFlowView {
+  const currency = opts.currency ?? "USD";
+  const rates = opts.rates ?? {};
+  const fxMissing = new Set<string>();
+  const convert = (value: string, from: string): string | null => {
+    if (from === currency) return value;
+    const rate = rates[from];
+    if (rate === undefined) {
+      fxMissing.add(from);
+      return null;
+    }
+    return decimal.round(decimal.mul(value, rate), 2);
+  };
+  const n = Math.max(1, Math.min(60, opts.months ?? 12));
+  const now = opts.now ?? (opts.effectiveAt !== undefined ? new Date(opts.effectiveAt) : new Date());
+  const head = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const buckets = new Map<string, { inflow: string; outflow: string; txns: number }>();
+  const keys: string[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(head);
+    d.setUTCMonth(d.getUTCMonth() - i);
+    const key = d.toISOString().slice(0, 7);
+    keys.push(key);
+    buckets.set(key, { inflow: "0", outflow: "0", txns: 0 });
+  }
+  const INTERNAL_TYPES = new Set(["buy", "sell", "swap"]);
+  let excluded = 0;
+  let provisional = false;
+  for (const f of ledger.asOf({ kind: "transaction", ...opts })) {
+    const p = f.payload as TransactionPayload;
+    if (p.transfer_group != null || INTERNAL_TYPES.has(p.type)) {
+      excluded++;
+      continue;
+    }
+    const bucket = buckets.get(p.posted_at.slice(0, 7));
+    if (bucket === undefined) continue; // outside the window
+    const amt = convert(p.amount, p.currency);
+    if (amt === null) continue;
+    if (decimal.cmp(amt, "0") >= 0) bucket.inflow = decimal.add(bucket.inflow, amt);
+    else bucket.outflow = decimal.add(bucket.outflow, decimal.abs(amt));
+    bucket.txns++;
+    provisional = provisional || f.provisional;
+  }
+  return {
+    currency,
+    months: keys.map((month) => {
+      const b = buckets.get(month)!;
+      return { month, inflow: b.inflow, outflow: b.outflow, net: decimal.sub(b.inflow, b.outflow), txns: b.txns };
+    }),
+    fx_missing: [...fxMissing].sort(),
+    excluded_internal: excluded,
+    provisional,
+  };
 }
 
 export interface ObligationView {

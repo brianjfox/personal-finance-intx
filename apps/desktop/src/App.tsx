@@ -8,7 +8,7 @@ import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
-import { DonutChart, HorizonChart, type DonutSlice } from "./charts";
+import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
 
@@ -2746,12 +2746,14 @@ function compactMoney(v: number): string {
 
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [nw, setNw] = useState<NetWorth | null>(null);
+  const [cf, setCf] = useState<import("./api").CashFlowView | null>(null);
   const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
   const [tab, setTab] = useState<"accounts" | "positions">("accounts");
   const [scenario, setScenario] = useState("conservative");
   const [horizonPct, setHorizonPct] = useState(30);
   useEffect(() => {
     api.netWorth().then(setNw).catch(() => setNw(null));
+    api.cashFlow(12).then(setCf).catch(() => setCf(null));
   }, [tick]);
   if (nw === null) return <div className="page"><p className="muted">No ledger yet. Run a nightly.</p></div>;
   const clickSort = (key: AccountSortKey) =>
@@ -2805,6 +2807,18 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
     { label: "Other", value: Number(sumTypes(["other"])), color: "#4b5563" },
   ].filter((s) => s.value > 0);
   const allocTotal = alloc.reduce((s, x) => s + x.value, 0);
+  // Cash flow: monthly in/out from the rolling transaction window the
+  // connectors re-observe each nightly. Internal movement is excluded
+  // host-side; figures arrive already in the display currency.
+  const flowMonths = cf?.months ?? [];
+  const withFlow = flowMonths.filter((m) => m.txns > 0);
+  const hasFlow = withFlow.length > 0;
+  const monthLabel = (m: string) => new Date(`${m}-15T00:00:00Z`).toLocaleString(undefined, { month: "short" });
+  const bars: FlowBar[] = flowMonths.map((m) => ({ label: monthLabel(m.month), inflow: Number(m.inflow), outflow: Number(m.outflow) }));
+  const latestFlow = flowMonths.length > 0 ? flowMonths[flowMonths.length - 1]! : null;
+  const avgOut = hasFlow ? withFlow.reduce((s, m) => s + Number(m.outflow), 0) / withFlow.length : null;
+  const avgNet = hasFlow ? withFlow.reduce((s, m) => s + Number(m.net), 0) / withFlow.length : null;
+  const runway = avgNet !== null && avgNet < 0 && cash > 0 ? cash / -avgNet : null;
   return (
     <div className="page">
       {nw.provisional && <div className="banner">Some figures rest on provisional facts. Downstream agents are held until the exception queue is cleared.</div>}
@@ -2891,17 +2905,44 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <span><span className="sw" style={{ background: "#1f2937", border: "1px solid #4b5563" }} />Outflow</span>
             </span>
           </div>
-          <p className="small muted" style={{ margin: "4px 0 12px" }}>Positive bars rise above baseline; negative bars drop below.</p>
-          <div className="chartbox chart-empty" style={{ minHeight: 240 }}>
-            Cash-flow history builds up as statements and transactions accumulate — nothing recorded yet. Every bar here will link back to dated ledger facts.
-          </div>
+          <p className="small muted" style={{ margin: "4px 0 12px" }}>
+            Money in rises above the baseline; money out drops below. Transfers between your own accounts and buys/sells inside an account don't count.
+          </p>
+          {hasFlow ? (
+            <>
+              <div className="chartbox"><PairedBars bars={bars} /></div>
+              <p className="small muted" style={{ margin: "8px 0 0" }}>
+                From {withFlow.reduce((s, m) => s + m.txns, 0)} observed transactions
+                {cf !== null && cf.excluded_internal > 0 ? ` (${cf.excluded_internal} internal movements excluded)` : ""}
+                {cf !== null && cf.fx_missing.length > 0 ? ` · no rate for ${cf.fx_missing.join(", ")} — those excluded` : ""}
+                . History deepens as the nightly re-observes each rolling 30-day window.
+              </p>
+            </>
+          ) : (
+            <div className="chartbox chart-empty" style={{ minHeight: 240 }}>
+              Cash-flow history builds up as connected accounts report transactions — each nightly fetch observes a rolling 30-day window, so a year of monthly in/out accumulates on its own. Nothing recorded yet.
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div className="panel" style={{ marginBottom: 0 }}>
             <div className="panel-title" style={{ marginBottom: 16 }}>Flow Summary</div>
-            <div className="stat-row"><span className="lbl">Net Worth</span><span className="val green num">{money(nw.net_worth, nw.currency)}</span></div>
-            <div className="stat-row"><span className="lbl">Cash on hand</span><span className="val num">{money(sumTypes(["checking", "savings", "money_market"]), nw.currency)}</span></div>
-            <div className="stat-row"><span className="lbl">Liabilities</span><span className="val num">{money(nw.liabilities, nw.currency)}</span></div>
+            <div className="stat-row">
+              <span className="lbl">Net Inflow{latestFlow !== null ? ` (${monthLabel(latestFlow.month)})` : ""}</span>
+              <span className="val num" style={{ color: latestFlow !== null && Number(latestFlow.net) < 0 ? "var(--red-ink)" : "var(--green)" }}>
+                {latestFlow !== null && latestFlow.txns > 0 ? money(latestFlow.net, cf!.currency) : "—"}
+              </span>
+            </div>
+            <div className="stat-row">
+              <span className="lbl">Avg Monthly Spend</span>
+              <span className="val num">{avgOut !== null ? money(avgOut.toFixed(2), cf!.currency) : "—"}</span>
+            </div>
+            <div className="stat-row">
+              <span className="lbl">Runway (at avg burn)</span>
+              <span className="val num">
+                {runway !== null ? maskDigits(`${Math.round(runway)} mo`) : avgNet !== null && avgNet >= 0 ? "not burning" : "—"}
+              </span>
+            </div>
             <div className="stat-row">
               <span className="lbl">Cash ÷ Liabilities</span>
               <span className="val num" style={{ color: "var(--link)" }}>{liabilities > 0 && cash > 0 ? maskDigits(`${(cash / liabilities).toFixed(1)}×`) : "—"}</span>
