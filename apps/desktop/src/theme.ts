@@ -97,7 +97,7 @@ function backgroundVars(bg: string): Record<string, string> {
     "--chrome": dark ? mix(bg, "#000000", 0.3) : mix(bg, "#ffffff", 0.5),
     "--inset": mix(bg, dark ? "#000000" : "#ffffff", 0.25),
     "--inset2": mix(bg, pole, 0.04),
-    "--hover": mix(bg, pole, 0.08),
+    "--hover": mix(bg, pole, 0.13),
   };
 }
 
@@ -135,7 +135,7 @@ export function applyUiSettings(s: UiSettings): void {
     for (const [p, v] of Object.entries(backgroundVars(colors.background))) root.style.setProperty(p, v);
   }
   if (colors.foreground !== null) {
-    const towardBg = colors.background ?? (theme === "light" ? "#f2f5f9" : "#121a2b");
+    const towardBg = colors.background ?? (theme === "light" ? "#f2f5f9" : "#212121");
     for (const [p, v] of Object.entries(foregroundVars(colors.foreground, towardBg))) root.style.setProperty(p, v);
   }
 }

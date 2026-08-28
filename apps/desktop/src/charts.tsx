@@ -4,7 +4,7 @@
 
 import { maskDigits } from "./api";
 
-const GRID = "rgba(45,55,72,0.45)";
+const GRID = "rgba(128,128,128,0.22)";
 const AXIS = "#6b7280";
 const GREEN = "#10b981";
 

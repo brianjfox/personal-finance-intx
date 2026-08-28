@@ -4253,7 +4253,7 @@ function SettingsPage() {
           "Background color",
           `Applies to the ${activeName} theme only; panel, border, and hover shades are derived from it.`,
           colors.background,
-          active === "dark" ? "#0e1524" : "#eaeef5",
+          active === "dark" ? "#1a1a1a" : "#eaeef5",
           (v) => updateColors({ background: v }),
         )}
         {colorRow(

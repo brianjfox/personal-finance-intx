@@ -4,10 +4,10 @@
    identically offline; Inter falls back to the macOS system face. */
 
 :root {
-  --n950: #0e1524; --n900: #121a2b; --n850: #172033; --n800: #1c2739; --n700: #293650;
-  --hairline: #364561; --row-line: #26334b;
-  --strong: #ffffff; --link: #60a5fa; --red-ink: #f87171; --chrome: #0a101d;
-  --inset: rgba(8, 12, 22, 0.5); --inset2: rgba(15, 21, 32, 0.5); --hover: rgba(41, 54, 80, 0.35);
+  --n950: #1a1a1a; --n900: #212121; --n850: #282828; --n800: #2f2f2f; --n700: #414141;
+  --hairline: #515151; --row-line: #3c3c3c;
+  --strong: #ffffff; --link: #60a5fa; --red-ink: #f87171; --chrome: #121212;
+  --inset: rgba(10, 10, 10, 0.5); --inset2: rgba(33, 33, 33, 0.6); --hover: rgba(255, 255, 255, 0.05);
   --shadow: 0 10px 24px -18px rgba(0, 0, 0, 0.8); --shadow-lg: 0 18px 40px -24px rgba(0, 0, 0, 0.9);
   --green: #10b981; --blue: #3b82f6; --red: #ef4444; --amber: #fbbf24; --indigo: #6366f1; --orange: #fb923c;
   --t1: #e5e7eb; --t2: #9ca3af; --t3: #6b7280;
@@ -76,7 +76,7 @@ a[href]:hover { filter: brightness(1.15); }
 .iconbtn.eye { width: 26px; height: 26px; background: transparent; border: none; font-size: 15px; align-self: center; }
 .iconbtn .dot { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--red); }
 .tb-avatar {
-  width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #1f2937, #374151);
+  width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #2a2a2a, #454545);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); color: #fff; font-size: 12px; font-weight: 600;
   display: inline-flex; align-items: center; justify-content: center;
 }
