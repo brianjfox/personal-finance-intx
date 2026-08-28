@@ -263,7 +263,9 @@ export const api = {
     post<{ runId: string; status: string }>(`/api/institution/${id}/remove-account`, { account_id: accountId }),
   seedDemo: () => post<{ institutions: number; runId: string; status: string }>("/api/demo"),
   openExternal: (url: string) => post<{ opened: boolean }>("/api/open", { url }),
-  plaidStart: () => post<{ link_token: string; hosted_link_url: string | null }>("/api/connect/plaid/start"),
+  plaidStart: (input?: { name?: string; institution_id?: string }) =>
+    post<{ link_token: string; hosted_link_url: string | null; auto_finish: boolean }>("/api/connect/plaid/start", input ?? {}),
+  plaidPending: () => get<{ state: "none" | "waiting" | "done" | "failed"; detail: string | null }>("/api/connect/plaid/pending"),
   plaidComplete: (input: { name?: string; institution_id?: string; link_token?: string; public_token?: string }) =>
     post<{ institution_id: string; runId: string; status: string }>("/api/connect/plaid/complete", input),
   ebBanks: (country: string) => get<Array<{ name: string; country: string }>>(`/api/connect/eb/banks?country=${encodeURIComponent(country)}`),

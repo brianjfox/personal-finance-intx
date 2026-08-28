@@ -118,18 +118,36 @@ export function createConnectors(cfg: ConnectorConfig) {
         return { ok: false, detail: msg };
       }
     },
-    /** Step 1: a Hosted Link session the operator opens in the browser. */
-    async plaidLinkStart(): Promise<{ link_token: string; hosted_link_url: string | null }> {
-      const r = await plaidCall<{ link_token: string; hosted_link_url?: string | null }>("/link/token/create", {
-        client_name: "Financial Interchange",
-        language: "en",
-        country_codes: ["US"],
-        user: { client_user_id: "operator" },
-        products: ["transactions"],
-        optional_products: ["investments", "liabilities"],
-        hosted_link: {},
-      });
-      return { link_token: r.link_token, hosted_link_url: r.hosted_link_url ?? null };
+    /**
+     * Step 1: a Hosted Link session the operator opens in the browser.
+     * With a completion redirect (registered in the Plaid dashboard),
+     * finishing at the bank sends the browser back to the app and the
+     * exchange runs by itself; an unregistered URI falls back to the
+     * manual Finish flow instead of failing.
+     */
+    async plaidLinkStart(opts?: { completionRedirectUri?: string }): Promise<{ link_token: string; hosted_link_url: string | null; auto_finish: boolean }> {
+      const create = (redirect: string | null) =>
+        plaidCall<{ link_token: string; hosted_link_url?: string | null }>("/link/token/create", {
+          client_name: "Financial Interchange",
+          language: "en",
+          country_codes: ["US"],
+          user: { client_user_id: "operator" },
+          products: ["transactions"],
+          optional_products: ["investments", "liabilities"],
+          hosted_link: redirect !== null ? { completion_redirect_uri: redirect } : {},
+        });
+      if (opts?.completionRedirectUri !== undefined) {
+        try {
+          const r = await create(opts.completionRedirectUri);
+          return { link_token: r.link_token, hosted_link_url: r.hosted_link_url ?? null, auto_finish: true };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (!/REDIRECT_URI|INVALID_FIELD|redirect/i.test(msg)) throw e;
+          // Not registered in their dashboard yet: the manual flow still works.
+        }
+      }
+      const r = await create(null);
+      return { link_token: r.link_token, hosted_link_url: r.hosted_link_url ?? null, auto_finish: false };
     },
 
     /**

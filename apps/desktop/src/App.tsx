@@ -879,7 +879,10 @@ function PlaidWizard({ onChanged }: { onChanged: () => void }) {
               {busy ? "testing…" : "Save & test"}
             </button>
           </div>
-          <p style={{ marginTop: 8 }}><b>5 ·</b> One more thing for the big banks: Chase, Bank of America, and most large US banks
+          <p style={{ marginTop: 8 }}><b>5 ·</b> For the smoothest flow, add <code style={{ userSelect: "all" }}>http://localhost:7787/plaid/done</code>{" "}
+            to <i>Allowed redirect URIs</i> — then finishing a bank login jumps straight back into the app, no extra clicks.{" "}
+            <button className="secondary" onClick={() => go("https://dashboard.plaid.com/developers/api")}>Open the redirect URIs page</button></p>
+          <p style={{ marginTop: 8 }}><b>6 ·</b> One more thing for the big banks: Chase, Bank of America, and most large US banks
             only appear after a one-time <i>OAuth registration</i> with Plaid (they review it, sometimes over a few days).{" "}
             <button className="secondary" onClick={() => go("https://dashboard.plaid.com/settings/company/us-oauth-institutions")}>Open the OAuth registration page</button></p>
           {verdict !== null && (
@@ -1503,22 +1506,53 @@ function ExternalLinkNote({ url }: { url: string }) {
   );
 }
 
-/** Plaid Hosted Link: open the bank login in the browser, then finish here. */
+/** Plaid Hosted Link: open the bank login in the browser; with the registered loopback redirect it finishes by itself. */
 function PlaidConnect({ name, institutionId, onDone }: { name: string; institutionId: string | null; onDone: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [autoFinish, setAutoFinish] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => {
+    if (pollRef.current !== null) clearInterval(pollRef.current);
+  }, []);
+  const startPolling = () => {
+    if (pollRef.current !== null) clearInterval(pollRef.current);
+    const startedAt = Date.now();
+    pollRef.current = setInterval(() => {
+      void api.plaidPending().then((p) => {
+        if (p.state === "done") {
+          if (pollRef.current !== null) clearInterval(pollRef.current);
+          pollRef.current = null;
+          onDone();
+        } else if (p.state === "failed") {
+          if (pollRef.current !== null) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setError(p.detail ?? "The connection didn't finish -- try the Finish button.");
+        } else if (Date.now() - startedAt > 15 * 60_000 && pollRef.current !== null) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }).catch(() => {});
+    }, 2500);
+  };
   const start = async () => {
+    if (institutionId === null && name.trim() === "") {
+      setError("Give the connection a name first — e.g. \"Chase\".");
+      return;
+    }
     setBusy("start");
     setError(null);
     try {
-      const r = await api.plaidStart();
+      const r = await api.plaidStart(institutionId !== null ? { institution_id: institutionId } : { name: name.trim() });
       setLinkToken(r.link_token);
       if (r.hosted_link_url === null) {
         throw new Error("Plaid didn't return a Hosted Link address -- check that Hosted Link is enabled for your Plaid account.");
       }
       setLinkUrl(r.hosted_link_url);
+      setAutoFinish(r.auto_finish);
+      if (r.auto_finish) startPolling();
       await api.openExternal(r.hosted_link_url);
     } catch (e) {
       setError(String(e));
@@ -1556,6 +1590,12 @@ function PlaidConnect({ name, institutionId, onDone }: { name: string; instituti
         </button>
       </div>
       {linkUrl !== null && <ExternalLinkNote url={linkUrl} />}
+      {autoFinish && linkUrl !== null && (
+        <p className="small muted" style={{ marginTop: 6 }}>
+          <span className="spinner" style={{ marginRight: 6 }} />
+          After you approve at the bank, this finishes by itself — the Finish button is only a fallback.
+        </p>
+      )}
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
