@@ -1933,6 +1933,7 @@ function EbConnect({ name, institutionId, preset, onDone, onBankPicked }: { name
 function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingProperty, setEditingProperty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const act = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
@@ -1948,6 +1949,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
   };
   const open = inst.accounts.filter((a) => !a.closed);
   const closedCount = inst.accounts.length - open.length;
+  const isProperty = inst.managed && inst.category === "real_estate" && open.length === 1;
   return (
     <div className="queue-item">
       <div className="head">
@@ -1977,6 +1979,11 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
                     </td>
                     <td className="small">{when(a.observed_at)}</td>
                     <td>
+                      {isProperty && (
+                        <button className="secondary" disabled={busy !== null} onClick={() => setEditingProperty((e) => !e)} style={{ marginRight: 6 }}>
+                          {editingProperty ? "Close" : "Edit"}
+                        </button>
+                      )}
                       {inst.managed && (
                         <button
                           className="secondary"
@@ -1993,18 +2000,21 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
             </table>
           )}
           {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
-          {inst.managed && inst.category === "real_estate" && open.length === 1 ? (
-            <PropertyEditor
-              inst={inst}
-              disabled={busy !== null}
-              onSave={(input) =>
-                void act("update", async () => {
-                  // The address is both the card's name and the account's.
-                  await api.renameInstitution(inst.institution_id, input.address);
-                  await api.saveManagedAccount(inst.institution_id, { account_id: input.account_id, name: input.address, type: "real_estate", value: input.value });
-                })
-              }
-            />
+          {isProperty ? (
+            editingProperty ? (
+              <PropertyEditor
+                inst={inst}
+                disabled={busy !== null}
+                onSave={(input) =>
+                  void act("update", async () => {
+                    // The address is both the card's name and the account's.
+                    await api.renameInstitution(inst.institution_id, input.address);
+                    await api.saveManagedAccount(inst.institution_id, { account_id: input.account_id, name: input.address, type: "real_estate", value: input.value });
+                    setEditingProperty(false);
+                  })
+                }
+              />
+            ) : null
           ) : inst.managed ? (
             <ManagedAccountEditor
               inst={inst}
