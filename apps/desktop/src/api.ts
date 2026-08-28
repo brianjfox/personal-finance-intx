@@ -338,22 +338,47 @@ const fmt = (n: number, currency: string): string =>
   new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
 
 /** Format for display, converted into the preferred currency when a rate exists; native otherwise. */
+// The privacy veil (the title bar's eye): when on, every formatted
+// financial figure shows *s instead of digits. Formatting still runs —
+// only the rendered digits are hidden.
+let MASKED = false;
+try {
+  MASKED = localStorage.getItem("fin.masked") === "1";
+} catch {
+  /* private mode */
+}
+export function setMasked(m: boolean): void {
+  MASKED = m;
+  try {
+    localStorage.setItem("fin.masked", m ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
+}
+export function isMasked(): boolean {
+  return MASKED;
+}
+/** Digits become *s while the veil is on; everything else passes through. */
+export function maskDigits(s: string): string {
+  return MASKED ? s.replace(/\d/g, "*") : s;
+}
+
 export function money(v: string | null | undefined, currency = "USD"): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
-  if (!Number.isFinite(n)) return v;
+  if (!Number.isFinite(n)) return maskDigits(v);
   if (FX !== null && currency !== FX.to) {
     const rate = FX.rates[currency];
-    if (rate !== undefined) return fmt(n * Number(rate), FX.to);
+    if (rate !== undefined) return maskDigits(fmt(n * Number(rate), FX.to));
   }
-  return fmt(n, currency);
+  return maskDigits(fmt(n, currency));
 }
 
 /** The native form, for showing alongside a converted figure. */
 export function moneyNative(v: string | null | undefined, currency = "USD"): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
-  return Number.isFinite(n) ? fmt(n, currency) : v;
+  return maskDigits(Number.isFinite(n) ? fmt(n, currency) : v);
 }
 export function when(iso: string | null | undefined): string {
   if (!iso) return "—";

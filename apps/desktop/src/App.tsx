@@ -7,11 +7,12 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fxState, money, moneyNative, setApiToken, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, type DonutSlice } from "./charts";
 import { Icon, LogoMark } from "./icons";
+import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
 
-type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents";
+type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents" | "settings";
 
 /**
  * Who is using the app. Multi-user hosts put a real login in front:
@@ -242,6 +243,7 @@ const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
   ["estate", "Estate", "house-line"],
   ["audit", "Audit Logs", "scroll-text"],
   ["documents", "Documents", "file-text"],
+  ["settings", "Settings", "gear"],
 ];
 
 function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void }) {
@@ -294,6 +296,12 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     user !== null
       ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
       : "ME";
+  // The privacy veil: masks every rendered financial figure with *s.
+  const [masked, setMaskedState] = useState(isMasked());
+  const toggleMask = () => {
+    setMasked(!masked);
+    setMaskedState(!masked);
+  };
   const chatMode = page === "strategy" && !takeover;
   // Pages that still use the classic single-column layout get the standard container.
   const contained = (node: React.ReactNode) => <div className="page page-mid">{node}</div>;
@@ -306,6 +314,9 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
           <span className="tb-networth">
             <span className="lbl">Net Worth</span>
             <span className="val num">{nw !== null ? money(nw.net_worth, nw.currency) : "—"}</span>
+            <button className="iconbtn eye" title={masked ? "Show the figures" : "Hide the figures (show *s)"} onClick={toggleMask}>
+              <Icon name={masked ? "eye-slash" : "eye"} />
+            </button>
             {nw !== null && nw.provisional && <span className="pill prov">provisional</span>}
           </span>
           {nw?.as_of.observed_at != null && <span className="tb-updated">Last updated {when(nw.as_of.observed_at)}</span>}
@@ -369,6 +380,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
               {page === "estate" && contained(<EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />)}
               {page === "audit" && contained(<AuditPage tick={tick} onChanged={refresh} openFact={setFactId} />)}
               {page === "documents" && contained(<Documents tick={tick} />)}
+              {page === "settings" && contained(<SettingsPage />)}
             </>
           )}
         </main>
@@ -623,7 +635,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
         <h2>Household &amp; Estate</h2>
         <p className="page-sub" style={{ maxWidth: 640 }}>
           Manage the people your estate and tax planning must know about. Information is stored locally on this Mac. AI
-          models can read everything here <span style={{ color: "#f87171", fontWeight: 600, textDecoration: "underline" }}>except</span> your tax ID.
+          models can read everything here <span style={{ color: "var(--red-ink)", fontWeight: 600, textDecoration: "underline" }}>except</span> your tax ID.
         </p>
       </div>
       <div className="people-grid">
@@ -762,7 +774,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
           <section className="form-section">
             <div className="sec-head">
               <div className="l"><span className="sec-num">3</span><span className="sec-title">Children &amp; Dependents</span></div>
-              <button className="ghost" style={{ color: "#60a5fa", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, children: [...x.children, emptyRel()] }))}>
+              <button className="ghost" style={{ color: "var(--link)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, children: [...x.children, emptyRel()] }))}>
                 + Add Child
               </button>
             </div>
@@ -777,7 +789,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
           <section className="form-section">
             <div className="sec-head">
               <div className="l"><span className="sec-num">4</span><span className="sec-title">Anyone Else In Your Will</span></div>
-              <button className="ghost" style={{ color: "#60a5fa", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, others: [...x.others, emptyRel()] }))}>
+              <button className="ghost" style={{ color: "var(--link)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, others: [...x.others, emptyRel()] }))}>
                 + Add Person
               </button>
             </div>
@@ -1538,7 +1550,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
           <SetupProgress ob={ob} profileOk={profileOk} />
           <div className="panel">
             <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t2)", marginBottom: 12 }}>Expert Mode</div>
-            <div className="tipbox">"Click any figure to see its <span style={{ color: "#60a5fa", fontWeight: 600 }}>provenance</span>. We never assert a number without evidence."</div>
+            <div className="tipbox">"Click any figure to see its <span style={{ color: "var(--link)", fontWeight: 600 }}>provenance</span>. We never assert a number without evidence."</div>
             <div className="tipbox">"Your data never leaves this Mac. Even AI analysis can be run entirely locally."</div>
           </div>
         </div>
@@ -2347,9 +2359,9 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
             <tbody>
               {open.map((a) => (
                 <tr key={a.account_id}>
-                  <td style={{ fontWeight: 500, color: "#fff" }}>{a.name}</td>
+                  <td style={{ fontWeight: 500, color: "var(--strong)" }}>{a.name}</td>
                   <td className="muted">{typeLabel(a.type)}</td>
-                  <td className="num" style={{ fontWeight: 600, color: "#fff" }}>
+                  <td className="num" style={{ fontWeight: 600, color: "var(--strong)" }}>
                     {a.value === null ? <span className="muted" style={{ fontWeight: 400 }}>not fetched yet</span> : money(a.value, a.currency)}
                     {OWED_TYPES.has(a.type) && a.value !== null ? <span className="small muted" style={{ fontWeight: 400 }}> owed</span> : null}
                   </td>
@@ -2447,7 +2459,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
           <button className="linklike" onClick={() => setManage((m) => !m)}><Icon name="note" /> {manage ? "Hide management" : "Manage"}</button>
         </div>
         {total !== null && (
-          <span className="small num" style={{ fontWeight: 600, color: "#fff" }}>
+          <span className="small num" style={{ fontWeight: 600, color: "var(--strong)" }}>
             Total: {money(String(Math.round(total * 100) / 100), valued[0]!.currency)}
           </span>
         )}
@@ -2727,9 +2739,9 @@ const SCENARIOS: ReadonlyArray<readonly [string, string, number]> = [
 function compactMoney(v: number): string {
   const a = Math.abs(v);
   const sign = v < 0 ? "-" : "";
-  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2)}M`;
-  if (a >= 1e3) return `${sign}$${Math.round(a / 1e3)}k`;
-  return `${sign}$${a.toFixed(0)}`;
+  if (a >= 1e6) return maskDigits(`${sign}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2)}M`);
+  if (a >= 1e3) return maskDigits(`${sign}$${Math.round(a / 1e3)}k`);
+  return maskDigits(`${sign}$${a.toFixed(0)}`);
 }
 
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
@@ -2857,7 +2869,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         </div>
         <div className="horizon-meta">
           <span className="small muted">Target horizon</span>
-          <span className="num" style={{ fontWeight: 600, color: "#fff" }}>
+          <span className="num" style={{ fontWeight: 600, color: "var(--strong)" }}>
             {targetYear} · +{compactMoney(projectedGain)} projected at {(rate * 100).toFixed(0)}%/yr
           </span>
         </div>
@@ -2892,7 +2904,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
             <div className="stat-row"><span className="lbl">Liabilities</span><span className="val num">{money(nw.liabilities, nw.currency)}</span></div>
             <div className="stat-row">
               <span className="lbl">Cash ÷ Liabilities</span>
-              <span className="val num" style={{ color: "#60a5fa" }}>{liabilities > 0 && cash > 0 ? `${(cash / liabilities).toFixed(1)}×` : "—"}</span>
+              <span className="val num" style={{ color: "var(--link)" }}>{liabilities > 0 && cash > 0 ? maskDigits(`${(cash / liabilities).toFixed(1)}×`) : "—"}</span>
             </div>
           </div>
           <div className="panel" style={{ marginBottom: 0, flex: 1 }}>
@@ -2907,7 +2919,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
                   {alloc.map((s) => (
                     <div className="row" key={s.label}>
                       <span><span className="sw" style={{ background: s.color, width: 10, height: 10, borderRadius: 3, display: "inline-block", marginRight: 8, verticalAlign: -1 }} />{s.label}</span>
-                      <span className="num" style={{ color: "#fff" }}>{allocTotal > 0 ? `${Math.round((s.value / allocTotal) * 100)}%` : ""}</span>
+                      <span className="num" style={{ color: "var(--strong)" }}>{allocTotal > 0 ? `${Math.round((s.value / allocTotal) * 100)}%` : ""}</span>
                     </div>
                   ))}
                 </div>
@@ -2936,7 +2948,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tbody>
                 {lines.map((l) => (
                   <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
-                    <td title={l.name}><span style={{ fontWeight: 500, color: "#fff" }}>{chopMiddle(l.name)}</span><div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
+                    <td title={l.name}><span style={{ fontWeight: 500, color: "var(--strong)" }}>{chopMiddle(l.name)}</span><div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
                     <td className="muted">{l.type}</td>
                     <td className="num">
                       {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
@@ -3027,7 +3039,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
                 <td className="small" title={p.account_id}>{chopMiddle(p.account_id)}</td>
                 <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
-                <td className="num">{p.quantity}</td>
+                <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
                 <td className="num">{p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}</td>
@@ -3045,7 +3057,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tr key={`${p.symbol}|${p.currency}`} className={p.provisional ? "prov" : ""}>
                 <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
                 <td className="small" title={p.account_ids.join("\n")}>{p.accounts} account{p.accounts === 1 ? "" : "s"}</td>
-                <td className="num">{p.quantity}</td>
+                <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num">
                   {p.fact_ids.length > 0 ? (
@@ -3189,7 +3201,7 @@ function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApp
       <div className="approval-body">
         <div className="approval-grid">
           <div>
-            <h2>{headline}{rec.action.amount != null && <span className="muted" style={{ fontWeight: 400 }}> · ~{money(rec.action.amount.amount, rec.action.amount.currency)}</span>}</h2>
+            <h2>{maskDigits(headline)}{rec.action.amount != null && <span className="muted" style={{ fontWeight: 400 }}> · ~{money(rec.action.amount.amount, rec.action.amount.currency)}</span>}</h2>
             <p style={{ fontSize: 14, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 16px" }}>{rec.thesis}</p>
             <div className="evrow">
               <Icon name="link-simple" className="icon" />
@@ -3216,7 +3228,7 @@ function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApp
               <label className="field-label">Max quantity to {verb}</label>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <input value={qty} onChange={(e) => setQty(e.target.value)} />
-                <span className="inline-note">proposed {rec.action.quantity ?? "—"}</span>
+                <span className="inline-note">proposed {maskDigits(rec.action.quantity ?? "—")}</span>
               </div>
             </div>
             <div>
@@ -3717,7 +3729,7 @@ function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => 
                     </div>
                   </div>
                   {e.fact_ids.length > 0 && (
-                    <button className="ghost" style={{ color: "#60a5fa", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }} onClick={() => openFact(e.fact_ids[0]!)}>
+                    <button className="ghost" style={{ color: "var(--link)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }} onClick={() => openFact(e.fact_ids[0]!)}>
                       View Evidence
                     </button>
                   )}
@@ -4143,6 +4155,121 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
           })}
         </tbody>
       </table>
+    </>
+  );
+}
+
+// --- Settings: how the console looks. A display preference of this ---
+// --- machine's browser profile; never stored on the host. ---
+
+function SettingsPage() {
+  const [ui, setUi] = useState<UiSettings>(() => loadUiSettings());
+  const update = (patch: Partial<UiSettings>) => {
+    setUi((u) => {
+      const next = { ...u, ...patch };
+      applyUiSettings(next);
+      saveUiSettings(next);
+      return next;
+    });
+  };
+  // Colors edit the ACTIVE theme's set: with Dark showing (chosen, or via
+  // Auto), a new background changes only how Dark looks.
+  const active = resolvedTheme(ui);
+  const colors = ui[active];
+  const activeName = active === "dark" ? "Dark" : "Light";
+  const updateColors = (patch: Partial<ThemeColors>) => update({ [active]: { ...colors, ...patch } } as Partial<UiSettings>);
+  const noColors = (c: ThemeColors) => c.background === null && c.foreground === null;
+  const isDefault =
+    ui.theme === UI_DEFAULTS.theme && ui.fontSize === UI_DEFAULTS.fontSize && noColors(ui.light) && noColors(ui.dark);
+  const colorRow = (
+    name: string,
+    hint: string,
+    value: string | null,
+    fallback: string,
+    set: (v: string | null) => void,
+  ) => (
+    <div className="set-row">
+      <div>
+        <div className="set-name">{name}</div>
+        <div className="set-hint">{hint}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <input type="color" value={value ?? fallback} onChange={(e) => set(e.target.value)} title={name} />
+        {value !== null ? (
+          <>
+            <code className="small">{value}</code>
+            <button className="secondary" onClick={() => set(null)}>Theme default</button>
+          </>
+        ) : (
+          <span className="small muted">theme default</span>
+        )}
+      </div>
+    </div>
+  );
+  return (
+    <>
+      <h2>Settings</h2>
+      <p className="page-sub">
+        How the console looks on this Mac. These preferences live in the app's local storage — they never touch the
+        ledger and never leave the machine.
+      </p>
+      <div className="panel">
+        <div className="panel-title" style={{ marginBottom: 8 }}>
+          <span className="icon-tile"><Icon name="gear" /></span>
+          Appearance
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">Theme</div>
+            <div className="set-hint">Auto follows the macOS appearance.</div>
+          </div>
+          <div className="seg">
+            {(["light", "dark", "auto"] as const).map((t) => (
+              <button key={t} className={ui.theme === t ? "on" : ""} onClick={() => update({ theme: t })}>
+                {t.charAt(0).toUpperCase()}{t.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">Font size</div>
+            <div className="set-hint">Scales the whole console proportionally.</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <input
+              type="range"
+              min={11}
+              max={20}
+              step={1}
+              value={ui.fontSize}
+              onChange={(e) => update({ fontSize: Number(e.target.value) })}
+              style={{ width: 180, padding: 0 }}
+            />
+            <span className="num" style={{ width: 44, color: "var(--strong)", fontWeight: 600 }}>{ui.fontSize} px</span>
+          </div>
+        </div>
+        {colorRow(
+          "Background color",
+          `Applies to the ${activeName} theme only; panel, border, and hover shades are derived from it.`,
+          colors.background,
+          active === "dark" ? "#0e1524" : "#eaeef5",
+          (v) => updateColors({ background: v }),
+        )}
+        {colorRow(
+          "Foreground color",
+          `Applies to the ${activeName} theme only; secondary text shades are derived from it.`,
+          colors.foreground,
+          active === "dark" ? "#e5e7eb" : "#243044",
+          (v) => updateColors({ foreground: v }),
+        )}
+        <div className="set-row" style={{ borderBottom: 0, paddingBottom: 0 }}>
+          <span className="set-hint">Changes apply immediately.</span>
+          <button className="secondary" disabled={isDefault} onClick={() => update({ ...UI_DEFAULTS })}>
+            Reset to defaults
+          </button>
+        </div>
+      </div>
     </>
   );
 }

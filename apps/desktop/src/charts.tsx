@@ -2,15 +2,17 @@
 // CDN; the packaged app runs offline inside the Tauri webview, so the two
 // charts it actually needs (projection area, allocation donut) are drawn here.
 
+import { maskDigits } from "./api";
+
 const GRID = "rgba(45,55,72,0.45)";
 const AXIS = "#6b7280";
 const GREEN = "#10b981";
 
 function compact(v: number): string {
   const a = Math.abs(v);
-  if (a >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `$${(v / 1e3).toFixed(0)}k`;
-  return `$${v.toFixed(0)}`;
+  if (a >= 1e6) return maskDigits(`$${(v / 1e6).toFixed(2)}M`);
+  if (a >= 1e3) return maskDigits(`$${(v / 1e3).toFixed(0)}k`);
+  return maskDigits(`$${v.toFixed(0)}`);
 }
 
 /**
