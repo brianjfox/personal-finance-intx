@@ -16,7 +16,7 @@ type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" |
  * username + password -> a session token; every request carries the
  * token, and the host serves only that user's data.
  */
-function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: { id: string; name: string } | null; enter: (token: string, user: { id: string; name: string }) => void; signOut: () => void; refresh: () => void } {
+function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: { id: string; name: string } | null; enter: (token: string, user: { id: string; name: string }) => void; renameLocal?: (name: string) => void; signOut: () => void; refresh: () => void } {
   const [state, setState] = useState<{ multi: boolean; users: UserInfo[] } | null>(null);
   const [session, setSession] = useState<{ token: string; id: string; name: string } | null>(() => {
     try {
@@ -67,6 +67,13 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
       setApiToken(token);
       store(token, user);
       setSession({ token, ...user });
+    },
+    renameLocal: (name: string) => {
+      setSession((x) => {
+        if (x === null) return x;
+        store(x.token, { id: x.id, name });
+        return { ...x, name };
+      });
     },
     signOut: () => {
       void api.logout().catch(() => {});
@@ -216,10 +223,10 @@ export function App() {
     );
   }
   // Keyed by user: signing out or switching remounts everything fresh.
-  return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} />;
+  return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} onRenamed={gate.renameLocal ?? (() => {})} />;
 }
 
-function AppBody({ user, signOut }: { user: { id: string; name: string } | null; signOut: () => void }) {
+function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
@@ -302,7 +309,7 @@ function AppBody({ user, signOut }: { user: { id: string; name: string } | null;
             {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
             {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
-            {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} />}
+            {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} user={user} onRenamed={onRenamed} />}
             {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
             {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
             {page === "strategy" && <ChatPage openFact={setFactId} />}
@@ -756,7 +763,67 @@ function DeleteAllDataCard() {
   );
 }
 
-function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
+/** Multi-user: change your login name or password. The name is also the username at sign-in. */
+function AccountCard({ user, onRenamed }: { user: { id: string; name: string }; onRenamed: (name: string) => void }) {
+  const [name, setName] = useState(user.name);
+  const [oldPw, setOldPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (label: string, fn: () => Promise<string>) => {
+    setBusy(label);
+    setError(null);
+    setNote(null);
+    try {
+      setNote(await fn());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rename = () =>
+    act("rename", async () => {
+      const r = await api.renameMe(name.trim());
+      onRenamed(r.name);
+      return `You now sign in as "${r.name}".`;
+    });
+  const changePw = () =>
+    act("password", async () => {
+      if (newPw !== confirmPw) throw new Error("The two new passwords don't match.");
+      await api.changeMyPassword(oldPw, newPw);
+      setOldPw("");
+      setNewPw("");
+      setConfirmPw("");
+      return "Password changed — your encrypted store now opens with the new one.";
+    });
+  return (
+    <div className="queue-item">
+      <div className="head"><b>Your account</b><span className="muted small">{user.id}</span></div>
+      <div className="small muted">Your name is also your username at sign-in. Changing the password re-keys your encrypted store.</div>
+      <div className="actions" style={{ marginTop: 8 }}>
+        <input style={{ flex: 1, maxWidth: 280 }} placeholder="Your name" value={name} disabled={busy !== null} onChange={(e) => setName(e.target.value)} />
+        <button disabled={busy !== null || name.trim() === "" || name.trim() === user.name} onClick={() => void rename()}>
+          {busy === "rename" ? "renaming…" : "Rename"}
+        </button>
+      </div>
+      <div className="actions" style={{ marginTop: 6 }}>
+        <input style={{ width: 170 }} type="password" placeholder="Current password" value={oldPw} disabled={busy !== null} onChange={(e) => setOldPw(e.target.value)} />
+        <input style={{ width: 160 }} type="password" placeholder="New password" value={newPw} disabled={busy !== null} onChange={(e) => setNewPw(e.target.value)} />
+        <input style={{ width: 160 }} type="password" placeholder="Repeat it" value={confirmPw} disabled={busy !== null} onChange={(e) => setConfirmPw(e.target.value)} />
+        <button disabled={busy !== null || oldPw === "" || newPw.length < 4} onClick={() => void changePw()}>
+          {busy === "password" ? "changing…" : "Change password"}
+        </button>
+      </div>
+      {note !== null && <p className="small" style={{ marginTop: 6 }}>{note}</p>}
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+    </div>
+  );
+}
+
+function CredentialsPage({ tick, onChanged, user, onRenamed }: { tick: number; onChanged: () => void; user: { id: string; name: string } | null; onRenamed: (name: string) => void }) {
   const [data, setData] = useState<CredentialsData | null>(null);
   useEffect(() => {
     api.credentials().then(setData).catch(() => setData(null));
@@ -769,6 +836,7 @@ function CredentialsPage({ tick, onChanged }: { tick: number; onChanged: () => v
         Every key is pasted once, stored in your Mac's Keychain by the app, and shown here only as set / not set — the
         values never leave this machine. None of these keys can move money.
       </p>
+      {user !== null && <AccountCard user={user} onRenamed={onRenamed} />}
       {data.slots.map((s) => (
         <CredentialCard key={s.id} slot={s} onChanged={onChanged} />
       ))}

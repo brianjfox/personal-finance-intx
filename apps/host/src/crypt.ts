@@ -64,6 +64,12 @@ export function unmountStore(mountPoint: string): void {
   }
 }
 
+/** Re-key the store: the volume's password becomes newPassword. Detached only. */
+export function changeStorePassword(root: string, id: string, oldPassword: string, newPassword: string): void {
+  const r = hdiutil(["chpass", "-oldstdinpass", "-newstdinpass", storeImagePath(root, id)], `${oldPassword}\0${newPassword}\0`);
+  if (!r.ok) throw new Error(`couldn't change the store's password: ${r.err}`);
+}
+
 /**
  * First encryption of an existing plaintext directory: stage it aside,
  * create the store at its path, move everything in. Crash-safe: the

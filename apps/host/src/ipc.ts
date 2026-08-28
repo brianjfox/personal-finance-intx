@@ -106,6 +106,7 @@ const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strat
 
 const UserAddBody = type({ name: "string > 0", "password?": "string" });
 const LoginBody = type({ user: "string > 0", password: "string" });
+const ChangePasswordBody = type({ old_password: "string", new_password: "string" });
 const SetPasswordBody = type({ user: "string > 0", password: "string" });
 
 export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
@@ -174,15 +175,30 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         // asserts: a user sees exactly their own data. Only /api/ needs
         // it -- the GUI's static files stay public (they hold no data).
         let app: App = null as unknown as App;
+        let meId: string | null = null;
         if (p.startsWith("/api/")) {
           if (opts.users !== undefined) {
             const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
             const me = token === "" ? null : opts.users.sessionUser(token);
             if (me === null) return json({ error: "login required" }, 401);
+            meId = me.id;
             app = opts.users.appFor(me.id);
           } else {
             app = opts.app!;
           }
+        }
+        if (p === "/api/me/rename" && req.method === "POST" && opts.users !== undefined && meId !== null) {
+          const body = RenameBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(opts.users.renameUser(meId, body.name));
+        }
+        if (p === "/api/me/password" && req.method === "POST" && opts.users !== undefined && meId !== null) {
+          const body = ChangePasswordBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          if (!opts.users.changePassword(meId, body.old_password, body.new_password)) {
+            return json({ error: "the current password isn't right" }, 403);
+          }
+          return json({ ok: true });
         }
         if (p === "/api/fx") return json(await app.getFx());
         if (p === "/api/net-worth") {

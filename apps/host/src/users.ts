@@ -20,7 +20,7 @@ import { defaultSecretStore, scopedSecretStore, type SecretStore } from "@fin/in
 import { type } from "arktype";
 
 import { createApp, type App, type AppOptions } from "./app";
-import { createStore, encryptExisting, isMounted, mountStore, storeExists, storeImagePath, unmountStore } from "./crypt";
+import { changeStorePassword, createStore, encryptExisting, isMounted, mountStore, storeExists, storeImagePath, unmountStore } from "./crypt";
 
 const PasswordRecord = type({ salt: "string", hash: "string", n: "number", r: "number", p: "number" });
 
@@ -144,6 +144,10 @@ export interface UserManager {
   closeAll(): void;
   /** First-time password for a user who has none (the migrated primary). Refuses if one is set. */
   setPassword(idOrName: string, password: string): PublicUser;
+  /** Change the display name (also the login name). Refuses collisions with other users. */
+  renameUser(id: string, name: string): PublicUser;
+  /** Change the password: verifies the old one, re-keys the encrypted store, keeps sessions alive. */
+  changePassword(id: string, oldPassword: string, newPassword: string): boolean;
   /** Username (id or display name, case-insensitive) + password -> a session token, or null. */
   login(idOrName: string, password: string): { token: string; user: PublicUser } | null;
   /** The user behind a session token; null when the token is unknown or expired. */
@@ -306,6 +310,46 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       }
       unlock(updated, password);
       return publicUser(findUser(u.id)!);
+    },
+    renameUser(id, name) {
+      const u = file.users.find((x) => x.id === id);
+      if (u === undefined) throw new Error(`unknown user ${id}`);
+      const trimmed = name.trim();
+      if (trimmed === "") throw new Error("give yourself a name");
+      const clash = file.users.some((x) => x.id !== id && (x.name.toLowerCase() === trimmed.toLowerCase() || x.id === trimmed.toLowerCase()));
+      if (clash) throw new Error(`the name ${trimmed} is already taken`);
+      const updated: UserInfo = { ...u, name: trimmed };
+      file = { ...file, users: file.users.map((x) => (x.id === id ? updated : x)) };
+      writeUsersFile(root, file);
+      return publicUser(updated);
+    },
+    changePassword(id, oldPassword, newPassword) {
+      const u = file.users.find((x) => x.id === id);
+      if (u === undefined) throw new Error(`unknown user ${id}`);
+      if (u.password === undefined) throw new Error("no password set yet -- set one first");
+      if (!verifyPassword(u.password, oldPassword)) return false;
+      if (newPassword.length < 4) throw new Error("the new password needs at least 4 characters");
+      if (u.encrypted === true) {
+        // Re-key the volume: detach (chpass refuses a mounted image),
+        // change, and bring it back with the new password.
+        const dir = userDir(root, u.id);
+        const wasMounted = isMounted(dir);
+        if (wasMounted) {
+          apps.get(u.id)?.close();
+          apps.delete(u.id);
+          unmountStore(dir);
+        }
+        changeStorePassword(root, u.id, oldPassword, newPassword);
+        if (wasMounted) mountStore(root, u.id, dir, newPassword);
+      }
+      const updated: UserInfo = { ...u, password: hashPassword(newPassword) };
+      file = { ...file, users: file.users.map((x) => (x.id === u.id ? updated : x)) };
+      writeUsersFile(root, file);
+      if (updated.encrypted === true && isMounted(userDir(root, updated.id))) {
+        const app = bootApp(updated);
+        void app.resumeInFlight().catch(() => {});
+      }
+      return true;
     },
     login(idOrName, password) {
       const u = findUser(idOrName);

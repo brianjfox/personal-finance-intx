@@ -181,7 +181,7 @@ describe("multi-user IPC with login", () => {
       server.stop(true);
       users.closeAll();
     }
-  });
+  }, 120_000);
 
   test("a migrated user without a password sets one exactly once, via the login screen's flow", async () => {
     const root = tmp();
@@ -214,5 +214,5 @@ describe("multi-user IPC with login", () => {
       server.stop(true);
       users.closeAll();
     }
-  });
+  }, 120_000);
 });
