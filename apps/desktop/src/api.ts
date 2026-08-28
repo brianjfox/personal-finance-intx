@@ -294,6 +294,8 @@ export const api = {
   login: (user: string, password: string) => post<{ token: string; user: UserInfo }>("/api/login", { user, password }),
   setPassword: (user: string, password: string) => post<{ user: UserInfo; token: string | null }>("/api/set-password", { user, password }),
   logout: () => post<{ ok: boolean }>("/api/logout", {}),
+  renameMe: (name: string) => post<UserInfo>("/api/me/rename", { name }),
+  changeMyPassword: (oldPassword: string, newPassword: string) => post<{ ok: boolean }>("/api/me/password", { old_password: oldPassword, new_password: newPassword }),
   inference: () => get<InferenceState>("/api/inference"),
   inferenceSave: (settings: InferenceState["providers"] extends unknown ? { version: "2"; providers: ProviderRow[]; default: string; tasks?: Record<string, string> } : never, keys?: Record<string, string>) =>
     post<InferenceState>("/api/inference", { settings, ...(keys !== undefined ? { keys } : {}) }),

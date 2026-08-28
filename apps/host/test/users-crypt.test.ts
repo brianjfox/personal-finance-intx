@@ -92,3 +92,38 @@ describe.if(darwin)("encrypted user stores", () => {
     }
   }, 120_000);
 });
+
+describe.if(darwin)("account changes", () => {
+  test("rename changes the sign-in name; password change re-keys the volume with data intact", async () => {
+    const root = tmp();
+    const users = createUserManager({ rootDir: root, secrets: memorySecretStore() });
+    try {
+      users.add("Primary", "old-pw");
+      const sess = users.login("Primary", "old-pw");
+      expect(sess).not.toBeNull();
+      const app = users.appFor("primary");
+      const inst = app.addInstitution({ name: "Bank", mode: "managed" });
+      await app.saveManagedAccount(inst.institution_id, { name: "Cash", type: "checking", value: "42" });
+
+      // Rename: new sign-in name, same id, collision refused.
+      expect(users.renameUser("primary", "Brian").name).toBe("Brian");
+      users.add("Taken", "x-pw-1");
+      expect(() => users.renameUser("primary", "taken")).toThrow(/already taken/);
+
+      // Password change: wrong old refused; right old re-keys the volume.
+      expect(users.changePassword("primary", "wrong", "new-pw")).toBe(false);
+      expect(users.changePassword("primary", "old-pw", "new-pw")).toBe(true);
+      // The session survived, the data is intact, and only the new password unlocks.
+      expect(users.sessionUser(sess!.token)?.name).toBe("Brian");
+      expect(views.netWorth(users.appFor("primary").ledger).assets).toBe("42");
+      users.logout(sess!.token);
+      expect(users.login("Brian", "old-pw")).toBeNull();
+      const again = users.login("Brian", "new-pw");
+      expect(again).not.toBeNull();
+      expect(views.netWorth(users.appFor("primary").ledger).assets).toBe("42");
+      users.logout(again!.token);
+    } finally {
+      users.closeAll();
+    }
+  }, 180_000);
+});
