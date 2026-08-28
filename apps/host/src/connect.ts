@@ -88,6 +88,36 @@ export function createConnectors(cfg: ConnectorConfig) {
   };
 
   return {
+    /**
+     * The wizard's "Save & test": try to mint a Link token and translate
+     * Plaid's answer into plain words the operator can act on.
+     */
+    async plaidTest(): Promise<{ ok: boolean; detail: string }> {
+      try {
+        await plaidCall<{ link_token: string }>("/link/token/create", {
+          client_name: "Financial Interchange",
+          language: "en",
+          country_codes: ["US"],
+          user: { client_user_id: "operator" },
+          products: ["transactions"],
+          hosted_link: {},
+        });
+        return { ok: true, detail: "Your Plaid keys work: Link sessions can be created. Note that Chase, Bank of America, and most large US banks also require the one-time OAuth registration on Plaid's site before they appear in Link." };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("not set up yet")) return { ok: false, detail: msg };
+        if (/INVALID_API_KEYS|INVALID_CLIENT_ID|INVALID_SECRET/i.test(msg)) {
+          return { ok: false, detail: "Plaid rejected the keys. Check that the Client ID and secret are from the SAME team, and that you copied the Production secret (the Sandbox one only works with fake banks)." };
+        }
+        if (/INVALID_PRODUCT|PRODUCTS_NOT_ENABLED|NOT_AUTHORIZED/i.test(msg)) {
+          return { ok: false, detail: "The keys are real, but this Plaid team can't use the Transactions product yet -- request Production access (pay-as-you-go) in the Plaid dashboard, then test again." };
+        }
+        if (/ADDITIONAL_CONSENT_REQUIRED|OAUTH/i.test(msg)) {
+          return { ok: false, detail: "The keys work, but the bank you want needs Plaid's one-time OAuth registration -- complete it in the Plaid dashboard (Settings, US OAuth institutions)." };
+        }
+        return { ok: false, detail: msg };
+      }
+    },
     /** Step 1: a Hosted Link session the operator opens in the browser. */
     async plaidLinkStart(): Promise<{ link_token: string; hosted_link_url: string | null }> {
       const r = await plaidCall<{ link_token: string; hosted_link_url?: string | null }>("/link/token/create", {

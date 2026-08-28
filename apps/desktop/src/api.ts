@@ -288,6 +288,7 @@ export const api = {
     }>("/api/profile/extract", { text }),
   profileSave: (input: ProfileSave) => post<ProfileRedacted>("/api/profile", input),
   renameInstitution: (id: string, name: string) => post<{ ok: boolean }>(`/api/institution/${id}/rename`, { name }),
+  plaidTest: () => post<{ ok: boolean; detail: string }>("/api/plaid/test", {}),
   deleteAllData: () => post<{ ok: boolean }>("/api/delete-all-data", {}),
   users: () => get<{ multi_user: boolean; users: UserInfo[] }>("/api/users"),
   addUser: (name: string, password: string) => post<{ user: UserInfo; token: string | null }>("/api/users", { name, password }),

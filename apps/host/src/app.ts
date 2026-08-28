@@ -210,6 +210,8 @@ export interface App {
   seedDemoData(): Promise<{ institutions: number; runId: string; status: string }>;
   /** Plaid, step 1: a Hosted Link session for the operator to open in the browser. */
   connectPlaidStart(): Promise<{ link_token: string; hosted_link_url: string | null }>;
+  /** The Plaid wizard's Save & test: mint a Link token, answer in plain words. */
+  testPlaid(): Promise<{ ok: boolean; detail: string }>;
   /**
    * Plaid, step 2: exchange the finished Link session (or an explicit
    * public_token) for the read-only access token, store it in the secret
@@ -937,6 +939,7 @@ export function createApp(opts: AppOptions): App {
       return { institutions: loaded.entries.length, runId, status: r.terminalStatus };
     },
     connectPlaidStart: () => connectors.plaidLinkStart(),
+    testPlaid: () => connectors.plaidTest(),
     async connectPlaidComplete(o) {
       const ex = await connectors.plaidExchange({
         ...(o.linkToken !== undefined ? { linkToken: o.linkToken } : {}),
