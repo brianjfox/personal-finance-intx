@@ -247,7 +247,11 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
   // Nothing at all yet: the welcome screen takes over (except when the
   // user is already on the Institutions page connecting something).
   const nothingYet = overview !== null && overview.institutions.length === 0 && !overview.hasFacts;
-  const takeover = nothingYet && page !== "institutions";
+  // The welcome screen owns the DATA pages while there's nothing to show,
+  // but never the setup pages: a fresh user must be able to reach
+  // Credentials (Plaid/EB keys, the wizard) and People before any data exists.
+  const SETUP_PAGES: ReadonlySet<Page> = new Set(["institutions", "credentials", "profile"]);
+  const takeover = nothingYet && !SETUP_PAGES.has(page);
 
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try {
