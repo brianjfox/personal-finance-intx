@@ -238,6 +238,7 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
             return json({ ok: true });
           }
         }
+        if (p === "/api/plaid/test" && req.method === "POST") return json(await app.testPlaid());
         if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
         // The GUI runs inside the Tauri webview, where window.open() to an
         // external site is blocked -- the host opens the default browser.

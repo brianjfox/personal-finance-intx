@@ -324,3 +324,38 @@ describe("kraken connect flow (mock API)", () => {
     }
   });
 });
+
+describe("plaid wizard test call", () => {
+  test("translates Plaid's answers into plain words", async () => {
+    let respond: (r: Response) => void = () => {};
+    const fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return new Promise<Response>((res) => {
+          respond = res;
+          res(nextResponse);
+        });
+      },
+    });
+    let nextResponse = Response.json({ link_token: "link-tok" });
+    const { createConnectors } = await import("../src/connect");
+    const secrets = memorySecretStore({ "fin-plaid/client_id": "cid", "fin-plaid/secret": "sec" });
+    const c = createConnectors({ secrets, plaidBaseUrl: `http://127.0.0.1:${fake.port}` });
+    try {
+      expect((await c.plaidTest()).ok).toBe(true);
+      nextResponse = Response.json({ error_code: "INVALID_API_KEYS", error_message: "invalid client_id or secret provided" }, { status: 400 });
+      const bad = await c.plaidTest();
+      expect(bad.ok).toBe(false);
+      expect(bad.detail).toContain("Production secret");
+      nextResponse = Response.json({ error_code: "INVALID_PRODUCT", error_message: "products not enabled" }, { status: 400 });
+      expect((await c.plaidTest()).detail).toContain("Production access");
+      // No keys stored at all: plain words, not a stack trace.
+      const none = createConnectors({ secrets: memorySecretStore(), plaidBaseUrl: `http://127.0.0.1:${fake.port}` });
+      expect((await none.plaidTest()).detail).toContain("Credentials page");
+    } finally {
+      void respond;
+      fake.stop(true);
+    }
+  });
+});
