@@ -104,6 +104,17 @@ export function removeInstitutionEntry(dataDir: string, institutionId: string): 
   return true;
 }
 
+/** Rename a connection (a property's address changed, say). The id stays stable. */
+export function renameInstitutionEntry(dataDir: string, institutionId: string, name: string): boolean {
+  const file = path.join(dataDir, "institutions.json");
+  const reg = readRegistry(file);
+  const entry = reg.institutions.find((e) => e.institution_id === institutionId);
+  if (entry === undefined) return false;
+  entry.name = name;
+  writeRegistry(file, reg);
+  return true;
+}
+
 /** Merge fields into an entry's options (connector reconnects: new consent expiry, etc.). */
 export function updateInstitutionOptions(dataDir: string, institutionId: string, patch: Record<string, unknown>): boolean {
   const file = path.join(dataDir, "institutions.json");

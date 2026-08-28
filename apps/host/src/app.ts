@@ -55,6 +55,7 @@ import {
   loadInstitutions,
   PLAID_SERVICE,
   removeInstitutionEntry,
+  renameInstitutionEntry,
   setInstitutionEnabled as setEnabledInRegistry,
   updateInstitutionOptions,
   type InstitutionAdapter,
@@ -191,6 +192,8 @@ export interface App {
   addInstitution(input: { name: string; mode: "managed" | "files"; category?: "real_estate" | "crypto" }): InstitutionEntry;
   /** Remove a connection from the registry. Ledger history and inbox files stay -- nothing is erased. */
   removeInstitution(institutionId: string): boolean;
+  /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
+  renameInstitution(institutionId: string, name: string): boolean;
   /** Pause/resume a connection without losing its configuration or history. */
   setInstitutionEnabled(institutionId: string, enabled: boolean): boolean;
   /** Store an uploaded export file into the institution's inbox; call `refreshInstitution` after. */
@@ -734,6 +737,13 @@ export function createApp(opts: AppOptions): App {
       if (input.mode === "managed") initManagedInstitution(dataDir, entry.institution_id, clock());
       loaded = reloadRegistry();
       return entry;
+    },
+    renameInstitution(institutionId, name) {
+      const trimmed = name.trim();
+      if (trimmed === "") throw new Error("give it a name");
+      const ok = renameInstitutionEntry(dataDir, institutionId, trimmed);
+      if (ok) loaded = reloadRegistry();
+      return ok;
     },
     removeInstitution(institutionId) {
       // A deleted connection's tokens are no longer needed: remove them
