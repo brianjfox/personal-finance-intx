@@ -827,79 +827,6 @@ function AccountCard({ user, onRenamed }: { user: { id: string; name: string }; 
   );
 }
 
-/**
- * The guided path to Plaid keys: the app can't create the account (Plaid
- * requires a human to sign up and accept its terms), but it can open the
- * right pages in order, say exactly what to copy, and test the result.
- */
-function PlaidWizard({ onChanged }: { onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [clientId, setClientId] = useState("");
-  const [secret, setSecret] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [verdict, setVerdict] = useState<{ ok: boolean; detail: string } | null>(null);
-  const go = (url: string) => void api.openExternal(url).catch(() => {});
-  const saveAndTest = async () => {
-    setBusy(true);
-    setVerdict(null);
-    try {
-      await api.credentialSet("plaid", { client_id: clientId.trim(), secret: secret.trim() });
-      const r = await api.plaidTest();
-      setVerdict(r);
-      if (r.ok) {
-        setClientId("");
-        setSecret("");
-        onChanged();
-      }
-    } catch (e) {
-      setVerdict({ ok: false, detail: String(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="queue-item">
-      <div className="head">
-        <b>Get Plaid keys, step by step</b>
-        <button className="secondary" onClick={() => setOpen((o) => !o)}>{open ? "Hide the guide" : "Guide me"}</button>
-      </div>
-      <div className="small muted">
-        Plaid has no way for this app to create the account for you — a person has to sign up and accept Plaid's terms.
-        This guide walks you through it in about ten minutes and tests the keys at the end.
-      </div>
-      {open && (
-        <div style={{ marginTop: 10 }}>
-          <p><b>1 ·</b> Create a free Plaid account. Use your own name where it asks for a company.{" "}
-            <button className="secondary" onClick={() => go("https://dashboard.plaid.com/signup")}>Open the signup page</button></p>
-          <p><b>2 ·</b> Verify the email Plaid sends you, then sign in to the dashboard.</p>
-          <p><b>3 ·</b> Plaid's live environment is pay-as-you-go: in the dashboard, request <i>Production</i> access and add
-            billing details when asked. (Connecting your own accounts costs on the order of a dollar or two a month.)</p>
-          <p><b>4 ·</b> Copy your keys — the <b>client_id</b> and the <b>Production secret</b> (not the Sandbox one).{" "}
-            <button className="secondary" onClick={() => go("https://dashboard.plaid.com/developers/keys")}>Open the Keys page</button></p>
-          <div className="actions" style={{ marginTop: 6 }}>
-            <input style={{ width: 240 }} placeholder="client_id" value={clientId} disabled={busy} onChange={(e) => setClientId(e.target.value)} />
-            <input style={{ flex: 1 }} type="password" placeholder="Production secret" value={secret} disabled={busy} onChange={(e) => setSecret(e.target.value)} />
-            <button disabled={busy || clientId.trim() === "" || secret.trim() === ""} onClick={() => void saveAndTest()}>
-              {busy ? "testing…" : "Save & test"}
-            </button>
-          </div>
-          <p style={{ marginTop: 8 }}><b>5 ·</b> For the smoothest flow, add <code style={{ userSelect: "all" }}>http://localhost:7787/plaid/done</code>{" "}
-            to <i>Allowed redirect URIs</i> — then finishing a bank login jumps straight back into the app, no extra clicks.{" "}
-            <button className="secondary" onClick={() => go("https://dashboard.plaid.com/developers/api")}>Open the redirect URIs page</button></p>
-          <p style={{ marginTop: 8 }}><b>6 ·</b> One more thing for the big banks: Chase, Bank of America, and most large US banks
-            only appear after a one-time <i>OAuth registration</i> with Plaid (they review it, sometimes over a few days).{" "}
-            <button className="secondary" onClick={() => go("https://dashboard.plaid.com/settings/company/us-oauth-institutions")}>Open the OAuth registration page</button></p>
-          {verdict !== null && (
-            <div className={verdict.ok ? "queue-item" : "banner"} style={{ marginTop: 8 }}>
-              {verdict.ok ? "✅ " : ""}{verdict.detail}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function CredentialsPage({ tick, onChanged, user, onRenamed }: { tick: number; onChanged: () => void; user: { id: string; name: string } | null; onRenamed: (name: string) => void }) {
   const [data, setData] = useState<CredentialsData | null>(null);
   useEffect(() => {
@@ -915,10 +842,7 @@ function CredentialsPage({ tick, onChanged, user, onRenamed }: { tick: number; o
       </p>
       {user !== null && <AccountCard user={user} onRenamed={onRenamed} />}
       {data.slots.map((s) => (
-        <div key={s.id}>
-          <CredentialCard slot={s} onChanged={onChanged} />
-          {s.id === "plaid" && <PlaidWizard onChanged={onChanged} />}
-        </div>
+        <CredentialCard key={s.id} slot={s} onChanged={onChanged} />
       ))}
       <InferenceCard tick={tick} />
       {data.tokens.length > 0 && (
@@ -1101,6 +1025,24 @@ function InferenceCard({ tick }: { tick: number }) {
   );
 }
 
+/** Credential notes name websites (dashboard.plaid.com, enablebanking.com...); make them clickable. */
+function NoteText({ text }: { text: string }) {
+  const parts = text.split(/((?:[a-z0-9-]+\.)+(?:com|io|org)(?:\/[\w./-]*)?)/gi);
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^(?:[a-z0-9-]+\.)+(?:com|io|org)/i.test(part) ? (
+          <a key={i} style={{ cursor: "pointer", textDecoration: "underline" }} onClick={() => void api.openExternal(`https://${part}`).catch(() => {})}>
+            {part}
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][number]; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -1128,7 +1070,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
         <b>{slot.label}</b>
         <span className={`pill ${slot.configured ? "low" : "medium"}`}>{slot.configured ? "set up" : "not set up"}</span>
       </div>
-      <div className="small muted">{slot.note}</div>
+      <div className="small muted"><NoteText text={slot.note} /></div>
       {editing ? (
         <>
           {slot.fields.map((f) => (
