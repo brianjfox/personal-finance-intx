@@ -91,6 +91,7 @@ import type { Agent, AgentDefinition, BaseEnv } from "@intx/agent";
 import type { InferenceSource } from "@intx/types/runtime";
 import type { RunResult, WorkflowDefinition, WorkflowEvent } from "@intx/workflow";
 
+import { ensurePlaidFinishListener, onPlaidReturn, PLAID_FINISH_URI } from "./plaid-finish";
 import { createConnectors, type ConnectorConfig } from "./connect";
 import { INFERENCE_SERVICE, PROVIDER_PRESETS, providerForTask, readInferenceSettings, resolveTaskSource, sourceForProvider, testInference, writeInferenceSettings, type InferenceSettings, type InferenceTask } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
@@ -209,7 +210,9 @@ export interface App {
   /** One click of made-up data: seed the fictional household and run the first reconciliation. */
   seedDemoData(): Promise<{ institutions: number; runId: string; status: string }>;
   /** Plaid, step 1: a Hosted Link session for the operator to open in the browser. */
-  connectPlaidStart(): Promise<{ link_token: string; hosted_link_url: string | null }>;
+  connectPlaidStart(opts?: { name?: string; institutionId?: string }): Promise<{ link_token: string; hosted_link_url: string | null; auto_finish: boolean }>;
+  /** The auto-finish state of the most recent Plaid connect attempt (GUI polls while the browser is open). */
+  plaidPending(): { state: "none" | "waiting" | "done" | "failed"; detail: string | null };
   /** The Plaid wizard's Save & test: mint a Link token, answer in plain words. */
   testPlaid(): Promise<{ ok: boolean; detail: string }>;
   /**
@@ -662,6 +665,26 @@ export function createApp(opts: AppOptions): App {
     return { runId, status: r.terminalStatus };
   }
 
+  let pendingPlaid: { linkToken: string; state: "waiting" | "done" | "failed"; detail: string | null; unsubscribe: () => void } | null = null;
+  async function finishPlaidConnect(o: { name?: string; institutionId?: string; linkToken?: string; publicToken?: string }): Promise<{ institution_id: string; runId: string; status: string }> {
+    const ex = await connectors.plaidExchange({
+      ...(o.linkToken !== undefined ? { linkToken: o.linkToken } : {}),
+      ...(o.publicToken !== undefined ? { publicToken: o.publicToken } : {}),
+    });
+    let institutionId = o.institutionId ?? null;
+    if (institutionId === null) {
+      const entry = addInstitutionEntry(dataDir, { name: o.name ?? "Bank (Plaid)", adapter: "plaid", options: plaidEntryOptions() });
+      institutionId = entry.institution_id;
+    } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "plaid")) {
+      throw new Error(`${institutionId} is not a Plaid connection`);
+    }
+    storeSecret(PLAID_SERVICE, `access_token:${institutionId}`, ex.accessToken);
+    if (ex.itemId !== null) updateInstitutionOptions(dataDir, institutionId, { item_id: ex.itemId });
+    loaded = reloadRegistry();
+    const run = await refreshInstitution(institutionId);
+    return { institution_id: institutionId, ...run };
+  }
+
   return {
     dataDir,
     ledger,
@@ -938,26 +961,42 @@ export function createApp(opts: AppOptions): App {
       const r = await runNightlyOnce({ runId });
       return { institutions: loaded.entries.length, runId, status: r.terminalStatus };
     },
-    connectPlaidStart: () => connectors.plaidLinkStart(),
-    testPlaid: () => connectors.plaidTest(),
-    async connectPlaidComplete(o) {
-      const ex = await connectors.plaidExchange({
-        ...(o.linkToken !== undefined ? { linkToken: o.linkToken } : {}),
-        ...(o.publicToken !== undefined ? { publicToken: o.publicToken } : {}),
-      });
-      let institutionId = o.institutionId ?? null;
-      if (institutionId === null) {
-        const entry = addInstitutionEntry(dataDir, { name: o.name ?? "Bank (Plaid)", adapter: "plaid", options: plaidEntryOptions() });
-        institutionId = entry.institution_id;
-      } else if (!loaded.entries.some((e) => e.institution_id === institutionId && e.adapter === "plaid")) {
-        throw new Error(`${institutionId} is not a Plaid connection`);
+    async connectPlaidStart(o) {
+      // The Stripe-checkout ending: a fixed loopback listener is the
+      // registered completion redirect, so finishing at the bank lands
+      // the browser back here and the exchange runs by itself.
+      const listening = ensurePlaidFinishListener();
+      const r = await connectors.plaidLinkStart(listening ? { completionRedirectUri: PLAID_FINISH_URI } : undefined);
+      pendingPlaid?.unsubscribe();
+      pendingPlaid = null;
+      const target = o?.institutionId !== undefined ? { institutionId: o.institutionId } : o?.name !== undefined && o.name !== "" ? { name: o.name } : null;
+      if (r.auto_finish && target !== null) {
+        const linkToken = r.link_token;
+        const unsubscribe = onPlaidReturn(() => {
+          const mine = pendingPlaid;
+          if (mine === null || mine.linkToken !== linkToken || mine.state !== "waiting") return;
+          void (async () => {
+            try {
+              await finishPlaidConnect({ linkToken, ...target });
+              mine.state = "done";
+            } catch (e) {
+              mine.state = "failed";
+              mine.detail = e instanceof Error ? e.message : String(e);
+            } finally {
+              mine.unsubscribe();
+            }
+          })();
+        });
+        pendingPlaid = { linkToken, state: "waiting", detail: null, unsubscribe };
       }
-      storeSecret(PLAID_SERVICE, `access_token:${institutionId}`, ex.accessToken);
-      if (ex.itemId !== null) updateInstitutionOptions(dataDir, institutionId, { item_id: ex.itemId });
-      loaded = reloadRegistry();
-      const run = await refreshInstitution(institutionId);
-      return { institution_id: institutionId, ...run };
+      return { link_token: r.link_token, hosted_link_url: r.hosted_link_url, auto_finish: r.auto_finish && target !== null };
     },
+    plaidPending() {
+      if (pendingPlaid === null) return { state: "none" as const, detail: null };
+      return { state: pendingPlaid.state, detail: pendingPlaid.detail };
+    },
+    testPlaid: () => connectors.plaidTest(),
+    connectPlaidComplete: (o) => finishPlaidConnect(o),
     ebListBanks: (country) => connectors.ebListBanks(country),
     connectEbStart(o) {
       return connectors.ebAuthStart({

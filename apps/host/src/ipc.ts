@@ -63,6 +63,7 @@ const ManagedAccountBody = type({
   value: "string > 0",
 });
 const RemoveAccountBody = type({ account_id: "string > 0" });
+const PlaidStartBody = type({ "name?": "string", "institution_id?": "string" });
 const PlaidCompleteBody = type({ "name?": "string > 0", "institution_id?": "string > 0", "link_token?": "string > 0", "public_token?": "string > 0" });
 const EbStartBody = type({ "name?": "string > 0", "institution_id?": "string > 0", country: /^[A-Z]{2}$/, bank: "string > 0", "redirect_url?": "string > 0" });
 const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
@@ -249,7 +250,12 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const proc = Bun.spawn([cmd, body.url], { stdout: "ignore", stderr: "ignore" });
           return json({ opened: (await proc.exited) === 0 });
         }
-        if (p === "/api/connect/plaid/start" && req.method === "POST") return json(await app.connectPlaidStart());
+        if (p === "/api/connect/plaid/start" && req.method === "POST") {
+          const body = PlaidStartBody(await req.json().catch(() => ({})));
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(await app.connectPlaidStart({ ...(body.name !== undefined ? { name: body.name } : {}), ...(body.institution_id !== undefined ? { institutionId: body.institution_id } : {}) }));
+        }
+        if (p === "/api/connect/plaid/pending" && req.method === "GET") return json(app.plaidPending());
         if (p === "/api/connect/plaid/complete" && req.method === "POST") {
           const body = PlaidCompleteBody(await req.json().catch(() => ({})));
           if (body instanceof type.errors) return json({ error: body.summary }, 400);

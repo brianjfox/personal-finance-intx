@@ -359,3 +359,64 @@ describe("plaid wizard test call", () => {
     }
   });
 });
+
+describe("plaid auto-finish", () => {
+  test("the loopback return completes the exchange without a manual finish; unregistered redirect falls back", async () => {
+    const { stopPlaidFinishListener, PLAID_FINISH_URI } = await import("../src/plaid-finish");
+    let rejectRedirect = false;
+    const fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const path = new URL(req.url).pathname;
+        const body = (await req.json()) as Record<string, unknown>;
+        switch (path) {
+          case "/link/token/create": {
+            const hosted = body["hosted_link"] as Record<string, unknown>;
+            if (rejectRedirect && hosted["completion_redirect_uri"] !== undefined) {
+              return Response.json({ error_code: "INVALID_FIELD", error_message: "completion_redirect_uri is not a registered redirect uri" }, { status: 400 });
+            }
+            return Response.json({ link_token: "link-af-1", hosted_link_url: "https://hosted.example/af" });
+          }
+          case "/link/token/get":
+            return Response.json({ link_sessions: [{ results: { item_add_results: [{ public_token: "public-af" }] } }] });
+          case "/item/public_token/exchange":
+            return Response.json({ access_token: "access-af", item_id: "item-af" });
+          case "/accounts/get":
+            return Response.json({ accounts: [{ account_id: "a1", name: "Checking", type: "depository", subtype: "checking", balances: { current: 10, iso_currency_code: "USD" }, mask: "1111" }], item: { institution_id: "ins_1" } });
+          case "/transactions/get":
+            return Response.json({ transactions: [], total_transactions: 0 });
+          default:
+            return Response.json({ error_code: "NOT_FOUND" }, { status: 404 });
+        }
+      },
+    });
+    const secrets = memorySecretStore({ [`${PLAID_SERVICE}/client_id`]: "cid", [`${PLAID_SERVICE}/secret`]: "sec" });
+    const app = createApp({ dataDir: tmp(), connectors: { plaidBaseUrl: `http://127.0.0.1:${fake.port}`, secrets } });
+    try {
+      const start = await app.connectPlaidStart({ name: "Auto Bank" });
+      expect(start.auto_finish).toBe(true);
+      expect(app.plaidPending().state).toBe("waiting");
+
+      // The browser landing on /plaid/done is the whole trigger.
+      const done = await fetch(PLAID_FINISH_URI);
+      expect(done.status).toBe(200);
+      expect(await done.text()).toContain("You're connected");
+      for (let i = 0; i < 100 && app.plaidPending().state === "waiting"; i++) await Bun.sleep(50);
+      expect(app.plaidPending().state).toBe("done");
+      const inst = app.institutionsOverview().institutions.find((x) => x.name === "Auto Bank");
+      expect(inst).toBeDefined();
+      expect(secrets.get(PLAID_SERVICE, `access_token:${inst!.institution_id}`)).toBe("access-af");
+
+      // Dashboard without the registered redirect: graceful fallback to manual.
+      rejectRedirect = true;
+      const fallback = await app.connectPlaidStart({ name: "Manual Bank" });
+      expect(fallback.auto_finish).toBe(false);
+      expect(app.plaidPending().state).toBe("none");
+    } finally {
+      stopPlaidFinishListener();
+      fake.stop(true);
+      app.close();
+    }
+  }, 60_000);
+});
