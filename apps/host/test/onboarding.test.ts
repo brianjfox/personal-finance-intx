@@ -235,3 +235,34 @@ describe("holdings categories", () => {
     }
   });
 });
+
+describe("editing a property", () => {
+  test("address rename covers the card and the account; value updates are dated observations", async () => {
+    const dataDir = tmp();
+    const app = createApp({ dataDir });
+    try {
+      const entry = app.addInstitution({ name: "12 Main St, Springfield", mode: "managed", category: "real_estate" });
+      const saved = await app.saveManagedAccount(entry.institution_id, { name: "12 Main St, Springfield", type: "real_estate", value: "$480,000" });
+
+      expect(app.renameInstitution(entry.institution_id, "12 Main Street, Springfield, IL")).toBe(true);
+      await app.saveManagedAccount(entry.institution_id, {
+        account_id: saved.account.account_id,
+        name: "12 Main Street, Springfield, IL",
+        type: "real_estate",
+        value: "$495,000",
+      });
+
+      const inst = app.institutionsOverview().institutions.find((i) => i.institution_id === entry.institution_id)!;
+      expect(inst.name).toBe("12 Main Street, Springfield, IL");
+      expect(inst.accounts[0]?.name).toBe("12 Main Street, Springfield, IL");
+      expect(inst.accounts[0]?.value).toBe("495000");
+      const line = views.netWorth(app.ledger).lines.find((l) => l.account_id === saved.account.account_id);
+      expect(line?.name).toBe("12 Main Street, Springfield, IL");
+      expect(line?.value).toBe("495000");
+
+      expect(app.renameInstitution("inst.nope", "x")).toBe(false);
+    } finally {
+      app.close();
+    }
+  });
+});

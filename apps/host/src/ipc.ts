@@ -53,6 +53,7 @@ const DecideBody = type({
   "note?": "string",
 });
 const AddInstitutionBody = type({ name: "string > 0", mode: "'managed' | 'files'", "category?": "'real_estate' | 'crypto'" });
+const RenameBody = type({ name: "string > 0" });
 const EnabledBody = type({ enabled: "boolean" });
 const ManagedAccountBody = type({
   "account_id?": "string",
@@ -211,6 +212,15 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const body = AddInstitutionBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(app.addInstitution(body), 201);
+        }
+        {
+          const m = /^\/api\/institution\/([^/]+)\/rename$/.exec(p);
+          if (m !== null && req.method === "POST") {
+            const body = RenameBody(await req.json());
+            if (body instanceof type.errors) return json({ error: body.summary }, 400);
+            if (!app.renameInstitution(m[1] as string, body.name)) return json({ error: "unknown institution" }, 404);
+            return json({ ok: true });
+          }
         }
         if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
         // The GUI runs inside the Tauri webview, where window.open() to an

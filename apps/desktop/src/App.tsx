@@ -1925,13 +1925,25 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
             </table>
           )}
           {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
-          {inst.managed && (
+          {inst.managed && inst.category === "real_estate" && open.length === 1 ? (
+            <PropertyEditor
+              inst={inst}
+              disabled={busy !== null}
+              onSave={(input) =>
+                void act("update", async () => {
+                  // The address is both the card's name and the account's.
+                  await api.renameInstitution(inst.institution_id, input.address);
+                  await api.saveManagedAccount(inst.institution_id, { account_id: input.account_id, name: input.address, type: "real_estate", value: input.value });
+                })
+              }
+            />
+          ) : inst.managed ? (
             <ManagedAccountEditor
               inst={inst}
               disabled={busy !== null}
               onSave={(input) => void act("update", () => api.saveManagedAccount(inst.institution_id, input))}
             />
-          )}
+          ) : null}
           {!inst.managed && !CONNECTOR_ADAPTERS.has(inst.adapter) && (
             <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />
           )}
@@ -2012,6 +2024,47 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
       {reconnecting && inst.adapter === "kraken" && (
         <KrakenConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}
+    </div>
+  );
+}
+
+/** A property is one address and one value; edit both in place. The rename covers the card and the account. */
+function PropertyEditor({ inst, disabled, onSave }: { inst: InstitutionOverview; disabled: boolean; onSave: (input: { address: string; value: string; account_id: string }) => void }) {
+  const account = inst.accounts.filter((a) => !a.closed)[0];
+  const [address, setAddress] = useState(inst.name);
+  const [value, setValue] = useState(account?.value ?? "");
+  const [error, setError] = useState<string | null>(null);
+  if (account === undefined) return null;
+  const save = () => {
+    if (address.trim() === "") {
+      setError("Enter the property's address or name.");
+      return;
+    }
+    if (value.trim() === "") {
+      setError("Enter the value — 1234.56, $1,234.56, and €1.234,56 all work; the currency is kept with it.");
+      return;
+    }
+    setError(null);
+    onSave({ address: address.trim(), value: value.trim(), account_id: account.account_id });
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="small muted" style={{ marginBottom: 4 }}>Edit the address or the value; each save is a dated observation, not an overwrite.</div>
+      <div className="actions">
+        <input style={{ flex: 1 }} placeholder="Address — e.g. 12 Main St, Springfield" value={address} disabled={disabled} onChange={(e) => setAddress(e.target.value)} />
+        <input
+          style={{ width: 150 }}
+          placeholder="Current value"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+          }}
+        />
+        <button disabled={disabled} onClick={save}>Save property</button>
+      </div>
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
     </div>
   );
 }
