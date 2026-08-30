@@ -604,6 +604,8 @@ input[type="color"] { width: 40px; height: 30px; padding: 2px; border: 1px solid
   .page-head { flex-direction: column; align-items: stretch; }
   .kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
   .kpi .k-value, .card .value { font-size: 20px; }
+  /* Past 8 digits on a sub-iPad screen, the lozenge figure drops 10%. */
+  .kpi .k-value.tight { font-size: 18px; }
   .flow-grid { grid-template-columns: 1fr; }
   .slider-row .sl-name { width: 52px; }
 
