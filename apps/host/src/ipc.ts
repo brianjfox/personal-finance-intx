@@ -236,6 +236,10 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json(app.addInstitution(body), 201);
         }
         {
+          const m = /^\/api\/institution\/([^/]+)\/fetch-log$/.exec(p);
+          if (m !== null && req.method === "GET") return json(app.getFetchLogs(m[1] as string));
+        }
+        {
           const m = /^\/api\/institution\/([^/]+)\/rename$/.exec(p);
           if (m !== null && req.method === "POST") {
             const body = RenameBody(await req.json());

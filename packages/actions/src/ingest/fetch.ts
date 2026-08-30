@@ -8,6 +8,7 @@
 // finding for it.
 
 import type { FetchFailure, FetchResult, InstitutionSnapshot } from "@fin/contracts";
+import type { HttpLogEntry } from "@fin/institutions";
 import { views, type Ledger } from "@fin/ledger";
 
 import { CAP, type ActionContext, type ActionHandler } from "../context";
@@ -65,8 +66,22 @@ export function fetchHandler(actx: ActionContext): ActionHandler {
         effectId: `fetch:${adapter.institution_id}`,
         capability: CAP.institutionRead,
         run: async () => {
+          // Raw HTTP exchanges land in the host's fetch log (redacted
+          // there) so the operator can inspect exactly what a connector
+          // asked and was told. Only real runs record; a resume replays
+          // the effect's stored output without re-fetching.
+          const httpEntries: HttpLogEntry[] = [];
+          const report = (ok: boolean, error?: string) =>
+            actx.fetchLog?.({
+              institution_id: adapter.institution_id,
+              at: now.toISOString(),
+              via: adapter.via,
+              ok,
+              ...(error !== undefined ? { error } : {}),
+              entries: httpEntries,
+            });
           try {
-            const out = await adapter.fetch({ now, ...(lookback !== null ? { lookback_days: lookback } : {}) });
+            const out = await adapter.fetch({ now, http: (e) => httpEntries.push(e), ...(lookback !== null ? { lookback_days: lookback } : {}) });
             const docIds: string[] = [];
             for (const raw of out.raw) {
               const stored = actx.vault.ingest({
@@ -90,6 +105,7 @@ export function fetchHandler(actx: ActionContext): ActionHandler {
               detail: `${adapter.via}; ${out.snapshot.accounts.length} accounts; docs ${docIds.join(",")}`,
             });
             const snapshot: InstitutionSnapshot = { ...out.snapshot, raw_document_ids: docIds };
+            report(true);
             return { ok: true as const, snapshot };
           } catch (e) {
             const failure: FetchFailure = {
@@ -98,6 +114,7 @@ export function fetchHandler(actx: ActionContext): ActionHandler {
               via: adapter.via,
               error: e instanceof Error ? e.message : String(e),
             };
+            report(false, failure.error);
             return { ok: false as const, failure };
           }
         },

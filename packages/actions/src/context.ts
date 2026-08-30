@@ -3,10 +3,20 @@
 // the registry is built once per host from this context.
 
 import type { EstateFile, HouseholdProfile, InvestmentPlan, Principal, TaxProfile } from "@fin/contracts";
-import type { InstitutionAdapter } from "@fin/institutions";
+import type { HttpLogEntry, InstitutionAdapter } from "@fin/institutions";
 import type { Ledger } from "@fin/ledger";
 import type { Vault } from "@fin/vault";
 import type { EffectContext } from "@intx/workflow";
+
+/** One institution fetch, with the HTTP exchanges observed during it. */
+export interface FetchLogRecord {
+  institution_id: string;
+  at: string;
+  via: string;
+  ok: boolean;
+  error?: string;
+  entries: HttpLogEntry[];
+}
 
 export interface ActionContext {
   ledger: Ledger;
@@ -23,6 +33,8 @@ export interface ActionContext {
   plan?: () => InvestmentPlan | null;
   /** The household profile (who the operator is; spouse/children/others). Null/absent -> agents say it's not set up. */
   profile?: () => HouseholdProfile | null;
+  /** Receives each institution fetch's HTTP exchanges (the Assets page's fetch-log view). */
+  fetchLog?: (rec: FetchLogRecord) => void;
 }
 
 export interface Thresholds {

@@ -522,6 +522,16 @@ textarea.chat-input { flex: 1; min-height: 96px; max-height: 200px; resize: vert
 input[type="range"] { accent-color: var(--green); background: transparent; border: 0; }
 input[type="color"] { width: 40px; height: 30px; padding: 2px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--n900); cursor: pointer; }
 
+/* ---------- Fetch-log drawer ---------- */
+.httpcall { border-top: 1px solid var(--row-line); margin-top: 10px; padding-top: 10px; }
+.httpcall .linklike { display: flex; align-items: center; gap: 10px; }
+.httpdetail { margin-top: 8px; }
+.httpdetail .field-label { margin: 10px 0 4px; }
+.httpdetail pre {
+  background: var(--n950); border: 1px solid var(--hairline); border-radius: 8px; padding: 10px;
+  font-size: 11px; line-height: 1.5; max-height: 280px; overflow: auto; overflow-wrap: anywhere; margin: 0;
+}
+
 /* ---------- Bits shared with older pages ---------- */
 .thinking { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-style: italic; }
 .spinner { width: 14px; height: 14px; flex: none; border: 2px solid var(--hairline); border-top-color: var(--green); border-radius: 50%; display: inline-block; animation: fin-spin 0.8s linear infinite; }

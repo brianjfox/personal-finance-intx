@@ -2470,9 +2470,88 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
 
 const CONNECTOR_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "kraken", "wallet"]);
 
+/** JSON bodies pretty-print; anything else shows as-is. */
+function prettyBody(s: string): string {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s;
+  }
+}
+
+const fmtHeaders = (h: Record<string, string>): string =>
+  Object.keys(h).length === 0 ? "(none)" : Object.entries(h).map(([k, v]) => `${k}: ${v}`).join("\n");
+
+/**
+ * The raw wire record of recent fetches for one institution: every
+ * request/response with headers, credentials masked host-side. Held in
+ * memory only — nothing here is written to disk.
+ */
+function FetchLogDrawer({ inst, onClose }: { inst: InstitutionOverview; onClose: () => void }) {
+  const [logs, setLogs] = useState<import("./api").FetchLogRecord[] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    api.institutionFetchLog(inst.institution_id).then(setLogs).catch(() => setLogs([]));
+  }, [inst.institution_id]);
+  return (
+    <div className="drawer">
+      <button className="close secondary" onClick={onClose}>close</button>
+      <h2 style={{ fontSize: 18 }}>Fetch Logs</h2>
+      <p className="small muted">
+        {inst.name} — the raw request/response of each recent fetch, credentials masked. Held in memory only;
+        restarting the app clears it.
+      </p>
+      {logs === null && <p className="muted">loading…</p>}
+      {logs !== null && logs.length === 0 && (
+        <p className="muted">No fetches recorded since the app started. Hit Update now, then reopen this panel.</p>
+      )}
+      {(logs ?? []).map((run, ri) => (
+        <div key={ri} className="panel" style={{ padding: 14, marginBottom: 14 }}>
+          <div className="small" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span className={`pill ${run.ok ? "low" : "critical"}`}>{run.ok ? "ok" : "failed"}</span>
+            <b style={{ color: "var(--strong)" }}>{when(run.at)}</b>
+            <span className="muted">{run.via} · {run.entries.length} call{run.entries.length === 1 ? "" : "s"}</span>
+          </div>
+          {run.error !== undefined && <div className="banner" style={{ margin: "10px 0 0" }}>{run.error}</div>}
+          {run.entries.map((e, ei) => {
+            const k = `${ri}:${ei}`;
+            const cls = e.status >= 200 && e.status < 300 ? "low" : e.status === 0 ? "critical" : "medium";
+            return (
+              <div key={k} className="httpcall">
+                <button className="linklike" style={{ width: "100%" }} onClick={() => setOpen(open === k ? null : k)}>
+                  <span className={`pill ${cls}`}>{e.status === 0 ? "ERR" : e.status}</span>
+                  <code className="small" style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", textAlign: "left" }}>{e.method} {e.url}</code>
+                  <span className="small muted" style={{ whiteSpace: "nowrap" }}>{e.ms}ms {open === k ? "▾" : "▸"}</span>
+                </button>
+                {open === k && (
+                  <div className="httpdetail">
+                    <div className="field-label">Request headers</div>
+                    <pre>{fmtHeaders(e.request_headers)}</pre>
+                    {e.request_body !== null && (
+                      <>
+                        <div className="field-label">Request body</div>
+                        <pre>{prettyBody(e.request_body)}</pre>
+                      </>
+                    )}
+                    <div className="field-label">Response headers</div>
+                    <pre>{fmtHeaders(e.response_headers)}</pre>
+                    <div className="field-label">Response body</div>
+                    <pre>{prettyBody(e.response_body)}</pre>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Connector institutions: automatic read-only updates, consent status, and the reconnect flow. */
 function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: InstitutionOverview; disabled: boolean; onUpdate: () => void; onChanged: () => void }) {
   const [reconnecting, setReconnecting] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const days =
     inst.consent_until === null ? null : Math.floor((new Date(inst.consent_until).getTime() - Date.now()) / 86_400_000);
   const reconnectable = inst.adapter !== "wallet";
@@ -2497,7 +2576,9 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
             {reconnecting ? "Hide reconnect" : inst.adapter === "coinbase" || inst.adapter === "kraken" ? "Replace the API key" : "Reconnect"}
           </button>
         )}
+        <button className="secondary" onClick={() => setShowLog(true)}>View Fetch Logs</button>
       </div>
+      {showLog && <FetchLogDrawer inst={inst} onClose={() => setShowLog(false)} />}
       {reconnecting && inst.adapter === "plaid" && (
         <PlaidConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}

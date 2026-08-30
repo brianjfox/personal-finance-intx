@@ -207,6 +207,13 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
+export interface HttpLogEntry {
+  at: string; method: string; url: string;
+  request_headers: Record<string, string>; request_body: string | null;
+  status: number; response_headers: Record<string, string>; response_body: string; ms: number;
+}
+export interface FetchLogRecord { institution_id: string; at: string; via: string; ok: boolean; error?: string; entries: HttpLogEntry[] }
+
 export interface CashFlowMonth { month: string; inflow: string; outflow: string; net: string; txns: number }
 export interface CashFlowView {
   currency: string; months: CashFlowMonth[]; fx_missing: string[]; excluded_internal: number; provisional: boolean;
@@ -215,6 +222,7 @@ export interface CashFlowView {
 export const api = {
   netWorth: () => get<NetWorth>("/api/net-worth"),
   cashFlow: (months = 12) => get<CashFlowView>(`/api/cashflow?months=${months}`),
+  institutionFetchLog: (id: string) => get<FetchLogRecord[]>(`/api/institution/${encodeURIComponent(id)}/fetch-log`),
   positions: () => get<Position[]>("/api/positions"),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),

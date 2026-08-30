@@ -87,6 +87,16 @@ describe("plaid connect flow (mock API)", () => {
       expect(ob.institutions[0]).toMatchObject({ institution_id: "inst.chase", adapter: "plaid", enabled: true, managed: false });
       // The raw API responses are in the vault as evidence.
       expect(app.ledger.listDocuments().some((d) => d.filename.startsWith("plaid-"))).toBe(true);
+      // The fetch log kept the wire record (request/response + headers),
+      // with credentials masked before storage.
+      const flog = app.getFetchLogs("inst.chase");
+      expect(flog.length).toBeGreaterThan(0);
+      expect(flog[0]!.ok).toBe(true);
+      expect(flog[0]!.entries.some((e) => e.url.endsWith("/accounts/balance/get") && e.status === 200)).toBe(true);
+      expect(JSON.stringify(flog)).not.toContain("access-1");
+      const bal = flog[0]!.entries.find((e) => e.url.endsWith("/accounts/balance/get"))!;
+      expect(bal.request_body).toContain('"access_token":"••••"');
+      expect(bal.request_body).toContain('"client_id":"cid"');
     } finally {
       app.close();
     }

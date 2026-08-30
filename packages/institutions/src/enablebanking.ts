@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 
 import type { AccountType, TransactionType } from "@fin/contracts";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const ENABLEBANKING_VIA = "adapter.enablebanking@1";
@@ -118,7 +118,8 @@ function stableTxnId(t: EbTransaction): string {
 export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAdapter {
   const secrets = opts.secrets ?? defaultSecretStore();
   const base = opts.base_url ?? ENABLEBANKING_BASE_URL;
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
 
   const get = async <T>(path: string, now: Date): Promise<T> => {
@@ -139,6 +140,7 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
     institution_id: opts.institution_id,
     via: ENABLEBANKING_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const sessionId = secrets.get(ENABLEBANKING_SERVICE, `session:${opts.institution_id}`);
       if (sessionId === null) {
         throw new Error(`enablebanking ${opts.institution_id}: not connected -- run the bank consent flow from the Institutions page`);

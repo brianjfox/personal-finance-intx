@@ -9,7 +9,7 @@
 
 import type { AccountType, AssetClass, TransactionType } from "@fin/contracts";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const PLAID_VIA = "adapter.plaid@1";
@@ -147,7 +147,8 @@ const TOLERATED = new Set(["PRODUCT_NOT_READY", "PRODUCTS_NOT_SUPPORTED", "NO_IN
 export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
   const secrets = opts.secrets ?? defaultSecretStore();
   const base = opts.base_url ?? PLAID_BASE_URLS[opts.environment ?? "production"];
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
 
   const call = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
@@ -182,6 +183,7 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
     institution_id: opts.institution_id,
     via: PLAID_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const accessToken = secrets.get(PLAID_SERVICE, `access_token:${opts.institution_id}`);
       if (accessToken === null) {
         throw new Error(`plaid ${opts.institution_id}: not connected -- run the Plaid connect flow from the Institutions page`);

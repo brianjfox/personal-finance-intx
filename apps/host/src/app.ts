@@ -20,6 +20,7 @@ import {
   resolveProjectionInputs,
   runScenario,
   type ActionContext,
+  type FetchLogRecord,
 } from "@fin/actions";
 import {
   assertType,
@@ -44,6 +45,7 @@ import {
   type TaxStage,
 } from "@fin/contracts";
 import {
+  redactHttpEntry,
   addInstitutionEntry,
   COINBASE_SERVICE,
   KRAKEN_SERVICE,
@@ -247,6 +249,8 @@ export interface App {
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** Display FX: current ECB rates into the preferred currency (cached ~12h; stale-marked offline). */
   getFx(): Promise<FxRates>;
+  /** The last few institution fetches with their (redacted) raw HTTP exchanges. In-memory; restarts clear it. */
+  getFetchLogs(institutionId: string): FetchLogRecord[];
   /** The provider registry + which providers have a stored key (presence only) + the preset catalog. */
   getInferenceSettings(): InferenceSettings & { key_set: Record<string, boolean>; presets: typeof PROVIDER_PRESETS };
   /** Save the registry (and any pasted keys -> Keychain, never echoed). Applies to the next turn -- no restart. */
@@ -480,7 +484,17 @@ export function createApp(opts: AppOptions): App {
     return assertType(HouseholdProfile, JSON.parse(fs.readFileSync(profilePath, "utf8")), "profile.json");
   };
   const preferredCurrency = (): string => profile()?.preferred_currency ?? "USD";
-  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile };
+  // The Assets page's "View Fetch Logs": the last few fetches per
+  // institution with their HTTP exchanges, secrets masked BEFORE storage.
+  // Deliberately in-memory only -- raw wire traffic never touches disk.
+  const fetchLogs = new Map<string, FetchLogRecord[]>();
+  const recordFetchLog = (rec: FetchLogRecord): void => {
+    const redacted: FetchLogRecord = { ...rec, entries: rec.entries.map(redactHttpEntry) };
+    const list = fetchLogs.get(rec.institution_id) ?? [];
+    list.unshift(redacted);
+    fetchLogs.set(rec.institution_id, list.slice(0, 5));
+  };
+  const actx: ActionContext = { ledger, vault, adapters: () => loaded.adapters, clock, taxProfile, estateFile, plan, profile, fetchLog: recordFetchLog };
   const fetchFx = (): ReturnType<typeof fxRates> =>
     fxRates({
       dataDir,
@@ -809,6 +823,9 @@ export function createApp(opts: AppOptions): App {
       return removed;
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
+    getFetchLogs(institutionId) {
+      return fetchLogs.get(institutionId) ?? [];
+    },
     getFx() {
       return fetchFx();
     },
