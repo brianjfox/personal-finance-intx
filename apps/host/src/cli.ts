@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // fin-host command line.
 //
-//   fin-host serve   [--data DIR] [--port N] [--gui DIR]   start the IPC server (+ GUI), resume in-flight runs
+//   fin-host serve   [--data DIR] [--port N] [--gui DIR] [--lan]   start the IPC server (+ GUI), resume in-flight runs; --lan (or FIN_LAN=1) serves the whole local network
 //   fin-host nightly [--data DIR] [--inst id,id]           run the nightly once and print the verdict
 //   fin-host init    [--data DIR] [--demo [1|2]]           create the data dir; --demo seeds two fictional institutions
 //   fin-host queue   [--data DIR]                          print the exception queue
@@ -322,8 +322,41 @@ async function main(argv: string[]): Promise<number> {
       const users = createUserManager({ rootDir: rootDir });
       const resumed = await users.resumeAll();
       const guiDir = flags["gui"] ?? path.resolve(import.meta.dir, "../../desktop/dist");
-      const server = startIpc({ users, port: Number(flags["port"] ?? 7777), guiDir });
-      console.log(JSON.stringify({ listening: server.url.href, dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
+      const port = Number(flags["port"] ?? 7777);
+      // LAN mode is opt-in and guarded: it refuses until every person has
+      // a password, binds all interfaces, and serves only recognized Host
+      // headers. Traffic is still plain HTTP -- home-network trust only.
+      const lan = flags["lan"] === "true" || process.env["FIN_LAN"] === "1";
+      const allowedHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
+      const lanUrls: string[] = [];
+      let hostname = "127.0.0.1";
+      if (lan) {
+        const unprotected = users.list().filter((u) => !u.password_set).map((u) => u.name);
+        if (unprotected.length > 0) {
+          console.error(
+            `serve --lan: every person needs a password before the host faces the network (missing: ${unprotected.join(", ")}). Sign in once on this Mac to set one, then retry.`,
+          );
+          users.closeAll();
+          return 2;
+        }
+        hostname = "0.0.0.0";
+        for (const iface of Object.values(os.networkInterfaces())) {
+          for (const addr of iface ?? []) {
+            if (addr.family === "IPv4" && !addr.internal) {
+              allowedHosts.add(addr.address);
+              lanUrls.push(`http://${addr.address}:${String(port)}/`);
+            }
+          }
+        }
+        const hn = os.hostname().toLowerCase();
+        allowedHosts.add(hn);
+        if (!hn.endsWith(".local")) allowedHosts.add(`${hn}.local`);
+      }
+      const server = startIpc({ users, port, guiDir, hostname, allowedHosts });
+      console.log(JSON.stringify({ listening: server.url.href, lan: lanUrls, dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
+      if (lan) {
+        console.log(`LAN mode: open ${lanUrls.join(" or ")} from a device on this network. Every request requires sign-in; traffic is plain HTTP, so trust the network you're on.`);
+      }
       await new Promise<void>((resolve) => {
         process.on("SIGINT", () => resolve());
         process.on("SIGTERM", () => resolve());

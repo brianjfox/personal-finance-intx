@@ -22,6 +22,8 @@ export interface IpcOptions {
   users?: UserManager;
   port?: number;
   hostname?: string;
+  /** When set, only these Host-header values are served (strip the port; lowercase). Blunts DNS rebinding once the bind widens past loopback. */
+  allowedHosts?: ReadonlySet<string>;
   /** Directory holding the built GUI (index.html + assets). */
   guiDir?: string;
   operator?: string;
@@ -125,6 +127,13 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
     port: opts.port ?? 7777,
     idleTimeout: 120,
     async fetch(req) {
+      // A request must name this host to be served: a hostile page that
+      // DNS-rebinds its own name to this address arrives with the wrong
+      // Host header and gets nothing.
+      if (opts.allowedHosts !== undefined) {
+        const host = (req.headers.get("host") ?? "").toLowerCase().replace(/:\d+$/, "");
+        if (!opts.allowedHosts.has(host)) return json({ error: "unrecognized Host header" }, 403);
+      }
       const url = new URL(req.url);
       const p = url.pathname;
       const q = url.searchParams;
