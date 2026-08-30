@@ -1,4 +1,4 @@
-# Household Financial Interchange
+# Corbits Personal Finance
 
 A bench of specialist agents, one shared ledger, and a human gate on
 everything that moves money — built on the Corbits/Faremeter Interchange
@@ -44,6 +44,56 @@ bun src/cli.ts queue   --data /tmp/fin
 # GUI
 (cd ../desktop && bun run build)
 bun src/cli.ts serve   --data /tmp/fin --port 7777     # open http://127.0.0.1:7777/
+```
+
+## Build the double-clickable app
+
+From a fresh clone to `Corbits Personal Finance.app` on your Mac:
+
+1. **A Mac on macOS 13+.** Apple Silicon builds out of the box; on an
+   Intel Mac prefix step 5 with `TRIPLE=x86_64-apple-darwin`.
+2. **Xcode Command Line Tools** (compiler + `codesign`):
+   ```bash
+   xcode-select --install
+   ```
+3. **[Bun](https://bun.sh)** (runs and compiles the host, bundles the GUI):
+   ```bash
+   curl -fsSL https://bun.sh/install | bash
+   ```
+4. **[Rust via rustup](https://rustup.rs)** (the Tauri shell is Rust —
+   current stable; Tauri 2 needs 1.77+):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+5. **Install and build** from the repo root:
+   ```bash
+   bun install
+   ./scripts/build-app.sh
+   ```
+   The first run compiles the Rust shell and takes a few minutes; the
+   script ends by printing the two artifacts:
+   ```
+   bundle: apps/desktop/src-tauri/target/release/bundle/macos/Corbits Personal Finance.app
+   dmg:    apps/desktop/src-tauri/target/release/bundle/dmg/Corbits Personal Finance_<version>_aarch64.dmg
+   ```
+6. **Double-click it.** Drag the `.app` to `/Applications` (or open the
+   dmg). The default build is ad-hoc signed, which macOS runs happily on
+   the Mac that built it. Your data lives in
+   `~/Library/Application Support/FinInterchange`; keys you paste go to
+   the Keychain.
+
+**Giving it to someone else?** An ad-hoc build trips Gatekeeper on other
+Macs. Sign with a Developer ID certificate (requires the
+[Apple Developer Program](https://developer.apple.com/programs/)) and
+notarize — the exact commands, and the sharp edges already solved, are
+in [`docs/PACKAGING.md`](docs/PACKAGING.md):
+
+```bash
+export SIGN_IDENTITY="Developer ID Application: YOUR NAME (TEAMID)"
+./scripts/build-app.sh
+xcrun notarytool submit <dmg> --apple-id you@example.com --team-id TEAMID --password <app-specific-password> --wait
+xcrun stapler staple <dmg>
+xcrun stapler staple "<...>/Corbits Personal Finance.app"
 ```
 
 Real use: connect institutions from the GUI's **Institutions** page — no
