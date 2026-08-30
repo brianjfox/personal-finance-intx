@@ -2912,8 +2912,9 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
   const projectedGain = base > 0 ? base * Math.pow(1 + rate, targetYear - year0) - base : 0;
   const cash = Number(sumTypes(["checking", "savings", "money_market"]));
   const liabilities = Number(nw.liabilities);
-  // Long figures shrink a step on sub-iPad screens: past 8 digits the
-  // lozenge font drops 10% (CSS gates it to small viewports).
+  // On sub-iPad screens, one overflowing figure shrinks them ALL: if any
+  // lozenge runs past 8 digits, every lozenge drops 10% together, so the
+  // row never mixes sizes (CSS gates it to small viewports).
   const kpi = {
     assets: money(nw.assets, nw.currency),
     liabilities: money(nw.liabilities, nw.currency),
@@ -2921,7 +2922,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
     crypto: money(sumTypes(["crypto"]), nw.currency),
     property: money(sumTypes(["real_estate"]), nw.currency),
   };
-  const kcls = (v: string) => `k-value${(v.match(/\d/g) ?? []).length > 8 ? " tight" : ""}`;
+  const kpisTight = Object.values(kpi).some((v) => (v.match(/\d/g) ?? []).length > 8);
   const alloc: DonutSlice[] = [
     { label: "Investments", value: Number(sumTypes(["brokerage", "ira", "401k", "hsa"])), color: "#10b981" },
     { label: "Real Estate", value: Number(sumTypes(["real_estate"])), color: "#6366f1" },
@@ -2950,26 +2951,26 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
           No exchange rate available for {(nw.fx_missing ?? []).join(", ")} — those accounts show their native amounts and are excluded from the totals.
         </div>
       )}
-      <section className="kpis">
+      <section className={`kpis${kpisTight ? " kpis-tight" : ""}`}>
         <div className={`kpi ${nw.provisional ? "prov" : ""}`}>
           <div className="k-label"><span style={{ color: "#10b981", display: "inline-flex" }}><Icon name="wallet" /></span>Assets</div>
-          <div className={kcls(kpi.assets)}>{kpi.assets}</div>
+          <div className="k-value">{kpi.assets}</div>
         </div>
         <div className="kpi">
           <div className="k-label"><span style={{ color: "#ef4444", display: "inline-flex" }}><Icon name="receipt" /></span>Liabilities</div>
-          <div className={kcls(kpi.liabilities)}>{kpi.liabilities}</div>
+          <div className="k-value">{kpi.liabilities}</div>
         </div>
         <div className="kpi">
           <div className="k-label"><span style={{ color: "#fbbf24", display: "inline-flex" }}><Icon name="coins" /></span>Cash</div>
-          <div className={kcls(kpi.cash)}>{kpi.cash}</div>
+          <div className="k-value">{kpi.cash}</div>
         </div>
         <div className="kpi">
           <div className="k-label"><span style={{ color: "#fb923c", display: "inline-flex" }}><Icon name="currency-btc" /></span>Crypto</div>
-          <div className={kcls(kpi.crypto)}>{kpi.crypto}</div>
+          <div className="k-value">{kpi.crypto}</div>
         </div>
         <div className="kpi">
           <div className="k-label"><span style={{ color: "#3b82f6", display: "inline-flex" }}><Icon name="buildings" /></span>Property</div>
-          <div className={kcls(kpi.property)}>{kpi.property}</div>
+          <div className="k-value">{kpi.property}</div>
         </div>
       </section>
       {nw.lines.some((l) => l.currency !== nw.currency) && fxState() !== null && (
