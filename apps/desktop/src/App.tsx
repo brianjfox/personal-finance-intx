@@ -319,6 +319,8 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
       ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
       : "ME";
   const [showAbout, setShowAbout] = useState(false);
+  // Phone layout: the sidebar slides in from the left behind a hamburger.
+  const [menuOpen, setMenuOpen] = useState(false);
   // The privacy veil: masks every rendered financial figure with *s.
   const [masked, setMaskedState] = useState(isMasked());
   const toggleMask = () => {
@@ -332,7 +334,8 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <header className="topbar">
         <div className="tb-left">
-          <span className="tb-brand click" role="button" title="About Corbits Personal Finance" onClick={() => setShowAbout(true)}><LogoMark /> Corbits Personal Finance</span>
+          <button className="iconbtn only-mobile" title="Menu" onClick={() => setMenuOpen((o) => !o)}><Icon name="menu" /></button>
+          <span className="tb-brand click" role="button" title="About Corbits Personal Finance" onClick={() => setShowAbout(true)}><LogoMark /> <span className="bt">Corbits Personal Finance</span></span>
           <span className="tb-divider" />
           <span className="tb-networth">
             <span className="lbl">Net Worth</span>
@@ -362,9 +365,10 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
         </div>
       </header>
       <div className="body">
-        <nav className="side">
+        {menuOpen && <div className="side-scrim" onClick={() => setMenuOpen(false)} />}
+        <nav className={`side${menuOpen ? " open" : ""}`}>
           {NAV_ITEMS.map(([id, label, icon]) => (
-            <a key={id} className={page === id ? "active" : ""} title={label} onClick={() => setPage(id)}>
+            <a key={id} className={page === id ? "active" : ""} title={label} onClick={() => { setPage(id); setMenuOpen(false); }}>
               <span className="icon"><Icon name={icon} /></span>
               <span className="label">{label}</span>
               {id === "queue" && queue.length > 0 ? <span className="nav-badge">{queue.length}</span> : null}
@@ -3017,7 +3021,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         </div>
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 24, alignItems: "stretch" }}>
+      <section className="flow-grid">
         <div className="panel" style={{ marginBottom: 24 }}>
           <div className="panel-head">
             <span className="panel-title">Cash Flow — In vs Out</span>

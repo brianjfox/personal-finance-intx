@@ -292,6 +292,9 @@ pre { margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--t2); }
 .welcome-actions { display: flex; flex-direction: column; gap: 12px; align-items: center; margin: 22px 0; }
 .welcome-actions button { font-size: 15px; padding: 12px 20px; min-width: 380px; }
 
+/* The dashboard's cash-flow row: chart beside the summary/allocation stack. */
+.flow-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; align-items: stretch; }
+
 /* ---------- Dashboard: horizon modeler ---------- */
 .slider-row { display: flex; align-items: center; gap: 12px; padding: 0 8px; margin: 12px 0 4px; }
 .slider-row .yr { font-size: 11px; color: var(--t3); font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; width: 40px; }
@@ -567,3 +570,72 @@ input[type="color"] { width: 40px; height: 30px; padding: 2px; border: 1px solid
 .markdown pre code { background: transparent; padding: 0; }
 .markdown blockquote { margin: 8px 0; padding-left: 10px; border-left: 3px solid var(--hairline); opacity: 0.9; }
 .markdown hr { border: none; border-top: 1px solid var(--hairline); margin: 10px 0; }
+
+/* ---------- Phone layout ---------- */
+.only-mobile { display: none !important; }
+.side-scrim { display: none; }
+@media (max-width: 768px) {
+  .only-mobile { display: inline-flex !important; }
+  .app { height: 100dvh; }
+  .topbar { padding: 0 12px; gap: 8px; }
+  .tb-left { gap: 10px; }
+  .tb-brand .bt { display: none; }
+  .tb-brand.click { padding: 4px; margin-left: 0; }
+  .tb-networth { gap: 8px; }
+  .tb-networth .lbl { display: none; }
+  .tb-networth .val { font-size: 18px; }
+  .tb-updated { display: none; }
+  .tb-networth .pill { display: none; } /* the dashboard banner carries the provisional state */
+  .tb-right { gap: 8px; }
+  .tb-right .tb-avatar { display: none; }
+
+  /* The sidebar becomes a slide-in drawer under the top bar. */
+  nav.side, .app.nav-collapsed nav.side { position: fixed; top: 64px; bottom: 0; left: 0; z-index: 150; width: 264px; padding: 20px 12px 12px; transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: 24px 0 48px rgba(0, 0, 0, 0.4); }
+  nav.side.open { transform: translateX(0); }
+  .app.nav-collapsed nav.side a { justify-content: flex-start; padding: 8px 12px; }
+  .app.nav-collapsed nav.side a .label { display: block; }
+  .app.nav-collapsed .nav-badge { position: static; margin-left: auto; padding: 1px 7px; }
+  .app.nav-collapsed .health-card { display: block; }
+  nav.side .collapse-toggle { display: none; }
+  .side-scrim { display: block; position: fixed; inset: 0; top: 64px; background: rgba(0, 0, 0, 0.45); z-index: 140; }
+
+  .page { padding: 16px 14px 48px; }
+  h2 { font-size: 20px; }
+  .page-head { flex-direction: column; align-items: stretch; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .kpi .k-value, .card .value { font-size: 20px; }
+  .flow-grid { grid-template-columns: 1fr; }
+  .slider-row .sl-name { width: 52px; }
+
+  /* Wide content scrolls sideways instead of squeezing. */
+  table { display: block; overflow-x: auto; }
+  th, td { padding: 10px 12px; }
+  .chartbox { overflow-x: auto; }
+  .chartbox > svg { min-width: 620px; }
+
+  .split, .people-grid { grid-template-columns: 1fr; gap: 20px; }
+  .inst-head { flex-wrap: wrap; }
+  .approval-body { padding: 16px; }
+  .approval-grid { gap: 20px; margin-bottom: 20px; }
+  .sec-body { padding: 16px; }
+  .fgrid { gap: 16px; }
+  .figures { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .tl { gap: 20px; }
+  .tl::before { left: 12px; }
+  .tl-item { padding-left: 32px; }
+  .tl-dot { left: 7px; }
+  .tl-card { padding: 16px; }
+
+  .chat-head { padding: 12px 16px; }
+  .chat-scroll { padding: 16px 12px; gap: 20px; }
+  .chat-inputbar { padding: 12px 12px 8px; }
+  .chat-inputbar textarea { padding-right: 76px; }
+  .chat-inputbar .sendrow .kbd { display: none; }
+  .bubble-user { max-width: 92%; }
+
+  .drawer { width: 100vw; max-width: 100vw; padding: 16px 14px; }
+  .modal { margin: 0 16px; padding: 24px 20px 18px; }
+  .welcome { margin-top: 8vh; }
+  .welcome-actions button { min-width: 0; width: 100%; }
+  .set-row > div:last-child { width: 100%; justify-content: flex-end; }
+}
