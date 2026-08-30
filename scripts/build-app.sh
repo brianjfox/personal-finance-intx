@@ -19,7 +19,7 @@ fi
 bunx @tauri-apps/cli@^2 build "$@"
 cd ../..
 
-APP="apps/desktop/src-tauri/target/release/bundle/macos/Financial Interchange.app"
+APP="apps/desktop/src-tauri/target/release/bundle/macos/Corbits Personal Finance.app"
 DMG=$(ls apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
 ENTITLEMENTS="apps/desktop/src-tauri/entitlements.plist"
 if [ "$SIGN_IDENTITY" = "-" ]; then
