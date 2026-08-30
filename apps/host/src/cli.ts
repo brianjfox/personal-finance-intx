@@ -24,6 +24,7 @@
 //
 // Default data dir: ~/Library/Application Support/FinInterchange (macOS) or $FIN_DATA_DIR.
 
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -323,40 +324,95 @@ async function main(argv: string[]): Promise<number> {
       const resumed = await users.resumeAll();
       const guiDir = flags["gui"] ?? path.resolve(import.meta.dir, "../../desktop/dist");
       const port = Number(flags["port"] ?? 7777);
-      // LAN mode is opt-in and guarded: it refuses until every person has
-      // a password, binds all interfaces, and serves only recognized Host
-      // headers. Traffic is still plain HTTP -- home-network trust only.
-      const lan = flags["lan"] === "true" || process.env["FIN_LAN"] === "1";
-      const allowedHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
-      const lanUrls: string[] = [];
-      let hostname = "127.0.0.1";
-      if (lan) {
-        const unprotected = users.list().filter((u) => !u.password_set).map((u) => u.name);
-        if (unprotected.length > 0) {
-          console.error(
-            `serve --lan: every person needs a password before the host faces the network (missing: ${unprotected.join(", ")}). Sign in once on this Mac to set one, then retry.`,
-          );
-          users.closeAll();
-          return 2;
+      // LAN mode is opt-in and guarded (D-037): it refuses until every
+      // person has a password, binds all interfaces, and serves only
+      // recognized Host headers; traffic is plain HTTP. It turns on at
+      // boot (--lan / FIN_LAN=1, or a persisted choice in <root>/lan.json)
+      // or live from the Settings page, which rebinds the listener.
+      const lanFile = path.join(rootDir, "lan.json");
+      const lanPref = (): boolean => {
+        try {
+          return (JSON.parse(fs.readFileSync(lanFile, "utf8")) as { enabled?: boolean }).enabled === true;
+        } catch {
+          return false;
         }
-        hostname = "0.0.0.0";
+      };
+      const unprotectedUsers = (): string[] => users.list().filter((u) => !u.password_set).map((u) => u.name);
+      /** hostname.local:port first (stable across DHCP), then the IPv4 addresses. */
+      const lanAddresses = (): string[] => {
+        // The mDNS name is the machine's first label + .local (os.hostname()
+        // can report e.g. "minifox.localdomain").
+        const first = os.hostname().toLowerCase().split(".")[0] ?? "localhost";
+        const out = [`${first}.local:${String(port)}`];
         for (const iface of Object.values(os.networkInterfaces())) {
           for (const addr of iface ?? []) {
-            if (addr.family === "IPv4" && !addr.internal) {
-              allowedHosts.add(addr.address);
-              lanUrls.push(`http://${addr.address}:${String(port)}/`);
-            }
+            if (addr.family === "IPv4" && !addr.internal) out.push(`${addr.address}:${String(port)}`);
           }
         }
-        const hn = os.hostname().toLowerCase();
-        allowedHosts.add(hn);
-        if (!hn.endsWith(".local")) allowedHosts.add(`${hn}.local`);
+        return out;
+      };
+      const allowedHosts = (): Set<string> => {
+        const set = new Set(["127.0.0.1", "localhost", "[::1]"]);
+        for (const a of lanAddresses()) set.add(a.replace(/:\d+$/, ""));
+        return set;
+      };
+      const forcedOn = flags["lan"] === "true" || process.env["FIN_LAN"] === "1";
+      let lanEnabled = forcedOn || lanPref();
+      if (lanEnabled) {
+        const missing = unprotectedUsers();
+        if (missing.length > 0) {
+          const msg = `every person needs a password before the host faces the network (missing: ${missing.join(", ")})`;
+          if (forcedOn) {
+            console.error(`serve --lan: ${msg}. Sign in once on this Mac to set one, then retry.`);
+            users.closeAll();
+            return 2;
+          }
+          console.error(`lan.json asks for LAN mode but ${msg} -- staying loopback-only.`);
+          lanEnabled = false;
+        }
       }
-      const server = startIpc({ users, port, guiDir, hostname, allowedHosts });
-      console.log(JSON.stringify({ listening: server.url.href, lan: lanUrls, dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
-      if (lan) {
-        console.log(`LAN mode: open ${lanUrls.join(" or ")} from a device on this network. Every request requires sign-in; traffic is plain HTTP, so trust the network you're on.`);
-      }
+      const lanBanner = (): string =>
+        `LAN mode: open ${lanAddresses().map((a) => `http://${a}/`).join(" or ")} from a device on this network. Every request requires sign-in; traffic is plain HTTP, so trust the network you're on.`;
+      const startListener = (): ReturnType<typeof startIpc> =>
+        startIpc({
+          users,
+          port,
+          guiDir,
+          hostname: lanEnabled ? "0.0.0.0" : "127.0.0.1",
+          allowedHosts: allowedHosts(),
+          lan: {
+            get: () => ({ enabled: lanEnabled, addresses: lanAddresses() }),
+            set: (enabled) => {
+              if (enabled && !lanEnabled) {
+                const missing = unprotectedUsers();
+                if (missing.length > 0) {
+                  throw new Error(`Every person needs a password before the host faces the network -- missing: ${missing.join(", ")}. Sign in once on this Mac to set one.`);
+                }
+              }
+              if (enabled === lanEnabled) return;
+              lanEnabled = enabled;
+              fs.writeFileSync(lanFile, JSON.stringify({ enabled }, null, 2));
+              // Rebind after the HTTP response that flipped it has gone out.
+              setTimeout(() => void rebind(), 200);
+            },
+          },
+        });
+      const rebind = async (): Promise<void> => {
+        await server.stop(true);
+        for (let i = 0; ; i += 1) {
+          try {
+            server = startListener();
+            break;
+          } catch (e) {
+            if (i >= 20) throw e;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
+        console.log(lanEnabled ? lanBanner() : "LAN mode off: loopback only.");
+      };
+      let server = startListener();
+      console.log(JSON.stringify({ listening: server.url.href, lan: lanEnabled ? lanAddresses() : [], dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
+      if (lanEnabled) console.log(lanBanner());
       await new Promise<void>((resolve) => {
         process.on("SIGINT", () => resolve());
         process.on("SIGTERM", () => resolve());

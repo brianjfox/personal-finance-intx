@@ -24,10 +24,14 @@ export interface IpcOptions {
   hostname?: string;
   /** When set, only these Host-header values are served (strip the port; lowercase). Blunts DNS rebinding once the bind widens past loopback. */
   allowedHosts?: ReadonlySet<string>;
+  /** LAN exposure control (wired by `serve`): read state + addresses; set persists the choice and rebinds. */
+  lan?: { get: () => { enabled: boolean; addresses: string[] }; set: (enabled: boolean) => void };
   /** Directory holding the built GUI (index.html + assets). */
   guiDir?: string;
   operator?: string;
 }
+
+const LanBody = type({ enabled: "boolean" });
 
 const ResolveBody = type({
   decision: ResolutionDecision,
@@ -209,6 +213,20 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
             return json({ error: "the current password isn't right" }, 403);
           }
           return json({ ok: true });
+        }
+        if (p === "/api/lan" && req.method === "GET") {
+          return json(opts.lan !== undefined ? opts.lan.get() : { enabled: false, addresses: [] });
+        }
+        if (p === "/api/lan" && req.method === "POST") {
+          if (opts.lan === undefined) return json({ error: "LAN control is only available under `serve`" }, 400);
+          const body = LanBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          try {
+            opts.lan.set(body.enabled);
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : String(e) }, 400);
+          }
+          return json(opts.lan.get());
         }
         if (p === "/api/fx") return json(await app.getFx());
         if (p === "/api/net-worth") {

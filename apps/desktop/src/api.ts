@@ -214,6 +214,8 @@ export interface HttpLogEntry {
 }
 export interface FetchLogRecord { institution_id: string; at: string; via: string; ok: boolean; error?: string; entries: HttpLogEntry[] }
 
+export interface LanStatus { enabled: boolean; addresses: string[] }
+
 export interface CashFlowMonth { month: string; inflow: string; outflow: string; net: string; txns: number }
 export interface CashFlowView {
   currency: string; months: CashFlowMonth[]; fx_missing: string[]; excluded_internal: number; provisional: boolean;
@@ -223,6 +225,8 @@ export const api = {
   netWorth: () => get<NetWorth>("/api/net-worth"),
   cashFlow: (months = 12) => get<CashFlowView>(`/api/cashflow?months=${months}`),
   institutionFetchLog: (id: string) => get<FetchLogRecord[]>(`/api/institution/${encodeURIComponent(id)}/fetch-log`),
+  lanStatus: () => get<LanStatus>("/api/lan"),
+  lanSet: (enabled: boolean) => post<LanStatus>("/api/lan", { enabled }),
   positions: () => get<Position[]>("/api/positions"),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),

@@ -4341,6 +4341,22 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
 
 function SettingsPage() {
   const [ui, setUi] = useState<UiSettings>(() => loadUiSettings());
+  // LAN exposure is a HOST setting (it rebinds the listener and persists
+  // in the data root), unlike the appearance choices below.
+  const [lan, setLanState] = useState<import("./api").LanStatus | null>(null);
+  const [lanBusy, setLanBusy] = useState(false);
+  const [lanError, setLanError] = useState<string | null>(null);
+  useEffect(() => {
+    api.lanStatus().then(setLanState).catch(() => setLanState(null));
+  }, []);
+  const toggleLan = (enabled: boolean) => {
+    setLanBusy(true);
+    setLanError(null);
+    api.lanSet(enabled)
+      .then(setLanState)
+      .catch((e) => setLanError(String(e)))
+      .finally(() => setLanBusy(false));
+  };
   const update = (patch: Partial<UiSettings>) => {
     setUi((u) => {
       const next = { ...u, ...patch };
@@ -4447,6 +4463,38 @@ function SettingsPage() {
           </button>
         </div>
       </div>
+      {lan !== null && (
+        <div className="panel">
+          <div className="panel-title" style={{ marginBottom: 8 }}>
+            <span className="icon-tile blue"><Icon name="globe" /></span>
+            Network
+          </div>
+          <div className="set-row">
+            <div>
+              <div className="set-name">Make available on my LAN</div>
+              <div className="set-hint" style={{ fontStyle: "italic" }}>
+                You can connect a browser to {lan.addresses[0] ?? "this machine"}.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              style={{ width: 20, height: 20 }}
+              checked={lan.enabled}
+              disabled={lanBusy}
+              onChange={(e) => toggleLan(e.target.checked)}
+              title={lan.enabled ? "Stop serving the local network" : "Serve the local network"}
+            />
+          </div>
+          <div className="set-row" style={{ borderBottom: 0, paddingBottom: 0 }}>
+            <span className="set-hint">
+              Every request still requires sign-in, and only requests naming this machine are served — but traffic is
+              plain HTTP, so use it on networks you trust. Applies immediately and persists across launches.
+              {lan.enabled && lan.addresses.length > 1 ? ` Also reachable at ${lan.addresses.slice(1).join(", ")}.` : ""}
+            </span>
+          </div>
+          {lanError !== null && <div className="banner" style={{ marginTop: 8 }}>{lanError}</div>}
+        </div>
+      )}
     </>
   );
 }
