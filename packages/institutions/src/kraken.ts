@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 
 import { decimal } from "@fin/contracts";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const KRAKEN_VIA = "adapter.kraken@1";
@@ -64,13 +64,15 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
   const secrets = opts.secrets ?? defaultSecretStore();
   const base = opts.base_url ?? KRAKEN_BASE_URL;
   const priceApi = opts.price_api ?? "https://api.coinbase.com";
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
 
   return {
     institution_id: opts.institution_id,
     via: KRAKEN_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const apiKey = secrets.get(KRAKEN_SERVICE, `api_key:${opts.institution_id}`);
       const secret = secrets.get(KRAKEN_SERVICE, `private_key:${opts.institution_id}`);
       if (apiKey === null || secret === null) {

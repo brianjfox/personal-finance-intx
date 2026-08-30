@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "fin-host: the embedded filesystem Interchange host for the Household Financial Interchange",
+  "description": "fin-host: the embedded filesystem Interchange host for Corbits Personal Finance",
   "bin": {
     "fin-host": "./src/cli.ts"
   },

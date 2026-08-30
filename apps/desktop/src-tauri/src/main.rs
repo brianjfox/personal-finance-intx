@@ -130,7 +130,7 @@ fn main() {
                 &[
                     &Submenu::with_items(
                         app,
-                        "Financial Interchange",
+                        "Corbits Personal Finance",
                         true,
                         &[&kill, &PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::quit(app, None)?],
                     )?,
@@ -160,7 +160,7 @@ fn main() {
             std::thread::spawn(move || {
                 let healthy = wait_for_health(port, Duration::from_secs(60));
                 let url = format!("http://127.0.0.1:{port}/");
-                let title = if healthy { "Financial Interchange" } else { "Financial Interchange (host not responding)" };
+                let title = if healthy { "Corbits Personal Finance" } else { "Corbits Personal Finance (host not responding)" };
                 let handle2 = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
                     let _ = WebviewWindowBuilder::new(&handle2, "main", WebviewUrl::External(url.parse().expect("bad url")))

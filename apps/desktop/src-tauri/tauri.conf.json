@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Financial Interchange",
+  "productName": "Corbits Personal Finance",
   "version": "0.1.0",
-  "identifier": "com.brianjfox.fininterchange",
+  "identifier": "com.corbitsdev.macos.personal-finance",
   "build": {
     "frontendDist": "../dist"
   },
@@ -14,10 +14,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "externalBin": ["binaries/fin-host"],
-    "resources": { "../dist": "gui" },
-    "icon": ["icons/icon.icns"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "externalBin": [
+      "binaries/fin-host"
+    ],
+    "resources": {
+      "../dist": "gui"
+    },
+    "icon": [
+      "icons/icon.icns"
+    ],
     "category": "Finance",
     "macOS": {
       "minimumSystemVersion": "13.0",

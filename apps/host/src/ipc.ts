@@ -206,6 +206,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const fx = await app.getFx();
           return json(views.netWorth(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates }));
         }
+        if (p === "/api/cashflow") {
+          const fx = await app.getFx();
+          const months = Number(q.get("months") ?? 12);
+          return json(views.cashFlow(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates, ...(Number.isFinite(months) ? { months } : {}) }));
+        }
         if (p === "/api/accounts") return json(views.accounts(app.ledger, asOf));
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
         if (p === "/api/positions") {
@@ -229,6 +234,10 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           const body = AddInstitutionBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(app.addInstitution(body), 201);
+        }
+        {
+          const m = /^\/api\/institution\/([^/]+)\/fetch-log$/.exec(p);
+          if (m !== null && req.method === "GET") return json(app.getFetchLogs(m[1] as string));
         }
         {
           const m = /^\/api\/institution\/([^/]+)\/rename$/.exec(p);

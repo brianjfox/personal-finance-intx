@@ -18,7 +18,7 @@
 import { decimal } from "@fin/contracts";
 import { type } from "arktype";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 
 export const WALLET_VIA = "adapter.wallet@1";
 
@@ -62,7 +62,8 @@ export function scaleDown(baseUnits: bigint, decimals: number): string {
 }
 
 export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
   const cfg = { ...WALLET_DEFAULTS, ...opts };
 
@@ -76,6 +77,7 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
     institution_id: opts.institution_id,
     via: WALLET_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const asOf = ctx.now.toISOString();
       const raw: Record<string, unknown> = {};
       let sats = 0n;

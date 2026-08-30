@@ -95,7 +95,7 @@ export function createConnectors(cfg: ConnectorConfig) {
     async plaidTest(): Promise<{ ok: boolean; detail: string }> {
       try {
         await plaidCall<{ link_token: string }>("/link/token/create", {
-          client_name: "Financial Interchange",
+          client_name: "Corbits Personal Finance",
           language: "en",
           country_codes: ["US"],
           user: { client_user_id: "operator" },
@@ -128,7 +128,7 @@ export function createConnectors(cfg: ConnectorConfig) {
     async plaidLinkStart(opts?: { completionRedirectUri?: string }): Promise<{ link_token: string; hosted_link_url: string | null; auto_finish: boolean }> {
       const create = (redirect: string | null) =>
         plaidCall<{ link_token: string; hosted_link_url?: string | null }>("/link/token/create", {
-          client_name: "Financial Interchange",
+          client_name: "Corbits Personal Finance",
           language: "en",
           country_codes: ["US"],
           user: { client_user_id: "operator" },

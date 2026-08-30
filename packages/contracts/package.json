@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Typed messages of the Household Financial Interchange: Fact, Finding, Recommendation, Approval, Instruction, Receipt (ArkType)",
+  "description": "Typed messages of Corbits Personal Finance: Fact, Finding, Recommendation, Approval, Instruction, Receipt (ArkType)",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "bun test" },
   "dependencies": { "arktype": "2.1.29" }

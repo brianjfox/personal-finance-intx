@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 
 import { decimal } from "@fin/contracts";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const COINBASE_VIA = "adapter.coinbase@1";
@@ -113,7 +113,8 @@ const dec = (s: string | undefined | null): string => {
 export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
   const secrets = opts.secrets ?? defaultSecretStore();
   const base = opts.base_url ?? COINBASE_BASE_URL;
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
   const host = new URL(base).host;
 
@@ -133,6 +134,7 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
     institution_id: opts.institution_id,
     via: COINBASE_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const asOf = ctx.now.toISOString();
       const accounts: CbAccount[] = [];
       let cursor: string | null = null;

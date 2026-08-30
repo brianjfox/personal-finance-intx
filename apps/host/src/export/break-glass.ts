@@ -300,7 +300,7 @@ function guideSections(opts: BreakGlassOptions, netWorth: string, docCount: numb
 function operatingGuide(opts: BreakGlassOptions, netWorth: string, docCount: number): { pdf: Uint8Array; text: GuideSection[] } {
   const sections = guideSections(opts, netWorth, docCount);
   const doc = new PdfDoc();
-  doc.title("Household Financial Interchange -- Operating Guide");
+  doc.title("Corbits Personal Finance -- Operating Guide");
   doc.body(`Generated ${opts.now.toISOString().slice(0, 10)} by ${opts.operator}. Print this page and keep it with the estate papers.`);
   for (const s of sections) {
     doc.heading(s.heading);
@@ -323,10 +323,10 @@ function indexHtml(opts: BreakGlassOptions, nw: ReturnType<typeof views.netWorth
     .map((s) => `<h2>${esc(s.heading)}</h2><ul>${s.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>`)
     .join("");
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Household Financial Interchange — Export</title>
+<html lang="en"><head><meta charset="utf-8"><title>Corbits Personal Finance — Export</title>
 <style>body{font:15px/1.5 -apple-system,Helvetica,Arial,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}h2{font-size:1.1rem;margin-top:1.4rem}code{background:#f2f2f2;padding:1px 4px;border-radius:3px}li{margin:.2rem 0}@media print{a{color:inherit;text-decoration:none}}</style>
 </head><body>
-<h1>Household Financial Interchange — full export</h1>
+<h1>Corbits Personal Finance — full export</h1>
 <p>Generated ${esc(opts.now.toISOString())}. Net worth at export: <b>${esc(nw.net_worth)} USD</b> (assets ${esc(nw.assets)}, liabilities ${esc(nw.liabilities)})${nw.provisional ? " — some figures were provisional" : ""}.</p>
 <p><a href="OPERATING-GUIDE.pdf"><b>OPERATING-GUIDE.pdf</b></a> — print it and keep it with the estate papers. <a href="documents/manifest.csv">documents/manifest.csv</a> lists every original document in <code>documents/</code>.</p>
 ${guideHtml}

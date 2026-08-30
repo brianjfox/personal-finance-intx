@@ -207,8 +207,22 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
+export interface HttpLogEntry {
+  at: string; method: string; url: string;
+  request_headers: Record<string, string>; request_body: string | null;
+  status: number; response_headers: Record<string, string>; response_body: string; ms: number;
+}
+export interface FetchLogRecord { institution_id: string; at: string; via: string; ok: boolean; error?: string; entries: HttpLogEntry[] }
+
+export interface CashFlowMonth { month: string; inflow: string; outflow: string; net: string; txns: number }
+export interface CashFlowView {
+  currency: string; months: CashFlowMonth[]; fx_missing: string[]; excluded_internal: number; provisional: boolean;
+}
+
 export const api = {
   netWorth: () => get<NetWorth>("/api/net-worth"),
+  cashFlow: (months = 12) => get<CashFlowView>(`/api/cashflow?months=${months}`),
+  institutionFetchLog: (id: string) => get<FetchLogRecord[]>(`/api/institution/${encodeURIComponent(id)}/fetch-log`),
   positions: () => get<Position[]>("/api/positions"),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),
@@ -338,22 +352,47 @@ const fmt = (n: number, currency: string): string =>
   new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }).format(n);
 
 /** Format for display, converted into the preferred currency when a rate exists; native otherwise. */
+// The privacy veil (the title bar's eye): when on, every formatted
+// financial figure shows *s instead of digits. Formatting still runs —
+// only the rendered digits are hidden.
+let MASKED = false;
+try {
+  MASKED = localStorage.getItem("fin.masked") === "1";
+} catch {
+  /* private mode */
+}
+export function setMasked(m: boolean): void {
+  MASKED = m;
+  try {
+    localStorage.setItem("fin.masked", m ? "1" : "0");
+  } catch {
+    /* private mode */
+  }
+}
+export function isMasked(): boolean {
+  return MASKED;
+}
+/** Digits become *s while the veil is on; everything else passes through. */
+export function maskDigits(s: string): string {
+  return MASKED ? s.replace(/\d/g, "*") : s;
+}
+
 export function money(v: string | null | undefined, currency = "USD"): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
-  if (!Number.isFinite(n)) return v;
+  if (!Number.isFinite(n)) return maskDigits(v);
   if (FX !== null && currency !== FX.to) {
     const rate = FX.rates[currency];
-    if (rate !== undefined) return fmt(n * Number(rate), FX.to);
+    if (rate !== undefined) return maskDigits(fmt(n * Number(rate), FX.to));
   }
-  return fmt(n, currency);
+  return maskDigits(fmt(n, currency));
 }
 
 /** The native form, for showing alongside a converted figure. */
 export function moneyNative(v: string | null | undefined, currency = "USD"): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
-  return Number.isFinite(n) ? fmt(n, currency) : v;
+  return maskDigits(Number.isFinite(n) ? fmt(n, currency) : v);
 }
 export function when(iso: string | null | undefined): string {
   if (!iso) return "—";

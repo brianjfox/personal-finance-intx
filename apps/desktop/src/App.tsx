@@ -7,9 +7,12 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fxState, money, moneyNative, setApiToken, setFxRates, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
+import { Icon, LogoMark } from "./icons";
+import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
 
-type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents";
+type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents" | "settings";
 
 /**
  * Who is using the app. Multi-user hosts put a real login in front:
@@ -136,7 +139,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
   };
   return (
     <div style={{ maxWidth: 460, margin: "80px auto" }}>
-      <h2>Who's using Financial Interchange?</h2>
+      <h2>Who's using Corbits Personal Finance?</h2>
       <p className="small muted">
         Each person signs in with their own password and sees only their own ledger, documents, agents, and keys — all
         on this Mac, in a store encrypted with that password (AES-256). Signing out locks it. There is no recovery: a
@@ -211,13 +214,15 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
 export function App() {
   const gate = useUserGate();
   if (!gate.ready) {
-    return <div className="app"><main><p className="muted">Starting…</p></main></div>;
+    return <div className="app"><main><div className="page"><p className="muted">Starting…</p></div></main></div>;
   }
   if (gate.multi && gate.current === null) {
     return (
       <div className="app">
         <main>
-          <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
+          <div className="page page-narrow">
+            <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
+          </div>
         </main>
       </div>
     );
@@ -226,10 +231,26 @@ export function App() {
   return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} onRenamed={gate.renameLocal ?? (() => {})} />;
 }
 
+/** The sidebar's entries: page id, label, icon. */
+const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
+  ["dashboard", "Dashboard", "squares-four"],
+  ["queue", "Queue", "list-checks"],
+  ["institutions", "Assets", "stack"],
+  ["credentials", "Credentials", "key"],
+  ["profile", "People", "users-three"],
+  ["tax", "Tax Calendar", "calendar-blank"],
+  ["strategy", "Strategy", "chart-line-up"],
+  ["estate", "Estate", "house-line"],
+  ["audit", "Audit Logs", "scroll-text"],
+  ["documents", "Documents", "file-text"],
+  ["settings", "Settings", "gear"],
+];
+
 function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
+  const [nw, setNw] = useState<NetWorth | null>(null);
   const [factId, setFactId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
@@ -238,6 +259,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
   useEffect(() => {
     api.queue().then(setQueue).catch(() => setQueue([]));
     api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
+    api.netWorth().then(setNw).catch(() => setNw(null));
     api.fx().then((fx) => {
       setFxRates(fx);
       setFxTick((t) => t + 1); // re-render with rates in hand
@@ -270,59 +292,99 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
       return !c;
     });
   };
+  const initials =
+    user !== null
+      ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
+      : "ME";
+  // The privacy veil: masks every rendered financial figure with *s.
+  const [masked, setMaskedState] = useState(isMasked());
+  const toggleMask = () => {
+    setMasked(!masked);
+    setMaskedState(!masked);
+  };
+  const chatMode = page === "strategy" && !takeover;
+  // Pages that still use the classic single-column layout get the standard container.
+  const contained = (node: React.ReactNode) => <div className="page page-mid">{node}</div>;
   return (
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
-      <nav>
-        <h1>{navCollapsed ? "I·H" : "Interchange · Household"}</h1>
-        {(
-          [
-            ["dashboard", "Dashboard", "📊", null],
-            ["queue", "Queue", "📥", queue.length],
-            ["institutions", "Assets, Cash & Holdings", "🏦", null],
-            ["credentials", "Credentials", "🔑", null],
-            ["profile", "People", "👥", null],
-            ["tax", "Tax calendar", "🧾", null],
-            ["strategy", "Strategy", "🧭", null],
-            ["estate", "Estate", "🏛️", null],
-            ["audit", "Audit Logs", "📓", null],
-            ["documents", "Documents", "📁", null],
-          ] as const
-        ).map(([id, label, icon, count]) => (
-          <a key={id} className={page === id ? "active" : ""} title={label} onClick={() => setPage(id)}>
-            <span className="icon">{icon}</span>
-            <span className="label">{label}</span>
-            {count !== null && count > 0 ? <span className="badge">{count}</span> : null}
-          </a>
-        ))}
-        {user !== null && (
-          <a title={`Signed in as ${user.name} — sign out`} onClick={signOut} style={{ marginTop: "auto" }}>
-            <span className="icon">👤</span>
-            <span className="label">{user.name} · sign out</span>
-          </a>
-        )}
-        <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav} style={user !== null ? { marginTop: 0 } : undefined}>
-          {navCollapsed ? "»" : "« Collapse"}
-        </button>
-      </nav>
-      <main>
-        {takeover ? (
-          <Welcome onConnect={() => setPage("institutions")} onChanged={refresh} />
-        ) : (
-          <>
-            {!nothingYet && <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />}
-            {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
-            {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
-            {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
-            {page === "credentials" && <CredentialsPage tick={tick} onChanged={refresh} user={user} onRenamed={onRenamed} />}
-            {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
-            {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
-            {page === "strategy" && <ChatPage openFact={setFactId} />}
-            {page === "estate" && <EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />}
-            {page === "audit" && <AuditPage tick={tick} onChanged={refresh} openFact={setFactId} />}
-            {page === "documents" && <Documents tick={tick} />}
-          </>
-        )}
-      </main>
+      <header className="topbar">
+        <div className="tb-left">
+          <span className="tb-brand"><LogoMark /> Corbits Personal Finance</span>
+          <span className="tb-divider" />
+          <span className="tb-networth">
+            <span className="lbl">Net Worth</span>
+            <span className="val num">{nw !== null ? money(nw.net_worth, nw.currency) : "—"}</span>
+            <button className="iconbtn eye" title={masked ? "Show the figures" : "Hide the figures (show *s)"} onClick={toggleMask}>
+              <Icon name={masked ? "eye-slash" : "eye"} />
+            </button>
+            {nw !== null && nw.provisional && <span className="pill prov">provisional</span>}
+          </span>
+          {nw?.as_of.observed_at != null && <span className="tb-updated">Last updated {when(nw.as_of.observed_at)}</span>}
+        </div>
+        <div className="tb-right">
+          {user !== null && (
+            <button className="iconbtn" title={`Signed in as ${user.name} — sign out`} onClick={signOut}>
+              <Icon name="sign-out" />
+            </button>
+          )}
+          <span className="tb-avatar" title={user?.name ?? "You"}>{initials}</span>
+          <button
+            className="iconbtn"
+            title={queue.length > 0 ? `${queue.length} item${queue.length === 1 ? "" : "s"} need${queue.length === 1 ? "s" : ""} you` : "Nothing needs you"}
+            onClick={() => setPage("queue")}
+          >
+            <Icon name="bell" />
+            {queue.length > 0 && <span className="dot" />}
+          </button>
+        </div>
+      </header>
+      <div className="body">
+        <nav className="side">
+          {NAV_ITEMS.map(([id, label, icon]) => (
+            <a key={id} className={page === id ? "active" : ""} title={label} onClick={() => setPage(id)}>
+              <span className="icon"><Icon name={icon} /></span>
+              <span className="label">{label}</span>
+              {id === "queue" && queue.length > 0 ? <span className="nav-badge">{queue.length}</span> : null}
+            </a>
+          ))}
+          <div className="health-card">
+            <div className="head"><Icon name="shield-check" /> Portfolio Health</div>
+            <div className="note">
+              {queue.length === 0
+                ? "Every account reconciled clean. No exceptions detected."
+                : `${queue.length} exception${queue.length === 1 ? "" : "s"} in the queue need${queue.length === 1 ? "s" : ""} review.`}
+            </div>
+            <div className="progressbar"><div style={{ width: queue.length === 0 ? "100%" : "55%" }} /></div>
+          </div>
+          <button className="collapse-toggle" title={navCollapsed ? "Expand the menu" : "Collapse to icons"} onClick={toggleNav}>
+            {navCollapsed ? <Icon name="caret-right" /> : <Icon name="caret-left" />}
+          </button>
+        </nav>
+        <main className={chatMode ? "chatmode" : ""}>
+          {takeover ? (
+            contained(<Welcome onConnect={() => setPage("institutions")} onChanged={refresh} />)
+          ) : (
+            <>
+              {!nothingYet && !chatMode && (
+                <div className="page page-mid" style={{ paddingBottom: 0 }}>
+                  <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />
+                </div>
+              )}
+              {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
+              {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
+              {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
+              {page === "credentials" && contained(<CredentialsPage tick={tick} onChanged={refresh} user={user} onRenamed={onRenamed} />)}
+              {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
+              {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
+              {page === "strategy" && <ChatPage openFact={setFactId} />}
+              {page === "estate" && contained(<EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />)}
+              {page === "audit" && contained(<AuditPage tick={tick} onChanged={refresh} openFact={setFactId} />)}
+              {page === "documents" && contained(<Documents tick={tick} />)}
+              {page === "settings" && contained(<SettingsPage />)}
+            </>
+          )}
+        </main>
+      </div>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
     </div>
   );
@@ -496,14 +558,15 @@ function PeopleEditor({ d, setD, disabled }: { d: ProfileDraft; setD: (fn: (d: P
   );
 }
 
-function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; save: () => Promise<boolean>; busy: boolean; error: string | null; saved: boolean } {
+function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d: ProfileDraft) => ProfileDraft) => void; save: () => Promise<boolean>; busy: boolean; error: string | null; saved: boolean; reset: () => void } {
   const [d, setDraft] = useState<ProfileDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  useEffect(() => {
+  const reset = useCallback(() => {
     api.profile().then((p) => setDraft(draftFrom(p))).catch(() => setDraft(null));
-  }, [tick]);
+  }, []);
+  useEffect(reset, [reset, tick]);
   const setD = (fn: (x: ProfileDraft) => ProfileDraft) => {
     setSaved(false);
     setDraft((x) => (x === null ? x : fn(x)));
@@ -532,55 +595,224 @@ function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d:
       setBusy(false);
     }
   };
-  return { d, setD, save, busy, error, saved };
+  return { d, setD, save, busy, error, saved, reset };
+}
+
+/** One editable person row on the People page: initial, name, DOB, relationship, remove. */
+function PersonRow({ r, onChange, onRemove, relPlaceholder, disabled }: { r: Rel; onChange: (r: Rel) => void; onRemove: () => void; relPlaceholder: string; disabled: boolean }) {
+  const initial = (r.legal_name.trim()[0] ?? "?").toUpperCase();
+  return (
+    <div className="person-row">
+      <span className="avatar-initial round">{initial}</span>
+      <div className="cols">
+        <div>
+          <span className="mini-label">Name</span>
+          <input placeholder="Full legal name" value={r.legal_name} disabled={disabled} onChange={(e) => onChange({ ...r, legal_name: e.target.value })} />
+        </div>
+        <div>
+          <span className="mini-label">Born</span>
+          <input placeholder="e.g. Mar 12 2004" value={r.date_of_birth} disabled={disabled} onChange={(e) => onChange({ ...r, date_of_birth: e.target.value })} />
+        </div>
+        <div>
+          <span className="mini-label">Role</span>
+          <input placeholder={relPlaceholder} value={r.relationship} disabled={disabled} onChange={(e) => onChange({ ...r, relationship: e.target.value })} />
+        </div>
+      </div>
+      <button className="ghost danger" title="Remove" disabled={disabled} onClick={onRemove}><Icon name="trash" /></button>
+    </div>
+  );
 }
 
 function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
-  const { d, setD, save, busy, error, saved } = useProfileDraft(tick);
-  if (d === null) return <p className="muted">Host unreachable.</p>;
+  const { d, setD, save, busy, error, saved, reset } = useProfileDraft(tick);
+  if (d === null) return <div className="page"><p className="muted">Host unreachable.</p></div>;
+  const spouseNamed = d.has_spouse && d.spouse.legal_name.trim() !== "";
+  const beneficiaries = (spouseNamed ? 1 : 0) + d.children.filter((c) => c.legal_name.trim() !== "").length + d.others.filter((o) => o.legal_name.trim() !== "").length;
+  const initials = (name: string) => name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase() || "?";
   return (
-    <>
-      <h2>People</h2>
-      <p className="small muted">
-        Who you are, and the people your estate and tax planning must know about. Stored only on this Mac. The Estate
-        Planner and Strategist can read everything here <b>except your tax id</b>, which is never shown to any model.
-      </p>
-      <h3>1 · About you</h3>
-      <div className="actions"><input style={{ flex: 1 }} placeholder="Full legal name" value={d.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, legal_name: e.target.value }))} />
-        <input style={{ width: 160 }} placeholder="Preferred name" value={d.preferred_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_name: e.target.value }))} /></div>
-      <div className="actions" style={{ marginTop: 6 }}>
-        <input style={{ width: 150 }} placeholder="Born — e.g. Jul 30 1959" value={d.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, date_of_birth: e.target.value }))} />
-        <input style={{ flex: 1 }} type="password" placeholder={d.ssn_last4 !== null ? `Tax id / SSN on file (…${d.ssn_last4}) — type to replace` : "Tax id / SSN (optional; never shown to models)"} value={d.ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, ssn: e.target.value }))} />
-        {d.ssn_last4 !== null && (
-          <label className="small"><input type="checkbox" checked={d.clear_ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, clear_ssn: e.target.checked }))} /> remove it</label>
-        )}
+    <div className="page">
+      <div style={{ marginBottom: 28 }}>
+        <h2>Household &amp; Estate</h2>
+        <p className="page-sub" style={{ maxWidth: 640 }}>
+          Manage the people your estate and tax planning must know about. Information is stored locally on this Mac. AI
+          models can read everything here <span style={{ color: "var(--red-ink)", fontWeight: 600, textDecoration: "underline" }}>except</span> your tax ID.
+        </p>
       </div>
-      <div className="actions" style={{ marginTop: 6 }}>
-        <input style={{ width: 180 }} placeholder="Citizenship (country)" value={d.citizenship} disabled={busy} onChange={(e) => setD((x) => ({ ...x, citizenship: e.target.value }))} />
-        <input style={{ width: 180 }} placeholder="Country of residence" value={d.country_of_residence} disabled={busy} onChange={(e) => setD((x) => ({ ...x, country_of_residence: e.target.value }))} />
-        <input style={{ width: 160 }} placeholder="State / province" value={d.state_or_province} disabled={busy} onChange={(e) => setD((x) => ({ ...x, state_or_province: e.target.value }))} />
-        <select value={d.preferred_currency} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_currency: e.target.value }))} title="Everything displays converted into this currency">
-          {["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "TRY", "ILS", "INR", "KRW", "CNY", "HKD", "SGD", "MXN", "BRL", "ZAR"].map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <select value={d.marital_status} disabled={busy} onChange={(e) => setD((x) => ({ ...x, marital_status: e.target.value }))}>
-          <option value="">Marital status…</option>
-          <option value="single">Single</option>
-          <option value="married">Married</option>
-          <option value="partnered">Partnered</option>
-          <option value="divorced">Divorced</option>
-          <option value="widowed">Widowed</option>
-        </select>
+      <div className="people-grid">
+        <div>
+          <ProfileIntake setD={setD} disabled={busy} />
+          <div className="household">
+            <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t3)", marginBottom: 16 }}>Household Composition</div>
+            <div className="h-row">
+              <span className="avatar-initial">{initials(d.legal_name === "" ? (d.preferred_name || "You") : d.legal_name)}</span>
+              <div>
+                <div className="h-name">{d.legal_name !== "" ? d.legal_name : "Not named yet"}</div>
+                <div className="h-role">Primary (You)</div>
+              </div>
+            </div>
+            {spouseNamed && (
+              <div className="h-row">
+                <span className="avatar-initial">{initials(d.spouse.legal_name)}</span>
+                <div>
+                  <div className="h-name">{d.spouse.legal_name}</div>
+                  <div className="h-role">Spouse</div>
+                </div>
+              </div>
+            )}
+            <hr className="hairline-h" />
+            <div className="stat-row" style={{ marginBottom: 12 }}>
+              <span className="lbl">People named</span>
+              <span className="val small">{beneficiaries}</span>
+            </div>
+            <div className="stat-row" style={{ marginBottom: 0 }}>
+              <span className="lbl">Estate clarity</span>
+              <span className="val small" style={{ color: beneficiaries > 0 && d.legal_name.trim() !== "" ? "var(--green)" : "var(--amber)" }}>
+                {beneficiaries > 0 && d.legal_name.trim() !== "" ? "High" : "Needs input"}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <section className="form-section">
+            <div className="sec-head">
+              <div className="l"><span className="sec-num">1</span><span className="sec-title">Primary Individual</span></div>
+              {d.legal_name.trim() !== "" && <span className="sec-status">Completed</span>}
+            </div>
+            <div className="sec-body">
+              <div className="fgrid">
+                <div>
+                  <label className="field-label">Full Legal Name</label>
+                  <input placeholder="Full legal name" value={d.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, legal_name: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="field-label">Preferred Name</label>
+                  <input placeholder="Preferred name" value={d.preferred_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_name: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="field-label">Date of Birth</label>
+                  <input placeholder="e.g. Jul 30 1959" value={d.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, date_of_birth: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="field-label">Tax ID / SSN<span className="req">*Private — never shown to models</span></label>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <input
+                      style={{ flex: 1 }}
+                      type="password"
+                      placeholder={d.ssn_last4 !== null ? `On file (…${d.ssn_last4}) — type to replace` : "Optional"}
+                      value={d.ssn}
+                      disabled={busy}
+                      onChange={(e) => setD((x) => ({ ...x, ssn: e.target.value }))}
+                    />
+                    {d.ssn_last4 !== null && (
+                      <label className="small" style={{ whiteSpace: "nowrap" }}><input type="checkbox" checked={d.clear_ssn} disabled={busy} onChange={(e) => setD((x) => ({ ...x, clear_ssn: e.target.checked }))} /> remove</label>
+                    )}
+                  </div>
+                </div>
+                <div className="fgrid-3">
+                  <div>
+                    <label className="field-label">Citizenship</label>
+                    <input placeholder="Country" value={d.citizenship} disabled={busy} onChange={(e) => setD((x) => ({ ...x, citizenship: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="field-label">Country of Residence</label>
+                    <input placeholder="Country" value={d.country_of_residence} disabled={busy} onChange={(e) => setD((x) => ({ ...x, country_of_residence: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="field-label">State / Province</label>
+                    <input placeholder="State" value={d.state_or_province} disabled={busy} onChange={(e) => setD((x) => ({ ...x, state_or_province: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="fgrid-3">
+                  <div>
+                    <label className="field-label">Marital Status</label>
+                    <select value={d.marital_status} disabled={busy} onChange={(e) => setD((x) => ({ ...x, marital_status: e.target.value }))}>
+                      <option value="">Choose…</option>
+                      <option value="single">Single</option>
+                      <option value="married">Married</option>
+                      <option value="partnered">Partnered</option>
+                      <option value="divorced">Divorced</option>
+                      <option value="widowed">Widowed</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="field-label">Display Currency</label>
+                    <select value={d.preferred_currency} disabled={busy} onChange={(e) => setD((x) => ({ ...x, preferred_currency: e.target.value }))} title="Everything displays converted into this currency">
+                      {["USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "TRY", "ILS", "INR", "KRW", "CNY", "HKD", "SGD", "MXN", "BRL", "ZAR"].map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div className="sec-head">
+              <div className="l"><span className="sec-num">2</span><span className="sec-title">Spouse or Partner</span></div>
+              <label className="small" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input type="checkbox" checked={d.has_spouse} disabled={busy} onChange={(e) => setD((x) => ({ ...x, has_spouse: e.target.checked }))} />
+                <span className="uc" style={{ fontSize: 10, fontWeight: 700, color: "var(--t2)" }}>Enable</span>
+              </label>
+            </div>
+            {d.has_spouse && (
+              <div className="sec-body">
+                <div className="fgrid">
+                  <div>
+                    <label className="field-label">Full Legal Name</label>
+                    <input placeholder="Spouse/partner's full legal name" value={d.spouse.legal_name} disabled={busy} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, legal_name: e.target.value } }))} />
+                  </div>
+                  <div>
+                    <label className="field-label">Date of Birth</label>
+                    <input placeholder="e.g. Jul 30 1959" value={d.spouse.date_of_birth} disabled={busy} onChange={(e) => setD((x) => ({ ...x, spouse: { ...x.spouse, date_of_birth: e.target.value } }))} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="form-section">
+            <div className="sec-head">
+              <div className="l"><span className="sec-num">3</span><span className="sec-title">Children &amp; Dependents</span></div>
+              <button className="ghost" style={{ color: "var(--link)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, children: [...x.children, emptyRel()] }))}>
+                + Add Child
+              </button>
+            </div>
+            <div className="sec-body">
+              {d.children.length === 0 && <p className="small muted" style={{ margin: 0 }}>No children recorded.</p>}
+              {d.children.map((c, i) => (
+                <PersonRow key={i} r={c} disabled={busy} relPlaceholder="son / daughter / stepchild" onChange={(r) => setD((x) => ({ ...x, children: x.children.map((y, j) => (j === i ? r : y)) }))} onRemove={() => setD((x) => ({ ...x, children: x.children.filter((_, j) => j !== i) }))} />
+              ))}
+            </div>
+          </section>
+
+          <section className="form-section">
+            <div className="sec-head">
+              <div className="l"><span className="sec-num">4</span><span className="sec-title">Anyone Else In Your Will</span></div>
+              <button className="ghost" style={{ color: "var(--link)", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase" }} disabled={busy} onClick={() => setD((x) => ({ ...x, others: [...x.others, emptyRel()] }))}>
+                + Add Person
+              </button>
+            </div>
+            <div className="sec-body">
+              <p className="small muted" style={{ marginTop: 0 }}>Parents, siblings, godchildren, close friends, charities — anyone you may want named.</p>
+              {d.others.map((o, i) => (
+                <PersonRow key={i} r={o} disabled={busy} relPlaceholder="relationship" onChange={(r) => setD((x) => ({ ...x, others: x.others.map((y, j) => (j === i ? r : y)) }))} onRemove={() => setD((x) => ({ ...x, others: x.others.filter((_, j) => j !== i) }))} />
+              ))}
+            </div>
+          </section>
+
+          {error !== null && <div className="banner">{error}</div>}
+          <div className="form-foot">
+            <p className="note">No information is shared until you press Save Profile.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {saved && <span className="pill low">saved</span>}
+              <button className="secondary" disabled={busy} onClick={reset}>Reset Form</button>
+              <button disabled={busy} onClick={() => { void save().then((ok) => { if (ok) onChanged(); }); }}>{busy ? "saving…" : "Save Profile"}</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <PeopleEditor d={d} setD={setD} disabled={busy} />
-      {error !== null && <div className="banner">{error}</div>}
-      <div className="actions" style={{ marginTop: 10 }}>
-        <button disabled={busy} onClick={() => { void save().then((ok) => { if (ok) onChanged(); }); }}>{busy ? "saving…" : "Save profile"}</button>
-        {saved && <span className="pill low">saved</span>}
-      </div>
-      <ProfileIntake setD={setD} disabled={busy} />
-    </>
+    </div>
   );
 }
 
@@ -658,16 +890,19 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
     }
   };
   return (
-    <div style={{ marginTop: 18 }}>
-      <h3>Or just tell us</h3>
-      <p className="small muted">
-        Say anything about yourself or others here, and we'll try to use it to fill out the data fields as best as we can.
+    <div className="magic-card">
+      <div className="blob" />
+      <div className="m-head">
+        <span className="icon-tile"><Icon name="sparkle" /></span>
+        <span className="m-title">AI Narrative Import</span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 14px" }}>
+        Instead of filling every box, just describe your household in plain English. The details are extracted into the
+        form for your review.
       </p>
-      <div className="actions" style={{ alignItems: "flex-end" }}>
+      <div className="magic-ta">
         <textarea
-          className="chat-input"
-          rows={5}
-          placeholder={busy ? "reading…" : 'e.g. "I\'m Brian, born in California, married to Alex since 2001. Two kids: Sam (2004-03-02) and Riley, who\'s 15. My brother Ted should be in the will."'}
+          placeholder={busy ? "reading…" : 'e.g. "I\'m Brian, born in California, married to Alex since 2001. We have two kids: Sam (2004-03-02) and Riley, who\'s 15. My brother Ted should be in the will."'}
           value={text}
           disabled={busy || disabled}
           onChange={(e) => setText(e.target.value)}
@@ -678,20 +913,23 @@ function ProfileIntake({ setD, disabled }: { setD: (fn: (d: ProfileDraft) => Pro
             }
           }}
         />
-        <button disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill in the form"}</button>
+        <button className="go" disabled={busy || disabled} onClick={() => void run()}>{busy ? "…" : "Fill Profile"}</button>
       </div>
       {pending !== null && (
-        <div ref={intakeRef} style={{ marginTop: 8 }}>
+        <div ref={intakeRef} style={{ marginTop: 12 }}>
           <div className="pending-msg small">{pending}</div>
           <Thinking label="Reading what you wrote and filling in the form" />
         </div>
       )}
-      {result !== null && <div className="banner" style={{ marginTop: 8 }}>{result}</div>}
-      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
-      <p className="small muted" style={{ marginTop: 4 }}>
-        Your words go to the AI model to be understood; the fields it suggests land in the form above, unsaved, for you
-        to check. Nothing is stored until you press Save profile.
-      </p>
+      {result !== null && <div className="banner" style={{ marginTop: 12 }}>{result}</div>}
+      {error !== null && <div className="banner" style={{ marginTop: 12 }}>{error}</div>}
+      <div className="guard">
+        <div className="g-head"><Icon name="shield-check" /> Privacy Guard</div>
+        <p>
+          Your words go to the AI model to be understood; the fields it suggests land in the form unsaved, for you to
+          check. Your stored tax ID is never sent. Nothing is saved until you press Save Profile.
+        </p>
+      </div>
     </div>
   );
 }
@@ -1189,103 +1427,135 @@ function holdingsTabOf(i: InstitutionOverview): HoldingsTab {
   return "institutions";
 }
 
+/** The Setup Progress rail: where a new household is on the road to a live ledger. */
+function SetupProgress({ ob, profileOk }: { ob: InstitutionsOverview; profileOk: boolean }) {
+  const steps: Array<{ title: string; desc: string; done: boolean }> = [
+    { title: "Create Account", desc: "Local store ready on this Mac.", done: true },
+    {
+      title: "Connect Institutions",
+      desc: ob.institutions.length > 0 ? `${ob.institutions.length} connected.` : "Connect a bank, broker, or wallet.",
+      done: ob.institutions.length > 0,
+    },
+    { title: "Household Profile", desc: "Define beneficiaries and dependents.", done: profileOk },
+    { title: "First Numbers", desc: ob.hasFacts ? "Balances observed and recorded." : "Fetch the numbers for the first time.", done: ob.hasFacts },
+  ];
+  const doneCount = steps.filter((s) => s.done).length;
+  const current = steps.findIndex((s) => !s.done);
+  return (
+    <div className="panel">
+      <div className="panel-title" style={{ marginBottom: 16 }}>Setup Progress</div>
+      <div className="steps">
+        {steps.map((s, i) => (
+          <div key={s.title} className={`step${s.done ? " done" : i === current ? " now" : ""}`}>
+            <span className="step-num">{s.done ? <Icon name="check" /> : i + 1}</span>
+            <div>
+              <div className="t">{s.title}</div>
+              <div className="d">{s.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--hairline)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+          <span className="uc" style={{ fontSize: 10, fontWeight: 700, color: "var(--t3)" }}>Profile Completion</span>
+          <span className="uc green" style={{ fontSize: 10, fontWeight: 700 }}>{Math.round((doneCount / steps.length) * 100)}%</span>
+        </div>
+        <div className="progressbar" style={{ marginTop: 0 }}><div style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
+      </div>
+    </div>
+  );
+}
+
 function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => void }) {
   const [ob, setOb] = useState<InstitutionsOverview | null>(null);
   const [tab, setTab] = useState<HoldingsTab>("institutions");
   const [adding, setAdding] = useState(false);
+  const [profileOk, setProfileOk] = useState(false);
   useEffect(() => {
     api.institutionsOverview().then(setOb).catch(() => setOb(null));
+    api.profile().then((p) => setProfileOk((p.person?.legal_name ?? "") !== "")).catch(() => setProfileOk(false));
   }, [tick]);
-  if (ob === null) return <p className="muted">Host unreachable.</p>;
+  if (ob === null) return <div className="page"><p className="muted">Host unreachable.</p></div>;
   const inTab = ob.institutions.filter((i) => holdingsTabOf(i) === tab);
   const none = inTab.length === 0;
   const counts = new Map<HoldingsTab, number>();
   for (const i of ob.institutions) counts.set(holdingsTabOf(i), (counts.get(holdingsTabOf(i)) ?? 0) + 1);
+  const addForm =
+    tab === "real_estate" ? (
+      <AddPropertyForm
+        onDone={() => {
+          setAdding(false);
+          onChanged();
+        }}
+        onCancel={none ? null : () => setAdding(false)}
+      />
+    ) : (
+      <AddInstitutionForm
+        onDone={() => {
+          setAdding(false);
+          onChanged();
+        }}
+        onCancel={none ? null : () => setAdding(false)}
+        modes={tab === "crypto" ? ["coinbase", "kraken", "wallet"] : ["managed", "files", "plaid", "eb"]}
+        existing={ob.institutions.map((i) => i.name)}
+      />
+    );
   return (
-    <>
-      <h2>Assets, Cash &amp; Holdings</h2>
-      <p className="small muted">
-        Connections are read-only: nothing here can move money or change your accounts. Deleting a connection removes its
-        cash and holdings from your totals — the record of what was observed stays in your history.
-      </p>
-      <p>
-        {(
-          [
-            ["institutions", "Institutions"],
-            ["real_estate", "Real Estate"],
-            ["crypto", "Crypto"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            className={tab === id ? "" : "secondary"}
-            style={{ marginRight: 6 }}
-            onClick={() => {
-              setTab(id);
-              setAdding(false);
-            }}
-          >
-            {label}
-            {(counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
-          </button>
-        ))}
-      </p>
-      {tab === "institutions" && (
-        <>
-          {none && <p>No institutions are connected yet. Let's add your first one.</p>}
-          {none || adding ? (
-            <AddInstitutionForm
-              onDone={() => {
-                setAdding(false);
-                onChanged();
-              }}
-              onCancel={none ? null : () => setAdding(false)}
-              modes={["managed", "files", "plaid", "eb"]}
-              existing={ob.institutions.map((i) => i.name)}
-            />
-          ) : (
-            <p><button onClick={() => setAdding(true)}>Add asset, or connect an institution</button></p>
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2>Assets, Cash &amp; Holdings</h2>
+          <p className="page-sub">Connections are read-only. We can observe your holdings, but we never move money.</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div className="seg">
+            {(
+              [
+                ["institutions", "Institutions"],
+                ["real_estate", "Real Estate"],
+                ["crypto", "Crypto"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                className={tab === id ? "on" : ""}
+                onClick={() => {
+                  setTab(id);
+                  setAdding(false);
+                }}
+              >
+                {label}
+                {(counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setAdding(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" /> Add Asset</button>
+        </div>
+      </div>
+      <div className="split">
+        <div>
+          {none && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              {tab === "institutions" && "No institutions are connected yet. Let's add your first one."}
+              {tab === "real_estate" && "No properties yet. Add your first one — its value flows straight into net worth."}
+              {tab === "crypto" && "No crypto connections yet. Connect an exchange, or watch a self-custody wallet."}
+            </p>
           )}
-        </>
-      )}
-      {tab === "real_estate" && (
-        <>
-          {none && <p>No properties yet. Add your first one — its value flows straight into net worth.</p>}
-          {none || adding ? (
-            <AddPropertyForm
-              onDone={() => {
-                setAdding(false);
-                onChanged();
-              }}
-              onCancel={none ? null : () => setAdding(false)}
-            />
-          ) : (
-            <p><button onClick={() => setAdding(true)}>Add a property</button></p>
-          )}
-        </>
-      )}
-      {tab === "crypto" && (
-        <>
-          {none && <p>No crypto connections yet. Connect an exchange, or watch a self-custody wallet.</p>}
-          {none || adding ? (
-            <AddInstitutionForm
-              onDone={() => {
-                setAdding(false);
-                onChanged();
-              }}
-              onCancel={none ? null : () => setAdding(false)}
-              modes={["coinbase", "kraken", "wallet"]}
-              existing={ob.institutions.map((i) => i.name)}
-            />
-          ) : (
-            <p><button onClick={() => setAdding(true)}>Add a crypto connection</button></p>
-          )}
-        </>
-      )}
-      {inTab.map((i) => (
-        <InstitutionCard key={i.institution_id} inst={i} onChanged={onChanged} />
-      ))}
-    </>
+          {(none || adding) && addForm}
+          {inTab.map((i) => (
+            <InstitutionCard key={i.institution_id} inst={i} onChanged={onChanged} />
+          ))}
+        </div>
+        <div className="rail">
+          <SetupProgress ob={ob} profileOk={profileOk} />
+          <div className="panel">
+            <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t2)", marginBottom: 12 }}>Expert Mode</div>
+            <div className="tipbox">"Click any figure to see its <span style={{ color: "var(--link)", fontWeight: 600 }}>provenance</span>. We never assert a number without evidence."</div>
+            <div className="tipbox">"Your data never leaves this Mac. Even AI analysis can be run entirely locally."</div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1669,7 +1939,7 @@ function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }
               doesn't always show an Allow dialog for helper processes. One-time fix:
               <ol className="small" style={{ margin: "6px 0 6px 18px" }}>
                 <li>Open the privacy settings (button below — lands on Full Disk Access).</li>
-                <li>Click <b>+</b>, add <b>Financial Interchange</b> from Applications, and switch it on.</li>
+                <li>Click <b>+</b>, add <b>Corbits Personal Finance</b> from Applications, and switch it on.</li>
                 <li>Come back and hit Try again (if it still refuses, quit and reopen this app once).</li>
               </ol>
               <div className="actions">
@@ -1989,10 +2259,30 @@ function EbConnect({ name, institutionId, preset, onDone, onBankPicked }: { name
   );
 }
 
+/** How a connection describes itself under the card title. */
+function adapterLabel(inst: InstitutionOverview): string {
+  switch (inst.adapter) {
+    case "plaid": return "Automatic via Plaid";
+    case "enablebanking": return "Automatic via Enable Banking";
+    case "coinbase": return "Automatic via Coinbase";
+    case "kraken": return "Automatic via Kraken";
+    case "wallet": return "Watch-only wallet";
+    default: return inst.managed ? "You enter the values" : "File uploads";
+  }
+}
+
+function adapterIcon(inst: InstitutionOverview): string {
+  if (inst.adapter === "coinbase" || inst.adapter === "kraken" || inst.adapter === "wallet") return "currency-btc";
+  if (CONNECTOR_ADAPTERS.has(inst.adapter)) return "bank";
+  if (inst.category === "real_estate") return "buildings";
+  return inst.managed ? "vault" : "file-text";
+}
+
 function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingProperty, setEditingProperty] = useState(false);
+  const [manage, setManage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const act = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
@@ -2009,82 +2299,125 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
   const open = inst.accounts.filter((a) => !a.closed);
   const closedCount = inst.accounts.length - open.length;
   const isProperty = inst.managed && inst.category === "real_estate" && open.length === 1;
+  const isConnector = CONNECTOR_ADAPTERS.has(inst.adapter);
+  const lastObserved = open.map((a) => a.observed_at).filter((x): x is string => x !== null).sort().pop() ?? null;
+  const valued = open.filter((a) => a.value !== null);
+  const currencies = new Set(valued.map((a) => a.currency));
+  // Owed accounts arrive with either sign convention (connectors report the
+  // visa as negative; typed-in mortgages are positive amounts owed) — both
+  // must reduce the card's total.
+  const total =
+    valued.length > 0 && currencies.size === 1
+      ? valued.reduce((s, a) => s + (OWED_TYPES.has(a.type) ? -Math.abs(Number(a.value)) : Number(a.value)), 0)
+      : null;
   return (
-    <div className="queue-item">
-      <div className="head">
-        <b>{inst.name}</b>
-        <span className={`pill ${inst.enabled ? "low" : "medium"}`}>{inst.enabled ? "connected" : "paused"}</span>
-        <span className="pill info">{inst.managed ? "you enter the values" : "file uploads"}</span>
-        <span className="muted small">{inst.institution_id}</span>
+    <div className="inst-card">
+      <div className="inst-head">
+        <div className="inst-id">
+          <span className="icon-tile plain big"><Icon name={adapterIcon(inst)} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h3 className="name">{inst.name}</h3>
+            <div className="meta">
+              {inst.enabled ? (
+                <span className={`badge-chip ${inst.managed ? "gray" : "green"}`}>{inst.managed ? "Manually managed" : "Connected"}</span>
+              ) : (
+                <span className="badge-chip amber">Paused</span>
+              )}
+              <span>
+                {adapterLabel(inst)}
+                {lastObserved !== null && <> • Last updated {when(lastObserved)}</>}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {isConnector && (
+            <button
+              className="iconbtn"
+              title="Update now"
+              disabled={busy !== null}
+              onClick={() => void act("update", () => api.refreshInstitution(inst.institution_id))}
+            >
+              <Icon name="refresh" />
+            </button>
+          )}
+          {inst.managed && !isProperty && (
+            <button className="iconbtn" title="Add or update an account" onClick={() => setManage((m) => !m)}><Icon name="plus" /></button>
+          )}
+          <button className={`iconbtn${manage ? " on" : ""}`} title="Manage this connection" onClick={() => setManage((m) => !m)}><Icon name="dots-three" /></button>
+        </div>
       </div>
       {inst.problems.map((prob, i) => (
-        <div key={i} className="banner" style={{ marginTop: 8 }}>{prob}</div>
+        <div key={i} className="banner" style={{ margin: "12px 20px 0" }}>{prob}</div>
       ))}
       {busy === "update" ? (
-        <p className="muted">Saving and updating your numbers…</p>
+        <p className="muted" style={{ padding: "16px 20px" }}>Saving and updating your numbers…</p>
       ) : (
-        <>
-          {open.length > 0 && (
-            <table style={{ marginTop: 8 }}>
-              <thead><tr><th>Account</th><th>Type</th><th className="num">Value</th><th>Last updated</th><th></th></tr></thead>
-              <tbody>
-                {open.map((a) => (
-                  <tr key={a.account_id}>
-                    <td>{a.name}</td>
-                    <td className="small">{typeLabel(a.type)}</td>
-                    <td className="num">
-                      {a.value === null ? <span className="muted">not fetched yet</span> : money(a.value, a.currency)}
-                      {OWED_TYPES.has(a.type) && a.value !== null ? <span className="small muted"> owed</span> : null}
-                    </td>
-                    <td className="small">{when(a.observed_at)}</td>
-                    <td>
+        open.length > 0 && (
+          <table>
+            <thead><tr><th>Account Name</th><th>Type</th><th className="num">Balance</th><th>Last updated</th>{(inst.managed || isProperty) && <th></th>}</tr></thead>
+            <tbody>
+              {open.map((a) => (
+                <tr key={a.account_id}>
+                  <td style={{ fontWeight: 500, color: "var(--strong)" }}>{a.name}</td>
+                  <td className="muted">{typeLabel(a.type)}</td>
+                  <td className="num" style={{ fontWeight: 600, color: "var(--strong)" }}>
+                    {a.value === null ? <span className="muted" style={{ fontWeight: 400 }}>not fetched yet</span> : money(a.value, a.currency)}
+                    {OWED_TYPES.has(a.type) && a.value !== null ? <span className="small muted" style={{ fontWeight: 400 }}> owed</span> : null}
+                  </td>
+                  <td className="small muted">{when(a.observed_at)}</td>
+                  {(inst.managed || isProperty) && (
+                    <td style={{ textAlign: "right" }}>
                       {isProperty && (
-                        <button className="secondary" disabled={busy !== null} onClick={() => setEditingProperty((e) => !e)} style={{ marginRight: 6 }}>
-                          {editingProperty ? "Close" : "Edit"}
+                        <button className="ghost" disabled={busy !== null} onClick={() => setEditingProperty((e) => !e)} title="Edit this property">
+                          <Icon name="pencil" />
                         </button>
                       )}
                       {inst.managed && (
                         <button
-                          className="secondary"
+                          className="ghost danger"
+                          title="Remove this account"
                           disabled={busy !== null}
                           onClick={() => void act("update", () => api.removeManagedAccount(inst.institution_id, a.account_id))}
                         >
-                          Remove
+                          <Icon name="trash" />
                         </button>
                       )}
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
-          {isProperty ? (
-            editingProperty ? (
-              <PropertyEditor
-                inst={inst}
-                disabled={busy !== null}
-                onSave={(input) =>
-                  void act("update", async () => {
-                    // The address is both the card's name and the account's.
-                    await api.renameInstitution(inst.institution_id, input.address);
-                    await api.saveManagedAccount(inst.institution_id, { account_id: input.account_id, name: input.address, type: "real_estate", value: input.value });
-                    setEditingProperty(false);
-                  })
-                }
-              />
-            ) : null
-          ) : inst.managed ? (
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      )}
+      {editingProperty && isProperty && (
+        <div className="card-body">
+          <PropertyEditor
+            inst={inst}
+            disabled={busy !== null}
+            onSave={(input) =>
+              void act("update", async () => {
+                // The address is both the card's name and the account's.
+                await api.renameInstitution(inst.institution_id, input.address);
+                await api.saveManagedAccount(inst.institution_id, { account_id: input.account_id, name: input.address, type: "real_estate", value: input.value });
+                setEditingProperty(false);
+              })
+            }
+          />
+        </div>
+      )}
+      {manage && (
+        <div className="card-body">
+          {inst.managed && !isProperty && (
             <ManagedAccountEditor
               inst={inst}
               disabled={busy !== null}
               onSave={(input) => void act("update", () => api.saveManagedAccount(inst.institution_id, input))}
             />
-          ) : null}
-          {!inst.managed && !CONNECTOR_ADAPTERS.has(inst.adapter) && (
-            <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />
           )}
-          {CONNECTOR_ADAPTERS.has(inst.adapter) && (
+          {!inst.managed && !isConnector && <UploadBox inst={inst} disabled={busy !== null} onDone={onChanged} />}
+          {isConnector && (
             <ConnectorStatus
               inst={inst}
               disabled={busy !== null}
@@ -2092,27 +2425,43 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
               onChanged={onChanged}
             />
           )}
-        </>
-      )}
-      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
-      <div className="actions" style={{ marginTop: 10 }}>
-        <button
-          className="secondary"
-          disabled={busy !== null}
-          onClick={() => void act("pause", () => api.setInstitutionEnabled(inst.institution_id, !inst.enabled))}
-        >
-          {inst.enabled ? "Pause updates" : "Resume updates"}
-        </button>
-        {confirmDelete ? (
-          <>
-            <span className="small">Delete this connection? Its cash and holdings leave your totals; the history of what was observed is kept.</span>
-            <button disabled={busy !== null} onClick={() => void act("delete", () => api.deleteInstitution(inst.institution_id))}>
-              Yes, delete
+          {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
+          {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+          <div className="actions" style={{ marginTop: 12 }}>
+            <button
+              className="secondary"
+              disabled={busy !== null}
+              onClick={() => void act("pause", () => api.setInstitutionEnabled(inst.institution_id, !inst.enabled))}
+            >
+              {inst.enabled ? "Pause updates" : "Resume updates"}
             </button>
-            <button className="secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
-          </>
-        ) : (
-          <button className="secondary" disabled={busy !== null} onClick={() => setConfirmDelete(true)}>Delete</button>
+            {confirmDelete ? (
+              <>
+                <span className="small">Delete this connection? Its cash and holdings leave your totals; the history of what was observed is kept.</span>
+                <button disabled={busy !== null} onClick={() => void act("delete", () => api.deleteInstitution(inst.institution_id))}>
+                  Yes, delete
+                </button>
+                <button className="secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              </>
+            ) : (
+              <button className="secondary" disabled={busy !== null} onClick={() => setConfirmDelete(true)}>Delete</button>
+            )}
+            <span className="small muted" style={{ marginLeft: "auto" }}>{inst.institution_id}</span>
+          </div>
+        </div>
+      )}
+      {!manage && error !== null && <div className="banner" style={{ margin: "12px 20px" }}>{error}</div>}
+      <div className="card-foot">
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {!inst.managed && !isConnector && (
+            <button className="linklike" onClick={() => setManage((m) => !m)}><Icon name="upload-simple" /> Upload statement</button>
+          )}
+          <button className="linklike" onClick={() => setManage((m) => !m)}><Icon name="note" /> {manage ? "Hide management" : "Manage"}</button>
+        </div>
+        {total !== null && (
+          <span className="small num" style={{ fontWeight: 600, color: "var(--strong)" }}>
+            Total: {money(String(Math.round(total * 100) / 100), valued[0]!.currency)}
+          </span>
         )}
       </div>
     </div>
@@ -2121,9 +2470,88 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
 
 const CONNECTOR_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "kraken", "wallet"]);
 
+/** JSON bodies pretty-print; anything else shows as-is. */
+function prettyBody(s: string): string {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s;
+  }
+}
+
+const fmtHeaders = (h: Record<string, string>): string =>
+  Object.keys(h).length === 0 ? "(none)" : Object.entries(h).map(([k, v]) => `${k}: ${v}`).join("\n");
+
+/**
+ * The raw wire record of recent fetches for one institution: every
+ * request/response with headers, credentials masked host-side. Held in
+ * memory only — nothing here is written to disk.
+ */
+function FetchLogDrawer({ inst, onClose }: { inst: InstitutionOverview; onClose: () => void }) {
+  const [logs, setLogs] = useState<import("./api").FetchLogRecord[] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    api.institutionFetchLog(inst.institution_id).then(setLogs).catch(() => setLogs([]));
+  }, [inst.institution_id]);
+  return (
+    <div className="drawer">
+      <button className="close secondary" onClick={onClose}>close</button>
+      <h2 style={{ fontSize: 18 }}>Fetch Logs</h2>
+      <p className="small muted">
+        {inst.name} — the raw request/response of each recent fetch, credentials masked. Held in memory only;
+        restarting the app clears it.
+      </p>
+      {logs === null && <p className="muted">loading…</p>}
+      {logs !== null && logs.length === 0 && (
+        <p className="muted">No fetches recorded since the app started. Hit Update now, then reopen this panel.</p>
+      )}
+      {(logs ?? []).map((run, ri) => (
+        <div key={ri} className="panel" style={{ padding: 14, marginBottom: 14 }}>
+          <div className="small" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span className={`pill ${run.ok ? "low" : "critical"}`}>{run.ok ? "ok" : "failed"}</span>
+            <b style={{ color: "var(--strong)" }}>{when(run.at)}</b>
+            <span className="muted">{run.via} · {run.entries.length} call{run.entries.length === 1 ? "" : "s"}</span>
+          </div>
+          {run.error !== undefined && <div className="banner" style={{ margin: "10px 0 0" }}>{run.error}</div>}
+          {run.entries.map((e, ei) => {
+            const k = `${ri}:${ei}`;
+            const cls = e.status >= 200 && e.status < 300 ? "low" : e.status === 0 ? "critical" : "medium";
+            return (
+              <div key={k} className="httpcall">
+                <button className="linklike" style={{ width: "100%" }} onClick={() => setOpen(open === k ? null : k)}>
+                  <span className={`pill ${cls}`}>{e.status === 0 ? "ERR" : e.status}</span>
+                  <code className="small" style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", textAlign: "left" }}>{e.method} {e.url}</code>
+                  <span className="small muted" style={{ whiteSpace: "nowrap" }}>{e.ms}ms {open === k ? "▾" : "▸"}</span>
+                </button>
+                {open === k && (
+                  <div className="httpdetail">
+                    <div className="field-label">Request headers</div>
+                    <pre>{fmtHeaders(e.request_headers)}</pre>
+                    {e.request_body !== null && (
+                      <>
+                        <div className="field-label">Request body</div>
+                        <pre>{prettyBody(e.request_body)}</pre>
+                      </>
+                    )}
+                    <div className="field-label">Response headers</div>
+                    <pre>{fmtHeaders(e.response_headers)}</pre>
+                    <div className="field-label">Response body</div>
+                    <pre>{prettyBody(e.response_body)}</pre>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Connector institutions: automatic read-only updates, consent status, and the reconnect flow. */
 function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: InstitutionOverview; disabled: boolean; onUpdate: () => void; onChanged: () => void }) {
   const [reconnecting, setReconnecting] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const days =
     inst.consent_until === null ? null : Math.floor((new Date(inst.consent_until).getTime() - Date.now()) / 86_400_000);
   const reconnectable = inst.adapter !== "wallet";
@@ -2148,7 +2576,9 @@ function ConnectorStatus({ inst, disabled, onUpdate, onChanged }: { inst: Instit
             {reconnecting ? "Hide reconnect" : inst.adapter === "coinbase" || inst.adapter === "kraken" ? "Replace the API key" : "Reconnect"}
           </button>
         )}
+        <button className="secondary" onClick={() => setShowLog(true)}>View Fetch Logs</button>
       </div>
+      {showLog && <FetchLogDrawer inst={inst} onClose={() => setShowLog(false)} />}
       {reconnecting && inst.adapter === "plaid" && (
         <PlaidConnect name={inst.name} institutionId={inst.institution_id} onDone={() => { setReconnecting(false); onChanged(); }} />
       )}
@@ -2380,14 +2810,33 @@ function chopMiddle(name: string): string {
   return name.length > 70 ? `${name.slice(0, 32)}...${name.slice(-32)}` : name;
 }
 
+/** Scenario growth rates for the horizon modeler: a client-side projection, not advice. */
+const SCENARIOS: ReadonlyArray<readonly [string, string, number]> = [
+  ["conservative", "Conservative", 0.03],
+  ["balanced", "Balanced", 0.06],
+  ["aggressive", "Aggressive", 0.09],
+];
+
+function compactMoney(v: number): string {
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (a >= 1e6) return maskDigits(`${sign}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2)}M`);
+  if (a >= 1e3) return maskDigits(`${sign}$${Math.round(a / 1e3)}k`);
+  return maskDigits(`${sign}$${a.toFixed(0)}`);
+}
+
 function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [nw, setNw] = useState<NetWorth | null>(null);
+  const [cf, setCf] = useState<import("./api").CashFlowView | null>(null);
   const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
   const [tab, setTab] = useState<"accounts" | "positions">("accounts");
+  const [scenario, setScenario] = useState("conservative");
+  const [horizonPct, setHorizonPct] = useState(30);
   useEffect(() => {
     api.netWorth().then(setNw).catch(() => setNw(null));
+    api.cashFlow(12).then(setCf).catch(() => setCf(null));
   }, [tick]);
-  if (nw === null) return <p className="muted">No ledger yet. Run a nightly.</p>;
+  if (nw === null) return <div className="page"><p className="muted">No ledger yet. Run a nightly.</p></div>;
   const clickSort = (key: AccountSortKey) =>
     setSort((s) => {
       // First click: names/types A->Z, value largest-first, observed newest-first.
@@ -2423,56 +2872,228 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
     }
     return String(Math.round(total * 100) / 100);
   };
+  const rate = SCENARIOS.find(([id]) => id === scenario)?.[2] ?? 0.03;
+  const year0 = new Date().getFullYear();
+  const span = 10;
+  const targetYear = Math.round(year0 + (horizonPct / 100) * span);
+  const base = Number(nw.net_worth);
+  const projectedGain = base > 0 ? base * Math.pow(1 + rate, targetYear - year0) - base : 0;
+  const cash = Number(sumTypes(["checking", "savings", "money_market"]));
+  const liabilities = Number(nw.liabilities);
+  const alloc: DonutSlice[] = [
+    { label: "Investments", value: Number(sumTypes(["brokerage", "ira", "401k", "hsa"])), color: "#10b981" },
+    { label: "Real Estate", value: Number(sumTypes(["real_estate"])), color: "#6366f1" },
+    { label: "Cash", value: cash, color: "#fbbf24" },
+    { label: "Crypto", value: Number(sumTypes(["crypto"])), color: "#fb923c" },
+    { label: "Other", value: Number(sumTypes(["other"])), color: "#4b5563" },
+  ].filter((s) => s.value > 0);
+  const allocTotal = alloc.reduce((s, x) => s + x.value, 0);
+  // Cash flow: monthly in/out from the rolling transaction window the
+  // connectors re-observe each nightly. Internal movement is excluded
+  // host-side; figures arrive already in the display currency.
+  const flowMonths = cf?.months ?? [];
+  const withFlow = flowMonths.filter((m) => m.txns > 0);
+  const hasFlow = withFlow.length > 0;
+  const monthLabel = (m: string) => new Date(`${m}-15T00:00:00Z`).toLocaleString(undefined, { month: "short" });
+  const bars: FlowBar[] = flowMonths.map((m) => ({ label: monthLabel(m.month), inflow: Number(m.inflow), outflow: Number(m.outflow) }));
+  const latestFlow = flowMonths.length > 0 ? flowMonths[flowMonths.length - 1]! : null;
+  const avgOut = hasFlow ? withFlow.reduce((s, m) => s + Number(m.outflow), 0) / withFlow.length : null;
+  const avgNet = hasFlow ? withFlow.reduce((s, m) => s + Number(m.net), 0) / withFlow.length : null;
+  const runway = avgNet !== null && avgNet < 0 && cash > 0 ? cash / -avgNet : null;
   return (
-    <>
-      <h2>Net worth</h2>
+    <div className="page">
       {nw.provisional && <div className="banner">Some figures rest on provisional facts. Downstream agents are held until the exception queue is cleared.</div>}
       {(nw.fx_missing ?? []).length > 0 && (
         <div className="banner">
           No exchange rate available for {(nw.fx_missing ?? []).join(", ")} — those accounts show their native amounts and are excluded from the totals.
         </div>
       )}
+      <section className="kpis">
+        <div className={`kpi ${nw.provisional ? "prov" : ""}`}>
+          <div className="k-label"><span style={{ color: "#10b981", display: "inline-flex" }}><Icon name="wallet" /></span>Assets</div>
+          <div className="k-value">{money(nw.assets, nw.currency)}</div>
+        </div>
+        <div className="kpi">
+          <div className="k-label"><span style={{ color: "#ef4444", display: "inline-flex" }}><Icon name="receipt" /></span>Liabilities</div>
+          <div className="k-value">{money(nw.liabilities, nw.currency)}</div>
+        </div>
+        <div className="kpi">
+          <div className="k-label"><span style={{ color: "#fbbf24", display: "inline-flex" }}><Icon name="coins" /></span>Cash</div>
+          <div className="k-value">{money(sumTypes(["checking", "savings", "money_market"]), nw.currency)}</div>
+        </div>
+        <div className="kpi">
+          <div className="k-label"><span style={{ color: "#fb923c", display: "inline-flex" }}><Icon name="currency-btc" /></span>Crypto</div>
+          <div className="k-value">{money(sumTypes(["crypto"]), nw.currency)}</div>
+        </div>
+        <div className="kpi">
+          <div className="k-label"><span style={{ color: "#3b82f6", display: "inline-flex" }}><Icon name="buildings" /></span>Property</div>
+          <div className="k-value">{money(sumTypes(["real_estate"]), nw.currency)}</div>
+        </div>
+      </section>
       {nw.lines.some((l) => l.currency !== nw.currency) && fxState() !== null && (
-        <p className="small muted">
+        <p className="small muted" style={{ marginTop: -12, marginBottom: 20 }}>
           Foreign-currency accounts converted to {nw.currency} at ECB reference rates of {fxState()!.date}
           {fxState()!.stale ? " (offline — last known rates)" : ""}. Native amounts shown beneath.
         </p>
       )}
-      <div className="cards">
-        <div className={`card ${nw.provisional ? "prov" : ""}`}><div className="label">Net worth</div><div className="value">{money(nw.net_worth, nw.currency)}</div></div>
-        <div className="card"><div className="label">Assets</div><div className="value">{money(nw.assets, nw.currency)}</div></div>
-        <div className="card"><div className="label">Liabilities</div><div className="value">{money(nw.liabilities, nw.currency)}</div></div>
-        <div className="card"><div className="label">Cash</div><div className="value">{money(sumTypes(["checking", "savings", "money_market"]), nw.currency)}</div></div>
-        <div className="card"><div className="label">Crypto</div><div className="value">{money(sumTypes(["crypto"]), nw.currency)}</div></div>
-        <div className="card"><div className="label">Property</div><div className="value">{money(sumTypes(["real_estate"]), nw.currency)}</div></div>
-      </div>
-      <p style={{ marginTop: 14 }}>
-        <button className={tab === "accounts" ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab("accounts")}>Accounts</button>
-        <button className={tab === "positions" ? "" : "secondary"} onClick={() => setTab("positions")}>Positions</button>
-      </p>
-      {tab === "positions" && <Positions tick={tick} openFact={openFact} />}
-      {tab === "accounts" && (<>
-      <table>
-        <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th>Basis</th><Th k="observed" label="Observed" /><th></th></tr></thead>
-        <tbody>
-          {lines.map((l) => (
-            <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
-              <td title={l.name}>{chopMiddle(l.name)}<div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
-              <td>{l.type}</td>
-              <td className="num">
-                {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
-                {l.fact_ids.length > 1 && <span className="small muted"> (+{l.fact_ids.length - 1} facts)</span>}
-                {l.currency !== nw.currency && <div className="small muted">{moneyNative(l.value, l.currency)}</div>}
-              </td>
-              <td className="small muted">{l.basis}</td>
-              <td className="small">{when(l.observed_at)}</td>
-              <td>{l.provisional && <span className="pill prov">provisional</span>}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </>)}
-    </>
+
+      <section className="panel">
+        <div className="panel-head" style={{ marginBottom: 16 }}>
+          <div className="panel-title">
+            <span className="icon-tile"><Icon name="sparkle" /></span>
+            <span>
+              Yield Horizon Modeler
+              <div className="panel-sub">Drag the handle to shift your target year and recalculate the projection. A what-if, not advice.</div>
+            </span>
+          </div>
+          <div className="seg">
+            {SCENARIOS.map(([id, label]) => (
+              <button key={id} className={scenario === id ? "on" : ""} onClick={() => setScenario(id)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="slider-row">
+          <span className="yr">{year0}</span>
+          <div className="hslider">
+            <div className="track" />
+            <div className="fill" style={{ width: `${horizonPct}%` }} />
+            <input type="range" min="0" max="100" value={horizonPct} onChange={(e) => setHorizonPct(Number(e.target.value))} />
+            <div className="knob" style={{ left: `${horizonPct}%` }} />
+          </div>
+          <span className="yr right">{year0 + span}</span>
+        </div>
+        <div className="horizon-meta">
+          <span className="small muted">Target horizon</span>
+          <span className="num" style={{ fontWeight: 600, color: "var(--strong)" }}>
+            {targetYear} · +{compactMoney(projectedGain)} projected at {(rate * 100).toFixed(0)}%/yr
+          </span>
+        </div>
+        <div className="chartbox">
+          {base > 0 ? (
+            <HorizonChart base={base} rate={rate} yearStart={year0} yearEnd={year0 + span} />
+          ) : (
+            <div className="chart-empty">The projection starts from a positive net worth — nothing to model yet.</div>
+          )}
+        </div>
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 24, alignItems: "stretch" }}>
+        <div className="panel" style={{ marginBottom: 24 }}>
+          <div className="panel-head">
+            <span className="panel-title">Cash Flow — In vs Out</span>
+            <span className="legend">
+              <span><span className="sw" style={{ background: "#10b981" }} />Inflow</span>
+              <span><span className="sw" style={{ background: "#1f2937", border: "1px solid #4b5563" }} />Outflow</span>
+            </span>
+          </div>
+          <p className="small muted" style={{ margin: "4px 0 12px" }}>
+            Money in rises above the baseline; money out drops below. Transfers between your own accounts and buys/sells inside an account don't count.
+          </p>
+          {hasFlow ? (
+            <>
+              <div className="chartbox"><PairedBars bars={bars} /></div>
+              <p className="small muted" style={{ margin: "8px 0 0" }}>
+                From {withFlow.reduce((s, m) => s + m.txns, 0)} observed transactions
+                {cf !== null && cf.excluded_internal > 0 ? ` (${cf.excluded_internal} internal movements excluded)` : ""}
+                {cf !== null && cf.fx_missing.length > 0 ? ` · no rate for ${cf.fx_missing.join(", ")} — those excluded` : ""}
+                . History deepens as the nightly re-observes each rolling 30-day window.
+              </p>
+            </>
+          ) : (
+            <div className="chartbox chart-empty" style={{ minHeight: 240 }}>
+              Cash-flow history builds up as connected accounts report transactions — each nightly fetch observes a rolling 30-day window, so a year of monthly in/out accumulates on its own. Nothing recorded yet.
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-title" style={{ marginBottom: 16 }}>Flow Summary</div>
+            <div className="stat-row">
+              <span className="lbl">Net Inflow{latestFlow !== null ? ` (${monthLabel(latestFlow.month)})` : ""}</span>
+              <span className="val num" style={{ color: latestFlow !== null && Number(latestFlow.net) < 0 ? "var(--red-ink)" : "var(--green)" }}>
+                {latestFlow !== null && latestFlow.txns > 0 ? money(latestFlow.net, cf!.currency) : "—"}
+              </span>
+            </div>
+            <div className="stat-row">
+              <span className="lbl">Avg Monthly Spend</span>
+              <span className="val num">{avgOut !== null ? money(avgOut.toFixed(2), cf!.currency) : "—"}</span>
+            </div>
+            <div className="stat-row">
+              <span className="lbl">Runway (at avg burn)</span>
+              <span className="val num">
+                {runway !== null ? maskDigits(`${Math.round(runway)} mo`) : avgNet !== null && avgNet >= 0 ? "not burning" : "—"}
+              </span>
+            </div>
+            <div className="stat-row">
+              <span className="lbl">Cash ÷ Liabilities</span>
+              <span className="val num" style={{ color: "var(--link)" }}>{liabilities > 0 && cash > 0 ? maskDigits(`${(cash / liabilities).toFixed(1)}×`) : "—"}</span>
+            </div>
+          </div>
+          <div className="panel" style={{ marginBottom: 0, flex: 1 }}>
+            <div className="panel-title">Asset Allocation</div>
+            <p className="small muted" style={{ margin: "2px 0 12px" }}>By market value</p>
+            {alloc.length === 0 ? (
+              <div className="chart-empty" style={{ minHeight: 120 }}>No holdings yet.</div>
+            ) : (
+              <div className="donut-wrap">
+                <DonutChart slices={alloc} size={150} />
+                <div className="alloc-legend" style={{ flex: 1, minWidth: 140 }}>
+                  {alloc.map((s) => (
+                    <div className="row" key={s.label}>
+                      <span><span className="sw" style={{ background: s.color, width: 10, height: 10, borderRadius: 3, display: "inline-block", marginRight: 8, verticalAlign: -1 }} />{s.label}</span>
+                      <span className="num" style={{ color: "var(--strong)" }}>{allocTotal > 0 ? `${Math.round((s.value / allocTotal) * 100)}%` : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel flush">
+        <div className="panel-head">
+          <div className="panel-title">
+            <span className="icon-tile"><Icon name="vault" /></span>
+            Holding Detail
+          </div>
+          <div className="seg">
+            <button className={tab === "accounts" ? "on" : ""} onClick={() => setTab("accounts")}>Accounts</button>
+            <button className={tab === "positions" ? "on" : ""} onClick={() => setTab("positions")}>Positions</button>
+          </div>
+        </div>
+        {tab === "positions" && <div style={{ padding: "16px 20px" }}><Positions tick={tick} openFact={openFact} /></div>}
+        {tab === "accounts" && (
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th>Basis</th><Th k="observed" label="Observed" /><th>Status</th></tr></thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
+                    <td title={l.name}><span style={{ fontWeight: 500, color: "var(--strong)" }}>{chopMiddle(l.name)}</span><div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
+                    <td className="muted">{l.type}</td>
+                    <td className="num">
+                      {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
+                      {l.fact_ids.length > 1 && <span className="small muted"> (+{l.fact_ids.length - 1} facts)</span>}
+                      {l.currency !== nw.currency && <div className="small muted">{moneyNative(l.value, l.currency)}</div>}
+                    </td>
+                    <td className="small muted">{l.basis}</td>
+                    <td className="small">{when(l.observed_at)}</td>
+                    <td>
+                      {l.provisional ? (
+                        <span className="pill medium"><span className="status-dot" />Provisional</span>
+                      ) : (
+                        <span className="pill low"><span className="status-dot" />Verified</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -2522,8 +3143,10 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
   return (
     <>
       <p style={{ marginBottom: 4 }}>
-        <button className={consolidated ? "" : "secondary"} onClick={() => setConsolidated(true)}>Consolidated</button>{" "}
-        <button className={consolidated ? "secondary" : ""} onClick={() => setConsolidated(false)}>By account</button>
+        <span className="seg">
+          <button className={consolidated ? "on" : ""} onClick={() => setConsolidated(true)}>Consolidated</button>
+          <button className={consolidated ? "" : "on"} onClick={() => setConsolidated(false)}>By account</button>
+        </span>
       </p>
       <p className="small muted" style={{ marginTop: 0 }}>
         {consolidated
@@ -2538,7 +3161,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
                 <td className="small" title={p.account_id}>{chopMiddle(p.account_id)}</td>
                 <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
-                <td className="num">{p.quantity}</td>
+                <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
                 <td className="num">{p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}</td>
@@ -2556,7 +3179,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tr key={`${p.symbol}|${p.currency}`} className={p.provisional ? "prov" : ""}>
                 <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
                 <td className="small" title={p.account_ids.join("\n")}>{p.accounts} account{p.accounts === 1 ? "" : "s"}</td>
-                <td className="num">{p.quantity}</td>
+                <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num">
                   {p.fact_ids.length > 0 ? (
@@ -2586,34 +3209,60 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
   );
 }
 
-// The home screen (deck slide 19): approvals first, exceptions below.
+// The home screen (deck slide 19): the Attention Queue. Approvals,
+// data exceptions, and prepared orders under one roof, tabbed.
 // Chat is a tool inside the product, not the product.
 function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
   const [items, setItems] = useState<Finding[]>([]);
+  const [approvals, setApprovals] = useState<import("./api").QueuedApproval[]>([]);
+  const [orders, setOrders] = useState<import("./api").InstructionRow[]>([]);
+  const [tab, setTab] = useState<"approvals" | "exceptions" | "orders">("approvals");
   useEffect(() => {
     api.queue().then(setItems).catch(() => setItems([]));
+    api.approvals().then(setApprovals).catch(() => setApprovals([]));
+    api.instructions().then(setOrders).catch(() => setOrders([]));
   }, [tick]);
   return (
-    <>
-      <ApprovalsSection tick={tick} onChanged={onChanged} openFact={openFact} />
-      <h2>Exception queue</h2>
-      {items.length === 0 && <p className="muted">Nothing needs you. Every account reconciled clean.</p>}
-      {items.map((f) => (
-        <QueueItem key={f.id} f={f} onChanged={onChanged} openFact={openFact} />
-      ))}
-      <InstructionsSection tick={tick} onChanged={onChanged} />
-    </>
+    <div className="page page-narrow">
+      <h2>Attention Queue</h2>
+      <p className="page-sub">Decisions, data exceptions, and prepared orders that require your approval.</p>
+      <div className="tabs-underline">
+        <button className={tab === "approvals" ? "on" : ""} onClick={() => setTab("approvals")}>
+          Approval Queue{approvals.length > 0 && <span className="tab-count green">{approvals.length}</span>}
+        </button>
+        <button className={tab === "exceptions" ? "on" : ""} onClick={() => setTab("exceptions")}>
+          Data Exceptions{items.length > 0 && <span className="tab-count red">{items.length}</span>}
+        </button>
+        <button className={tab === "orders" ? "on" : ""} onClick={() => setTab("orders")}>
+          Prepared Orders{orders.length > 0 && <span className="tab-count">{orders.length}</span>}
+        </button>
+      </div>
+      {tab === "approvals" && <ApprovalsSection approvals={approvals} onChanged={onChanged} openFact={openFact} />}
+      {tab === "exceptions" && (
+        <>
+          {items.length === 0 ? (
+            <p className="muted">Nothing needs you. Every account reconciled clean.</p>
+          ) : (
+            <>
+              <div className="section-label" style={{ marginTop: 0 }}><Icon name="warning-circle" /> Conflict Resolution Required</div>
+              <div className="conflict-grid">
+                {items.map((f) => (
+                  <QueueItem key={f.id} f={f} onChanged={onChanged} openFact={openFact} />
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {tab === "orders" && <InstructionsSection rows={orders} onChanged={onChanged} />}
+    </div>
   );
 }
 
 // Phase 4: the approval queue. Scoped to one proposal id, bounded,
 // expiring; auditor-cleared before it ever reaches you.
-function ApprovalsSection({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
-  const [queue, setQueue] = useState<import("./api").QueuedApproval[]>([]);
+function ApprovalsSection({ approvals, onChanged, openFact }: { approvals: import("./api").QueuedApproval[]; onChanged: () => void; openFact: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    api.approvals().then(setQueue).catch(() => setQueue([]));
-  }, [tick]);
   const propose = async () => {
     setBusy(true);
     try {
@@ -2627,14 +3276,13 @@ function ApprovalsSection({ tick, onChanged, openFact }: { tick: number; onChang
   };
   return (
     <>
-      <h2>Approval queue</h2>
-      <p>
-        <button disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
-        <span className="small muted"> drift vs the written plan · auditor re-runs every figure · execution stays disabled</span>
-      </p>
+      <div className="actions" style={{ marginBottom: 24 }}>
+        <button className="secondary" disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
+        <span className="small muted">drift vs the written plan · auditor re-runs every figure · execution stays disabled</span>
+      </div>
       {busy && <Thinking label="The Market Manager is drafting and the Auditor is re-running its figures" />}
-      {queue.length === 0 && <p className="muted">No proposals await your signature.</p>}
-      {queue.map((q) => (
+      {approvals.length === 0 && !busy && <p className="muted">No proposals await your signature.</p>}
+      {approvals.map((q) => (
         <ApprovalItem key={q.recommendation.id} q={q} onChanged={onChanged} openFact={openFact} />
       ))}
     </>
@@ -2658,48 +3306,75 @@ function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApp
       setBusy(false);
     }
   };
+  const verb = rec.action.verb;
+  const headline = `${verb.charAt(0).toUpperCase()}${verb.slice(1)} ${rec.action.quantity ?? ""} ${rec.action.instrument ?? ""}`.replace(/\s+/g, " ").trim();
   return (
-    <div className="queue-item">
-      <div className="head">
-        <span className="pill info">proposal</span>
-        <span className="code">
-          {rec.action.verb} {rec.action.quantity} {rec.action.instrument} · ~{money(rec.action.amount?.amount ?? null)}
-        </span>
-        <span className="muted small">
-          {rec.subject} · Auditor: cleared (attempt {q.verdict.attempt}) · expires {when(rec.expires)}
-        </span>
+    <div className="approval-card">
+      <div className="approval-head">
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span className="icon-tile blue"><Icon name="sparkle" /></span>
+          <div>
+            <div className="who">AI Trade Recommendation</div>
+            <div className="sub">{rec.from} • {(rec.confidence * 100).toFixed(0)}% confidence • auditor cleared (attempt {q.verdict.attempt})</div>
+          </div>
+        </div>
+        <span className="exp">Expires {when(rec.expires)}</span>
       </div>
-      <div className="summary">{rec.thesis}</div>
-      <div className="small muted">
-        {rec.action.detail} · confidence {(rec.confidence * 100).toFixed(0)}%
-        {(rec.tax_lots ?? []).length > 0 && <> · lots: {(rec.tax_lots ?? []).map((l) => `${l.lot_id} (${l.treatment})`).join(", ")}</>}
-      </div>
-      <div className="small" style={{ marginTop: 4 }}>
-        evidence:{" "}
-        {rec.evidence.slice(0, 6).map((id) => (
-          <FactLink key={id} id={id} openFact={openFact}><span className="muted">{id.slice(0, 12)}… </span></FactLink>
-        ))}
-        {rec.evidence.length > 6 && <span className="muted">(+{rec.evidence.length - 6})</span>}
-      </div>
-      <div className="actions">
-        <input style={{ width: 90 }} title="max quantity" value={qty} onChange={(e) => setQty(e.target.value)} />
-        <input style={{ width: 90 }} placeholder="limit price" value={limit} onChange={(e) => setLimit(e.target.value)} />
-        <input placeholder="note (why)" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button disabled={busy} onClick={() => void decide("approve")}>Approve (scoped, expiring)</button>
-        <button disabled={busy} className="secondary" onClick={() => void decide("reject")}>Reject</button>
+      <div className="approval-body">
+        <div className="approval-grid">
+          <div>
+            <h2>{maskDigits(headline)}{rec.action.amount != null && <span className="muted" style={{ fontWeight: 400 }}> · ~{money(rec.action.amount.amount, rec.action.amount.currency)}</span>}</h2>
+            <p style={{ fontSize: 14, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 16px" }}>{rec.thesis}</p>
+            <div className="evrow">
+              <Icon name="link-simple" className="icon" />
+              <span>Evidence:{" "}
+                {rec.evidence.slice(0, 6).map((id) => (
+                  <FactLink key={id} id={id} openFact={openFact}><span>{id.slice(0, 12)}… </span></FactLink>
+                ))}
+                {rec.evidence.length > 6 && <span className="muted">(+{rec.evidence.length - 6})</span>}
+              </span>
+            </div>
+            {rec.action.detail != null && rec.action.detail !== "" && (
+              <div className="evrow"><span style={{ color: "var(--t3)", display: "inline-flex" }}><Icon name="tag" /></span><span className="muted">{rec.action.detail}</span></div>
+            )}
+            {(rec.tax_lots ?? []).length > 0 && (
+              <div className="evrow">
+                <span style={{ color: "var(--t3)", display: "inline-flex" }}><Icon name="tag" /></span>
+                <span>Tax lot{(rec.tax_lots ?? []).length > 1 ? "s" : ""}: <code>{(rec.tax_lots ?? []).map((l) => `${l.lot_id} (${l.treatment})`).join(", ")}</code></span>
+              </div>
+            )}
+            <div className="evrow"><span className="muted">{rec.subject}</span></div>
+          </div>
+          <div className="form-panel">
+            <div>
+              <label className="field-label">Max quantity to {verb}</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <input value={qty} onChange={(e) => setQty(e.target.value)} />
+                <span className="inline-note">proposed {maskDigits(rec.action.quantity ?? "—")}</span>
+              </div>
+            </div>
+            <div>
+              <label className="field-label">Limit price</label>
+              <input placeholder="optional" value={limit} onChange={(e) => setLimit(e.target.value)} />
+            </div>
+            <div>
+              <label className="field-label">Approval note (optional)</label>
+              <textarea placeholder="Reasoning for deviation…" value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+          </div>
+        </div>
+        <div className="approval-foot">
+          <button className="ghost danger" disabled={busy} onClick={() => void decide("reject")}><Icon name="trash" /> Reject Recommendation</button>
+          <button disabled={busy} onClick={() => void decide("approve")}>Approve (Scoped &amp; Expiring)</button>
+        </div>
       </div>
     </div>
   );
 }
 
 // Prepared -- never sent. Place any order yourself; revoke here any time.
-function InstructionsSection({ tick, onChanged }: { tick: number; onChanged: () => void }) {
-  const [rows, setRows] = useState<import("./api").InstructionRow[]>([]);
+function InstructionsSection({ rows, onChanged }: { rows: import("./api").InstructionRow[]; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    api.instructions().then(setRows).catch(() => setRows([]));
-  }, [tick]);
-  if (rows.length === 0) return null;
   const revoke = async (id: string) => {
     setBusy(true);
     try {
@@ -2709,10 +3384,10 @@ function InstructionsSection({ tick, onChanged }: { tick: number; onChanged: () 
       setBusy(false);
     }
   };
+  if (rows.length === 0) return <p className="muted">No prepared orders. Execution is disabled: anything prepared here is placed by you, never sent by the system.</p>;
   return (
     <>
-      <h2>Prepared orders</h2>
-      <p className="small muted">Execution is disabled: these are prepared, never sent. Place them yourself; the nightly reconciles the fill.</p>
+      <p className="small muted" style={{ marginTop: 0 }}>Execution is disabled: these are prepared, never sent. Place them yourself; the nightly reconciles the fill.</p>
       <table>
         <thead><tr><th>Instruction</th><th>Order</th><th>Bound</th><th>Status</th><th>Expires</th><th></th></tr></thead>
         <tbody>
@@ -2749,34 +3424,37 @@ function QueueItem({ f, onChanged, openFact }: { f: Finding; onChanged: () => vo
     }
   };
   const hasVersions = (detail?.before.length ?? 0) > 0 || (detail?.after.length ?? 0) > 0;
+  const title = f.code.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return (
-    <div className="queue-item">
-      <div className="head">
-        <span className={`pill ${f.severity}`}>{f.severity}</span>
-        <span className="code">{f.code.replace(/_/g, " ")}</span>
-        <span className="muted small">{f.subject} · {when(f.as_of)} · by {f.emitted_by}</span>
+    <div className="conflict-card">
+      <div className="blob" />
+      <div className="c-head">
+        <span className={`sev ${f.severity}`} />
+        <span className="c-title">{title}</span>
+        <span className={`pill ${f.severity}`} style={{ marginLeft: "auto" }}>{f.severity}</span>
       </div>
-      <div className="summary">{f.summary}</div>
+      <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 6px" }}>{f.summary}</p>
+      <div className="small muted" style={{ marginBottom: 14 }}>{f.subject} · {when(f.as_of)} · by {f.emitted_by}</div>
       {hasVersions && (
-        <div className="versions">
-          <div>
-            <div className="title">Ledger believed (before)</div>
-            {detail!.before.length === 0 && <span className="muted small">— nothing prior —</span>}
+        <div className="vs-grid">
+          <div className="vs-box">
+            <span className="vs-lbl">Internal ledger (before)</span>
+            {detail!.before.length === 0 && <div className="vs-sub">— nothing prior —</div>}
             {detail!.before.map((x) => <FactCard key={x.id} f={x} openFact={openFact} />)}
           </div>
-          <div>
-            <div className="title">Feed now says (after)</div>
-            {detail!.after.length === 0 && <span className="muted small">—</span>}
+          <div className="vs-box bad">
+            <span className="vs-lbl">Feed now says (after)</span>
+            {detail!.after.length === 0 && <div className="vs-sub">—</div>}
             {detail!.after.map((x) => <FactCard key={x.id} f={x} openFact={openFact} />)}
           </div>
         </div>
       )}
-      <div className="actions">
-        <input placeholder="note (why)" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button disabled={busy} onClick={() => resolve("accept_incoming")}>Accept incoming</button>
-        <button disabled={busy} className="secondary" onClick={() => resolve("keep_prior")}>Keep prior</button>
-        <button disabled={busy} className="secondary" onClick={() => resolve("both")}>Both are real</button>
-        <button disabled={busy} className="secondary" onClick={() => resolve("dismiss")}>Dismiss</button>
+      <input placeholder="Note (why)" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: "100%", marginBottom: 12 }} />
+      <div className="choice-grid">
+        <button className="neutral" disabled={busy} onClick={() => resolve("keep_prior")}>Keep Prior</button>
+        <button disabled={busy} onClick={() => resolve("accept_incoming")}>Accept Incoming</button>
+        <button className="neutral wide" disabled={busy} onClick={() => resolve("both")}>Both are real (Split)</button>
+        <button className="ghost wide" disabled={busy} onClick={() => resolve("dismiss")}>Dismiss</button>
       </div>
     </div>
   );
@@ -2792,9 +3470,9 @@ function FactCard({ f, openFact }: { f: Fact; openFact: (id: string) => void }) 
     : f.kind === "tax_document" ? `${String(p["form"])} ${String(p["tax_year"])} v${String(p["version"])} ${JSON.stringify(p["totals"])}`
     : f.kind;
   return (
-    <div className="small" style={{ marginBottom: 6 }}>
-      <FactLink id={f.id} openFact={openFact}>{headline}</FactLink>
-      <div className="muted">observed {when(f.observed_at)} · effective {when(f.effective_at)}{f.provisional ? " · provisional" : ""}</div>
+    <div style={{ marginTop: 6 }}>
+      <div className="vs-val"><FactLink id={f.id} openFact={openFact}>{headline}</FactLink></div>
+      <div className="vs-sub">observed {when(f.observed_at)} · effective {when(f.effective_at)}{f.provisional ? " · provisional" : ""}</div>
     </div>
   );
 }
@@ -2852,6 +3530,7 @@ function FactDrawer({ id, onClose, openFact }: { id: string; onClose: () => void
 function TaxPage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
   const [tax, setTax] = useState<TaxStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     api.tax().then(setTax).catch(() => setTax(null));
   }, [tick]);
@@ -2866,45 +3545,64 @@ function TaxPage({ tick, onChanged, openFact }: { tick: number; onChanged: () =>
       setBusy(false);
     }
   };
-  if (tax === null) return <p className="muted">Host unreachable.</p>;
+  if (tax === null) return <div className="page"><p className="muted">Host unreachable.</p></div>;
   if (tax.profile === null) {
     return (
-      <>
-        <h2>Tax calendar</h2>
-        <p>Let's set up your tax profile — a few numbers you'd confirm with your accountant. The engine is an estimator, not tax advice.</p>
+      <div className="page page-mid">
+        <h2>Tax Calendar</h2>
+        <p className="page-sub">Let's set up your tax profile — a few numbers you'd confirm with your accountant. The engine is an estimator, not tax advice.</p>
         <TaxProfileForm existing={null} onSaved={onChanged} />
-      </>
+      </div>
     );
   }
+  // The first quarter whose deadline gate hasn't run yet is "current"; the
+  // one after it is next in line, everything later is future.
+  const settled = (s: TaxStageStatus) => s.state === "ran" || s.state === "skipped";
+  let currentIdx = tax.quarters.findIndex((q) => !settled(q.due_stage));
+  if (currentIdx === -1) currentIdx = tax.quarters.length;
   return (
-    <>
-      <h2>Tax calendar · {tax.year}</h2>
-      <p className="small muted">
-        Reserve account: {tax.profile.reserve_account} · safe harbour base {money(tax.profile.prior_year_tax)} · withholding{" "}
-        {money(tax.profile.withholding_annual)}/yr ·{" "}
-        {tax.runId !== null ? (
-          <>standing run <span className="small">{tax.runId}</span> ({tax.runStatus})</>
-        ) : (
-          <button disabled={busy} onClick={() => act(() => api.taxYearStart())}>Start the {tax.profile.tax_year} standing run</button>
-        )}
-      </p>
-      <div className="cards">
-        {tax.quarters.map((q) => (
-          <QuarterCard key={q.quarter} q={q} busy={busy} act={act} openFact={openFact} />
+    <div className="page page-mid">
+      <div className="page-head">
+        <div>
+          <h2>Tax Calendar · {tax.year}</h2>
+          <div className="head-chips">
+            <span className="chip"><Icon name="wallet" /> Reserve: <code>{tax.profile.reserve_account}</code></span>
+            <span className="chip"><Icon name="shield-check" /> Safe Harbour: <code>{money(tax.profile.prior_year_tax)}</code></span>
+            <span className="chip">Withholding: <code>{money(tax.profile.withholding_annual)}/yr</code></span>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button className="secondary" onClick={() => setEditing((e) => !e)}>{editing ? "Hide Tax Profile" : "Edit Tax Profile"}</button>
+          {tax.runId === null ? (
+            <button className="btn-blue" disabled={busy} onClick={() => void act(() => api.taxYearStart())}>
+              Start {tax.profile.tax_year} Standing Run
+            </button>
+          ) : (
+            <span className="pill info" title={tax.runId}>standing run · {tax.runStatus}</span>
+          )}
+        </div>
+      </div>
+      {editing && <TaxProfileForm existing={tax.profile} onSaved={() => { setEditing(false); onChanged(); }} />}
+      <div className="tl">
+        {tax.quarters.map((q, i) => (
+          <QuarterCard
+            key={q.quarter}
+            q={q}
+            busy={busy}
+            act={act}
+            openFact={openFact}
+            status={i < currentIdx ? "past" : i === currentIdx ? "current" : i === currentIdx + 1 ? "next" : "future"}
+          />
         ))}
       </div>
-      <TaxProfileEditor profile={tax.profile} onSaved={onChanged} />
-    </>
-  );
-}
-
-/** Collapsed edit affordance for an existing tax profile. */
-function TaxProfileEditor({ profile, onSaved }: { profile: NonNullable<TaxStatus["profile"]>; onSaved: () => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div style={{ marginTop: 14 }}>
-      <button className="secondary" onClick={() => setOpen((o) => !o)}>{open ? "Hide tax profile" : "Edit tax profile"}</button>
-      {open && <TaxProfileForm existing={profile} onSaved={() => { setOpen(false); onSaved(); }} />}
+      <div className="infonote">
+        <h4><Icon name="info" /> Understanding the "Standing Run"</h4>
+        <p>
+          The {tax.profile.tax_year} standing run is the automated process that watches your tax liabilities through the
+          year. Ahead of each deadline it re-estimates the installment and checks that your <b>reserve account</b> holds
+          enough cash to cover it — without selling assets at the wrong time. Every figure links back to dated ledger facts.
+        </p>
+      </div>
     </div>
   );
 }
@@ -2981,65 +3679,124 @@ function TaxProfileForm({ existing, onSaved }: { existing: TaxStatus["profile"];
   );
 }
 
-function StageChip({ label, s }: { label: string; s: TaxStageStatus }) {
-  const pill =
-    s.state === "armed" ? "info" : s.state === "ran" ? (s.covered === false ? "high" : "low") : s.state === "failed" ? "critical" : "medium";
-  return (
-    <div className="small">
-      {label}: <span className={`pill ${pill}`}>{s.state}</span>
-      {s.state === "armed" && s.fire_at !== null && <span className="muted"> fires {when(s.fire_at)}</span>}
-      {s.covered !== null && <span className="muted">{s.covered ? " · covered by reserve" : " · reserve short -- escalated"}</span>}
-    </div>
-  );
+/** A gate's dot color and short text for the timeline card's status boxes. */
+function stageView(s: TaxStageStatus): { dot: string; text: string; sub: string | null } {
+  switch (s.state) {
+    case "armed":
+      return { dot: "amber", text: "Armed", sub: s.fire_at !== null ? `fires ${when(s.fire_at)}` : null };
+    case "ran":
+      return s.covered === false
+        ? { dot: "red", text: "Ran — reserve short", sub: "escalated to the queue" }
+        : { dot: "green", text: "Ran", sub: s.covered === true ? "covered by reserve" : null };
+    case "skipped":
+      return { dot: "gray", text: "Skipped", sub: null };
+    case "failed":
+      return { dot: "red", text: "Failed", sub: null };
+    default:
+      return { dot: "gray", text: "Inactive", sub: null };
+  }
 }
 
-function QuarterCard({ q, busy, act, openFact }: { q: TaxQuarterStatus; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>; openFact: (id: string) => void }) {
+const QUARTER_NAMES = ["First", "Second", "Third", "Fourth"];
+
+function QuarterCard({ q, busy, act, openFact, status }: { q: TaxQuarterStatus; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void>; openFact: (id: string) => void; status: "past" | "current" | "next" | "future" }) {
   const [note, setNote] = useState("");
   const f = q.estimate?.figures ?? null;
+  const pre = stageView(q.pre);
+  const due = stageView(q.due_stage);
+  const itemCls = status === "current" ? "now" : status === "past" ? "dim" : status === "next" ? "dim" : "far";
+  const showDetail = status === "current" || status === "past";
   return (
-    <div className="card" style={{ minWidth: 320 }}>
-      <div className="label">Q{q.quarter} · period ends {q.period_end} · due {q.due}</div>
-      <div className="value">
-        {q.obligation !== null && q.obligation.amount !== null ? (
-          <FactLink id={q.obligation.fact_id} openFact={openFact}>{money(q.obligation.amount)}</FactLink>
-        ) : (
-          <span className="muted">—</span>
-        )}
-        {q.obligation?.superseded && <span className="small muted"> (corrected)</span>}
-      </div>
-      <StageChip label="pre-stage" s={q.pre} />
-      <StageChip label="deadline" s={q.due_stage} />
-      {q.estimate !== null && q.estimate.blocked.length > 0 && (
-        <div className="small pill high">estimate blocked: {q.estimate.blocked.join(", ")} provisional</div>
-      )}
-      {f !== null && (
-        <table className="small" style={{ marginTop: 8 }}>
-          <tbody>
-            <tr><td className="muted">income YTD</td><td className="num">{money(f.ordinary_income)}</td></tr>
-            <tr><td className="muted">gains ST / LT</td><td className="num">{money(f.st_gains)} / {money(f.lt_gains)}{f.basis_incomplete ? " (basis gaps)" : ""}</td></tr>
-            <tr><td className="muted">required cum.</td><td className="num">{money(f.required_cum)}</td></tr>
-            <tr><td className="muted">paid cum.</td><td className="num">{money(f.payments_cum)}</td></tr>
-            <tr><td className="muted">installment</td><td className="num"><b>{money(f.installment_due)}</b></td></tr>
-            {q.estimate!.reserve !== null && (
-              <tr>
-                <td className="muted">reserve</td>
-                <td className="num">
-                  {money(q.estimate!.reserve.balance)}{" "}
-                  {q.estimate!.reserve_ok ? <span className="pill low">covers</span> : <span className="pill critical">short {money(q.estimate!.reserve.shortfall)}</span>}
-                </td>
-              </tr>
+    <div className={`tl-item ${itemCls}`}>
+      <div className="tl-dot" />
+      <div className="tl-card">
+        <div className="tl-head">
+          <div>
+            {status === "current" ? (
+              <span className="badge-chip green">Current Period</span>
+            ) : (
+              <span className="uc" style={{ fontSize: 10, fontWeight: 700, color: "var(--t3)" }}>
+                {status === "past" ? "Completed" : status === "next" ? "Upcoming" : "Future"}
+              </span>
             )}
-          </tbody>
-        </table>
-      )}
-      {(q.estimate?.wash_sales ?? []).map((w) => (
-        <div key={w.sale_txn_id} className="small muted">wash-sale watch: {w.symbol} loss {money(w.loss)}, ~{money(w.disallowed_estimate)} disallowed</div>
-      ))}
-      <div className="actions" style={{ marginTop: 8 }}>
-        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxCheck(q.quarter, "pre"))}>Check now</button>
-        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxCheck(q.quarter, "due"))}>Deadline check</button>
-        <input placeholder="skip note (why)" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: 110 }} />
-        <button disabled={busy} className="secondary" onClick={() => act(() => api.taxSkip(q.quarter, q.pre.state === "armed" ? "pre" : "due", note))}>Skip gate</button>
+            <h4>Q{q.quarter} · {QUARTER_NAMES[q.quarter - 1]} Quarter</h4>
+            <p className="when">Period ends {q.period_end} • <b>Deadline {q.due}</b></p>
+          </div>
+          {status === "current" && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button disabled={busy} onClick={() => void act(() => api.taxCheck(q.quarter, "pre"))}>Check Now</button>
+              <button className="secondary" disabled={busy} onClick={() => void act(() => api.taxCheck(q.quarter, "due"))}>Deadline Check</button>
+            </div>
+          )}
+        </div>
+        {showDetail && (
+          <>
+            <div className="gates">
+              <div className="gate-box">
+                <p className="g-lbl">Pre-stage Status</p>
+                <div className={`g-val${pre.dot === "gray" ? " off" : ""}`}><span className={`g-dot ${pre.dot}`} />{pre.text}</div>
+                {pre.sub !== null && <div className="g-sub">{pre.sub}</div>}
+              </div>
+              <div className="gate-box">
+                <p className="g-lbl">Deadline Status</p>
+                <div className={`g-val${due.dot === "gray" ? " off" : ""}`}><span className={`g-dot ${due.dot}`} />{due.text}</div>
+                {due.sub !== null && <div className="g-sub">{due.sub}</div>}
+              </div>
+              <div className="gate-box" style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 8 }}>
+                <input placeholder="Skip note (why)" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: "100%" }} />
+                <button
+                  className="ghost"
+                  disabled={busy || status !== "current"}
+                  onClick={() => void act(() => api.taxSkip(q.quarter, q.pre.state === "armed" ? "pre" : "due", note))}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                >
+                  <Icon name="prohibit" /> Skip this gate
+                </button>
+              </div>
+            </div>
+            {q.estimate !== null && q.estimate.blocked.length > 0 && (
+              <div className="banner" style={{ marginTop: 16, marginBottom: 0 }}>Estimate blocked: {q.estimate.blocked.join(", ")} provisional.</div>
+            )}
+            {(q.obligation !== null || f !== null) && (
+              <div className="figures">
+                <div className="fig">
+                  <div className="f-lbl">Installment due</div>
+                  <div className="f-val">
+                    {q.obligation !== null && q.obligation.amount !== null ? (
+                      <FactLink id={q.obligation.fact_id} openFact={openFact}>{money(q.obligation.amount)}</FactLink>
+                    ) : f !== null ? (
+                      money(f.installment_due)
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                    {q.obligation?.superseded && <span className="small muted"> (corrected)</span>}
+                  </div>
+                </div>
+                {f !== null && (
+                  <>
+                    <div className="fig"><div className="f-lbl">Income YTD</div><div className="f-val">{money(f.ordinary_income)}</div></div>
+                    <div className="fig"><div className="f-lbl">Gains ST / LT</div><div className="f-val">{money(f.st_gains)} / {money(f.lt_gains)}{f.basis_incomplete ? <span className="small muted"> (basis gaps)</span> : null}</div></div>
+                    <div className="fig"><div className="f-lbl">Required cum.</div><div className="f-val">{money(f.required_cum)}</div></div>
+                    <div className="fig"><div className="f-lbl">Paid cum.</div><div className="f-val">{money(f.payments_cum)}</div></div>
+                    {q.estimate!.reserve !== null && (
+                      <div className="fig">
+                        <div className="f-lbl">Reserve</div>
+                        <div className="f-val">
+                          {money(q.estimate!.reserve.balance)}{" "}
+                          {q.estimate!.reserve_ok ? <span className="pill low">covers</span> : <span className="pill critical">short {money(q.estimate!.reserve.shortfall)}</span>}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {(q.estimate?.wash_sales ?? []).map((w) => (
+              <div key={w.sale_txn_id} className="small muted" style={{ marginTop: 10 }}>wash-sale watch: {w.symbol} loss {money(w.loss)}, ~{money(w.disallowed_estimate)} disallowed</div>
+            ))}
+          </>
+        )}
+        {status === "next" && <div className="locked-box">Locked until previous gate completion</div>}
       </div>
     </div>
   );
@@ -3057,27 +3814,55 @@ function Markdown({ text }: { text: string }) {
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-/** One recorded exchange, rendered identically in the collapsed history and the live view. */
+const agentTitle = (a: ChatAgentName): string => (a === "estate_planner" ? "The Estate Planner" : "The Strategist");
+
+/** One recorded exchange: your bubble on the right, the agent's evidence-rich reply on the left. */
 function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => void }) {
   return (
-    <div className="queue-item">
-      <div className="small muted">you · {when(t.at)}</div>
-      <div style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}>{t.message}</div>
-      <div className="small muted">{t.agent}</div>
-      <Markdown text={t.reply} />
-      {t.evidence.map((e, i) => (
-        <div key={i} className="small" style={{ marginTop: 6 }}>
-          <span className="pill info">{e.tool}</span>{" "}
-          {e.fact_ids.slice(0, 8).map((id) => (
-            <FactLink key={id} id={id} openFact={openFact}>
-              <span className="muted">{id.slice(0, 14)}… </span>
-            </FactLink>
-          ))}
-          {e.fact_ids.length > 8 && <span className="muted">(+{e.fact_ids.length - 8} facts)</span>}
+    <>
+      <div className="msg user">
+        <div style={{ maxWidth: "80%" }}>
+          <div className="stamp" style={{ textAlign: "right" }}>you · {when(t.at)}</div>
+          <div className="bubble-user">{t.message}</div>
         </div>
-      ))}
-      {t.journal_ids.length > 0 && <div className="small muted">journaled: {t.journal_ids.join(", ")}</div>}
-    </div>
+      </div>
+      <div className="msg">
+        <span className="ai-avatar"><Icon name="sparkle" /></span>
+        <div className="bubble-ai">
+          <div className="stamp">{agentTitle(t.agent)}</div>
+          <Markdown text={t.reply} />
+          {t.evidence.length > 0 && (
+            <div className="evidence-block">
+              {t.evidence.map((e, i) => (
+                <div key={i} className="evidence-row">
+                  <div className="e-info">
+                    <Icon name="file-text" className="icon" />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="e-title">{e.tool.replace(/_/g, " ")}</div>
+                      <div className="e-sub">
+                        {e.fact_ids.slice(0, 8).map((id) => (
+                          <FactLink key={id} id={id} openFact={openFact}>
+                            <span>{id.slice(0, 14)}… </span>
+                          </FactLink>
+                        ))}
+                        {e.fact_ids.length > 8 && <span>(+{e.fact_ids.length - 8} facts)</span>}
+                        {e.fact_ids.length === 0 && <span>deterministic tool result</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {e.fact_ids.length > 0 && (
+                    <button className="ghost" style={{ color: "var(--link)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }} onClick={() => openFact(e.fact_ids[0]!)}>
+                      View Evidence
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {t.journal_ids.length > 0 && <div className="small muted" style={{ marginTop: 10 }}>journaled: {t.journal_ids.join(", ")}</div>}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -3099,7 +3884,7 @@ function memorySummary(turns: ChatTurn[]): string | null {
  * behind a disclosure; only the latest stays in view, with a subdued
  * summary of the remembered state above the composer.
  */
-function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact: (id: string) => void; intro?: string }) {
+function ChatPanel({ agent, openFact, intro, layout = "inline" }: { agent: ChatAgentName; openFact: (id: string) => void; intro?: string; layout?: "inline" | "workspace" }) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [text, setTextState] = useState(() => DRAFTS.get(`chat:${agent}`) ?? "");
@@ -3148,11 +3933,19 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
   const earlier = turns.slice(0, -1);
   const latest = turns.length > 0 ? turns[turns.length - 1]! : null;
   const summary = memorySummary(turns);
-  return (
+  const messages = (
     <>
-      {turns.length === 0 && intro !== undefined && <p className="muted">{intro}</p>}
+      {turns.length === 0 && layout === "workspace" && (
+        <div className="chat-hero">
+          <div className="h-icon"><Icon name="info" /></div>
+          <h3>Private Advisory Mode</h3>
+          <p>{agentTitle(agent)} has no write permissions. Every reply's evidence links back to dated ledger facts or journal entries.</p>
+          {intro !== undefined && <p style={{ marginTop: 16, fontStyle: "italic" }}>{intro}</p>}
+        </div>
+      )}
+      {turns.length === 0 && layout === "inline" && intro !== undefined && <p className="muted">{intro}</p>}
       {earlier.length > 0 && (
-        <p>
+        <p style={{ margin: 0, maxWidth: 820, marginLeft: "auto", marginRight: "auto", width: "100%" }}>
           <button className="secondary" onClick={() => setShowHistory((h) => !h)}>
             {showHistory ? "▾ Hide" : "▸ Show"} earlier conversation ({earlier.length})
           </button>
@@ -3161,16 +3954,60 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
       {showHistory && earlier.map((t) => <ChatTurnCard key={t.message_id} t={t} openFact={openFact} />)}
       {latest !== null && <ChatTurnCard t={latest} openFact={openFact} />}
       {pending !== null && (
-        <div className="queue-item">
-          <div className="small muted">you · just now</div>
-          <div className="pending-msg">{pending}</div>
-          <Thinking label={`The ${agent === "estate_planner" ? "Estate Planner" : "Strategist"} is thinking`} />
+        <>
+          <div className="msg user">
+            <div style={{ maxWidth: "80%" }}>
+              <div className="stamp" style={{ textAlign: "right" }}>you · just now</div>
+              <div className="bubble-user">{pending}</div>
+            </div>
+          </div>
+          <div className="msg">
+            <span className="ai-avatar"><Icon name="sparkle" /></span>
+            <div className="bubble-ai" style={{ flex: "none" }}>
+              <Thinking label={`${agentTitle(agent)} is thinking`} />
+            </div>
+          </div>
+        </>
+      )}
+      {error !== null && <div className="banner" style={{ maxWidth: 820, margin: "0 auto", width: "100%" }}>{error}</div>}
+    </>
+  );
+  if (layout === "workspace") {
+    return (
+      <>
+        <div className="chat-scroll">
+          {messages}
+          <div ref={bottomRef} />
         </div>
-      )}
-      {error !== null && <div className="banner">{error}</div>}
-      {summary !== null && (
-        <p className="small muted" style={{ fontStyle: "italic", marginBottom: 4 }}>{summary}</p>
-      )}
+        <div className="chat-inputbar">
+          {summary !== null && <div className="chat-context">{summary}</div>}
+          <div className="box">
+            <textarea
+              placeholder={busy ? "thinking…" : `Ask ${agentTitle(agent)} anything…`}
+              value={text}
+              disabled={busy}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <div className="sendrow">
+              <kbd className="kbd">Shift ⏎ = new line</kbd>
+              <button className="btn-blue" disabled={busy} onClick={() => void send()}>{busy ? "…" : "Send"}</button>
+            </div>
+          </div>
+          <div className="foot">Advisory only • every figure links back to dated ledger facts</div>
+        </div>
+      </>
+    );
+  }
+  return (
+    <div className="chat-inline">
+      {messages}
+      {summary !== null && <p className="small muted" style={{ fontStyle: "italic", margin: 0 }}>{summary}</p>}
       <div ref={bottomRef} className="actions" style={{ alignItems: "flex-end" }}>
         <textarea
           className="chat-input"
@@ -3190,32 +4027,35 @@ function ChatPanel({ agent, openFact, intro }: { agent: ChatAgentName; openFact:
           {busy ? "…" : "Send"}
         </button>
       </div>
-    </>
+    </div>
   );
 }
 
 function ChatPage({ openFact }: { openFact: (id: string) => void }) {
   const [agent, setAgent] = useState<ChatAgentName>("strategist");
   return (
-    <>
-      <h2>
-        Strategy ·{" "}
+    <div className="chatwrap">
+      <div className="chat-head">
+        <div className="who">
+          <span className="icon-tile blue" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="sparkle" /></span>
+          <div>
+            <div className="w-name">{agentTitle(agent)}</div>
+            <div className="w-status"><span className="on" />Active • advisory only • deterministic figures</div>
+          </div>
+        </div>
         <select value={agent} onChange={(e) => setAgent(e.target.value as ChatAgentName)}>
-          <option value="strategist">Strategist</option>
-          <option value="estate_planner">Estate Planner</option>
+          <option value="strategist">The Strategist</option>
+          <option value="estate_planner">The Estate Planner</option>
         </select>
-      </h2>
-      <p className="small muted">
-        Advisory only: no credentials, no writes to fact tables, no orders. Figures come from deterministic tools; each reply's
-        evidence links back to dated ledger facts. Material theses land in the journal.
-      </p>
+      </div>
       <ChatPanel
         key={agent}
         agent={agent}
         openFact={openFact}
-        intro={'No conversation yet. Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"'}
+        layout="workspace"
+        intro={'Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"'}
       />
-    </>
+    </div>
   );
 }
 
@@ -3437,6 +4277,121 @@ function Runs({ tick, onChanged }: { tick: number; onChanged: () => void }) {
           })}
         </tbody>
       </table>
+    </>
+  );
+}
+
+// --- Settings: how the console looks. A display preference of this ---
+// --- machine's browser profile; never stored on the host. ---
+
+function SettingsPage() {
+  const [ui, setUi] = useState<UiSettings>(() => loadUiSettings());
+  const update = (patch: Partial<UiSettings>) => {
+    setUi((u) => {
+      const next = { ...u, ...patch };
+      applyUiSettings(next);
+      saveUiSettings(next);
+      return next;
+    });
+  };
+  // Colors edit the ACTIVE theme's set: with Dark showing (chosen, or via
+  // Auto), a new background changes only how Dark looks.
+  const active = resolvedTheme(ui);
+  const colors = ui[active];
+  const activeName = active === "dark" ? "Dark" : "Light";
+  const updateColors = (patch: Partial<ThemeColors>) => update({ [active]: { ...colors, ...patch } } as Partial<UiSettings>);
+  const noColors = (c: ThemeColors) => c.background === null && c.foreground === null;
+  const isDefault =
+    ui.theme === UI_DEFAULTS.theme && ui.fontSize === UI_DEFAULTS.fontSize && noColors(ui.light) && noColors(ui.dark);
+  const colorRow = (
+    name: string,
+    hint: string,
+    value: string | null,
+    fallback: string,
+    set: (v: string | null) => void,
+  ) => (
+    <div className="set-row">
+      <div>
+        <div className="set-name">{name}</div>
+        <div className="set-hint">{hint}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <input type="color" value={value ?? fallback} onChange={(e) => set(e.target.value)} title={name} />
+        {value !== null ? (
+          <>
+            <code className="small">{value}</code>
+            <button className="secondary" onClick={() => set(null)}>Theme default</button>
+          </>
+        ) : (
+          <span className="small muted">theme default</span>
+        )}
+      </div>
+    </div>
+  );
+  return (
+    <>
+      <h2>Settings</h2>
+      <p className="page-sub">
+        How the console looks on this Mac. These preferences live in the app's local storage — they never touch the
+        ledger and never leave the machine.
+      </p>
+      <div className="panel">
+        <div className="panel-title" style={{ marginBottom: 8 }}>
+          <span className="icon-tile"><Icon name="gear" /></span>
+          Appearance
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">Theme</div>
+            <div className="set-hint">Auto follows the macOS appearance.</div>
+          </div>
+          <div className="seg">
+            {(["light", "dark", "auto"] as const).map((t) => (
+              <button key={t} className={ui.theme === t ? "on" : ""} onClick={() => update({ theme: t })}>
+                {t.charAt(0).toUpperCase()}{t.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">Font size</div>
+            <div className="set-hint">Scales the whole console proportionally.</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <input
+              type="range"
+              min={11}
+              max={20}
+              step={1}
+              value={ui.fontSize}
+              onChange={(e) => update({ fontSize: Number(e.target.value) })}
+              style={{ width: 180, padding: 0 }}
+            />
+            <span className="num" style={{ width: 44, color: "var(--strong)", fontWeight: 600 }}>{ui.fontSize} px</span>
+          </div>
+        </div>
+        {colorRow(
+          "Background color",
+          `Applies to the ${activeName} theme only; panel, border, and hover shades are derived from it.`,
+          colors.background,
+          active === "dark" ? "#1a1a1a" : "#eaeef5",
+          (v) => updateColors({ background: v }),
+        )}
+        {colorRow(
+          "Foreground color",
+          `Applies to the ${activeName} theme only; secondary text shades are derived from it.`,
+          colors.foreground,
+          active === "dark" ? "#e5e7eb" : "#243044",
+          (v) => updateColors({ foreground: v }),
+        )}
+        <div className="set-row" style={{ borderBottom: 0, paddingBottom: 0 }}>
+          <span className="set-hint">Changes apply immediately.</span>
+          <button className="secondary" disabled={isDefault} onClick={() => update({ ...UI_DEFAULTS })}>
+            Reset to defaults
+          </button>
+        </div>
+      </div>
     </>
   );
 }

@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 
 import type { AccountType, TransactionType } from "@fin/contracts";
 
-import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from "./adapter";
+import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const ENABLEBANKING_VIA = "adapter.enablebanking@1";
@@ -118,7 +118,8 @@ function stableTxnId(t: EbTransaction): string {
 export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAdapter {
   const secrets = opts.secrets ?? defaultSecretStore();
   const base = opts.base_url ?? ENABLEBANKING_BASE_URL;
-  const doFetch = opts.fetchImpl ?? fetch;
+  let httpSink: HttpLogSink | null = null;
+  const doFetch = loggingFetch(opts.fetchImpl ?? fetch, () => httpSink);
   const instSlug = opts.institution_id.replace(/^inst\./, "");
 
   const get = async <T>(path: string, now: Date): Promise<T> => {
@@ -139,6 +140,7 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
     institution_id: opts.institution_id,
     via: ENABLEBANKING_VIA,
     async fetch(ctx): Promise<FetchOutput> {
+      httpSink = ctx.http ?? null;
       const sessionId = secrets.get(ENABLEBANKING_SERVICE, `session:${opts.institution_id}`);
       if (sessionId === null) {
         throw new Error(`enablebanking ${opts.institution_id}: not connected -- run the bank consent flow from the Institutions page`);
@@ -152,24 +154,39 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
         );
       }
 
-      const lookback = opts.lookback_days ?? 30;
-      const dateFrom = new Date(ctx.now.getTime() - lookback * 86_400_000).toISOString().slice(0, 10);
+      const lookback = opts.lookback_days ?? ctx.lookback_days ?? 30;
+      const dayFrom = (days: number) => new Date(ctx.now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+      const dateFrom = dayFrom(lookback);
       const raw: Record<string, unknown> = { session };
       const accounts = [];
 
-      for (const uid of session.accounts) {
-        const details = await get<EbAccountDetails>(`/accounts/${uid}/details`, ctx.now);
-        const balResp = await get<{ balances: EbBalance[] }>(`/accounts/${uid}/balances`, ctx.now);
+      const fetchTxns = async (uid: string, from: string): Promise<EbTransaction[]> => {
         const txns: EbTransaction[] = [];
         let continuation: string | null = null;
         do {
           const page: { transactions: EbTransaction[]; continuation_key?: string | null } = await get(
-            `/accounts/${uid}/transactions?date_from=${dateFrom}${continuation !== null ? `&continuation_key=${encodeURIComponent(continuation)}` : ""}`,
+            `/accounts/${uid}/transactions?date_from=${from}${continuation !== null ? `&continuation_key=${encodeURIComponent(continuation)}` : ""}`,
             ctx.now,
           );
           txns.push(...page.transactions);
           continuation = page.continuation_key ?? null;
         } while (continuation !== null);
+        return txns;
+      };
+
+      for (const uid of session.accounts) {
+        const details = await get<EbAccountDetails>(`/accounts/${uid}/details`, ctx.now);
+        const balResp = await get<{ balances: EbBalance[] }>(`/accounts/${uid}/balances`, ctx.now);
+        let txns: EbTransaction[];
+        try {
+          txns = await fetchTxns(uid, dateFrom);
+        } catch (e) {
+          // ASPSPs cap transaction history (often 90-180 days) and some
+          // refuse a deeper date_from outright. A widened backfill window
+          // must not cost the fetch: fall back to the default window.
+          if (lookback <= 30) throw e;
+          txns = await fetchTxns(uid, dayFrom(30));
+        }
         raw[uid] = { details, balances: balResp.balances, transactions: txns };
 
         const type = mapCashAccountType(details.cash_account_type);
