@@ -8,6 +8,7 @@
 // finding for it.
 
 import type { FetchFailure, FetchResult, InstitutionSnapshot } from "@fin/contracts";
+import { views, type Ledger } from "@fin/ledger";
 
 import { CAP, type ActionContext, type ActionHandler } from "../context";
 
@@ -15,6 +16,34 @@ export interface FetchInput {
   run_key: string;
   /** Restrict to these institution ids; default all registered. */
   institutions?: string[];
+}
+
+/** The widened transaction window used to backfill a shallow history. */
+export const BACKFILL_LOOKBACK_DAYS = 365;
+/** History this shallow (days back to the earliest observed transaction) triggers a backfill. */
+export const BACKFILL_THRESHOLD_DAYS = 32;
+
+/**
+ * The transaction window to request for this institution, or null for the
+ * adapter's default. Until the ledger holds more than a month of observed
+ * transactions for the institution's accounts (a fresh connection, or one
+ * that has only seen a fetch or two), ask for the past year so cash flow
+ * and monthly spend rest on a real sample. Once the rolling window has
+ * built more than a month of history, the default window takes over.
+ */
+export function backfillLookback(ledger: Ledger, institutionId: string, now: Date): number | null {
+  const mine = new Set(
+    views.accounts(ledger).filter((a) => a.institution_id === institutionId).map((a) => a.account_id),
+  );
+  let earliest: string | null = null;
+  for (const f of views.transactions(ledger)) {
+    const p = f.payload as { account_id?: string; posted_at?: string };
+    if (p.account_id === undefined || !mine.has(p.account_id)) continue;
+    if (p.posted_at !== undefined && (earliest === null || p.posted_at < earliest)) earliest = p.posted_at;
+  }
+  if (earliest === null) return BACKFILL_LOOKBACK_DAYS;
+  const days = (now.getTime() - new Date(earliest).getTime()) / 86_400_000;
+  return days < BACKFILL_THRESHOLD_DAYS ? BACKFILL_LOOKBACK_DAYS : null;
 }
 
 export function fetchHandler(actx: ActionContext): ActionHandler {
@@ -26,6 +55,9 @@ export function fetchHandler(actx: ActionContext): ActionHandler {
     const snapshots: InstitutionSnapshot[] = [];
     const failures: FetchFailure[] = [];
     for (const adapter of adapters) {
+      // Shallow history (a fresh connection) widens the transaction
+      // window to a year; established institutions keep the rolling default.
+      const lookback = backfillLookback(actx.ledger, adapter.institution_id, now);
       // One effect per institution: the adapter read + vault writes are the
       // external effect; its output (the snapshot with doc ids) is what is
       // replayed on resume.
@@ -34,7 +66,7 @@ export function fetchHandler(actx: ActionContext): ActionHandler {
         capability: CAP.institutionRead,
         run: async () => {
           try {
-            const out = await adapter.fetch({ now });
+            const out = await adapter.fetch({ now, ...(lookback !== null ? { lookback_days: lookback } : {}) });
             const docIds: string[] = [];
             for (const raw of out.raw) {
               const stored = actx.vault.ingest({

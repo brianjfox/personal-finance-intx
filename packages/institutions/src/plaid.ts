@@ -187,7 +187,7 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
         throw new Error(`plaid ${opts.institution_id}: not connected -- run the Plaid connect flow from the Institutions page`);
       }
       const asOf = ctx.now.toISOString();
-      const lookback = opts.lookback_days ?? 30;
+      const lookback = opts.lookback_days ?? ctx.lookback_days ?? 30;
       const start = new Date(ctx.now.getTime() - lookback * 86_400_000).toISOString().slice(0, 10);
       const end = asOf.slice(0, 10);
 

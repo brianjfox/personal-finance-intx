@@ -152,24 +152,39 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
         );
       }
 
-      const lookback = opts.lookback_days ?? 30;
-      const dateFrom = new Date(ctx.now.getTime() - lookback * 86_400_000).toISOString().slice(0, 10);
+      const lookback = opts.lookback_days ?? ctx.lookback_days ?? 30;
+      const dayFrom = (days: number) => new Date(ctx.now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+      const dateFrom = dayFrom(lookback);
       const raw: Record<string, unknown> = { session };
       const accounts = [];
 
-      for (const uid of session.accounts) {
-        const details = await get<EbAccountDetails>(`/accounts/${uid}/details`, ctx.now);
-        const balResp = await get<{ balances: EbBalance[] }>(`/accounts/${uid}/balances`, ctx.now);
+      const fetchTxns = async (uid: string, from: string): Promise<EbTransaction[]> => {
         const txns: EbTransaction[] = [];
         let continuation: string | null = null;
         do {
           const page: { transactions: EbTransaction[]; continuation_key?: string | null } = await get(
-            `/accounts/${uid}/transactions?date_from=${dateFrom}${continuation !== null ? `&continuation_key=${encodeURIComponent(continuation)}` : ""}`,
+            `/accounts/${uid}/transactions?date_from=${from}${continuation !== null ? `&continuation_key=${encodeURIComponent(continuation)}` : ""}`,
             ctx.now,
           );
           txns.push(...page.transactions);
           continuation = page.continuation_key ?? null;
         } while (continuation !== null);
+        return txns;
+      };
+
+      for (const uid of session.accounts) {
+        const details = await get<EbAccountDetails>(`/accounts/${uid}/details`, ctx.now);
+        const balResp = await get<{ balances: EbBalance[] }>(`/accounts/${uid}/balances`, ctx.now);
+        let txns: EbTransaction[];
+        try {
+          txns = await fetchTxns(uid, dateFrom);
+        } catch (e) {
+          // ASPSPs cap transaction history (often 90-180 days) and some
+          // refuse a deeper date_from outright. A widened backfill window
+          // must not cost the fetch: fall back to the default window.
+          if (lookback <= 30) throw e;
+          txns = await fetchTxns(uid, dayFrom(30));
+        }
         raw[uid] = { details, balances: balResp.balances, transactions: txns };
 
         const type = mapCashAccountType(details.cash_account_type);

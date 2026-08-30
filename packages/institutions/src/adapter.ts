@@ -24,6 +24,13 @@ export type DraftSnapshot = Omit<Snapshot, "raw_document_ids">;
 
 export interface FetchContext {
   now: Date;
+  /**
+   * Transaction window override, days back from now. The host widens it
+   * (to a year) when the ledger holds under a month of history for the
+   * institution, so the first fetches paint a real cash-flow picture.
+   * An explicit registry `lookback_days` option still wins.
+   */
+  lookback_days?: number;
   /** Read-only secret for API adapters (Phase 2+). File adapters ignore it. */
   secret?: (name: string) => Promise<string>;
 }
