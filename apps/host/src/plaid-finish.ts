@@ -16,7 +16,7 @@ export const PLAID_FINISH_URI = `http://localhost:${PLAID_FINISH_PORT}/plaid/don
 const DONE_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Connected</title>
 <style>body{font-family:-apple-system,sans-serif;background:#0f2233;color:#e8eef2;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
 main{text-align:center}h1{font-size:1.6em}p{color:#9db4c0}</style></head>
-<body><main><h1>✅ You're connected</h1><p>Financial Interchange is fetching your accounts.<br>You can close this tab and go back to the app.</p></main></body></html>`;
+<body><main><h1>✅ You're connected</h1><p>Corbits Personal Finance is fetching your accounts.<br>You can close this tab and go back to the app.</p></main></body></html>`;
 
 const subscribers = new Set<() => void>();
 let server: ReturnType<typeof Bun.serve> | null = null;

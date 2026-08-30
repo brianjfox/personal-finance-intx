@@ -18,7 +18,7 @@ export interface UiSettings {
 }
 
 export const UI_DEFAULTS: UiSettings = {
-  theme: "dark",
+  theme: "auto",
   fontSize: 14,
   light: { background: null, foreground: null },
   dark: { background: null, foreground: null },
@@ -37,7 +37,7 @@ export function loadUiSettings(): UiSettings {
     if (raw === null) return { ...UI_DEFAULTS };
     const p = JSON.parse(raw) as Partial<UiSettings> & { background?: unknown; foreground?: unknown };
     const s: UiSettings = {
-      theme: p.theme === "light" || p.theme === "auto" ? p.theme : "dark",
+      theme: p.theme === "light" || p.theme === "dark" || p.theme === "auto" ? p.theme : UI_DEFAULTS.theme,
       fontSize: typeof p.fontSize === "number" && p.fontSize >= 11 && p.fontSize <= 20 ? p.fontSize : 14,
       light: colorsOf(p.light),
       dark: colorsOf(p.dark),

@@ -139,7 +139,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
   };
   return (
     <div style={{ maxWidth: 460, margin: "80px auto" }}>
-      <h2>Who's using Financial Interchange?</h2>
+      <h2>Who's using Corbits Personal Finance?</h2>
       <p className="small muted">
         Each person signs in with their own password and sees only their own ledger, documents, agents, and keys — all
         on this Mac, in a store encrypted with that password (AES-256). Signing out locks it. There is no recovery: a
@@ -309,7 +309,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <header className="topbar">
         <div className="tb-left">
-          <span className="tb-brand"><LogoMark /> Financial Interchange</span>
+          <span className="tb-brand"><LogoMark /> Corbits Personal Finance</span>
           <span className="tb-divider" />
           <span className="tb-networth">
             <span className="lbl">Net Worth</span>
@@ -1939,7 +1939,7 @@ function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }
               doesn't always show an Allow dialog for helper processes. One-time fix:
               <ol className="small" style={{ margin: "6px 0 6px 18px" }}>
                 <li>Open the privacy settings (button below — lands on Full Disk Access).</li>
-                <li>Click <b>+</b>, add <b>Financial Interchange</b> from Applications, and switch it on.</li>
+                <li>Click <b>+</b>, add <b>Corbits Personal Finance</b> from Applications, and switch it on.</li>
                 <li>Come back and hit Try again (if it still refuses, quit and reopen this app once).</li>
               </ol>
               <div className="actions">

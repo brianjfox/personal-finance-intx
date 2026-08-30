@@ -288,12 +288,9 @@ export function Icon({ name, size, className }: { name: string; size?: number; c
   );
 }
 
-/** The product mark from the design's top bar: an isometric cube. */
-export function LogoMark({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 2L2 7V17L12 22L22 17V7L12 2Z" stroke="#9ca3af" strokeWidth="1.5" />
-      <path d="M12 22V12M12 12L2 7M12 12L22 7" stroke="#9ca3af" strokeWidth="1.5" />
-    </svg>
-  );
+import { CORBITS_LOGO } from "./logo";
+
+/** The product mark: the Corbits mountain. */
+export function LogoMark({ size = 26 }: { size?: number }) {
+  return <img src={CORBITS_LOGO} width={size} height={size} style={{ objectFit: "contain", display: "block" }} alt="" aria-hidden="true" />;
 }
