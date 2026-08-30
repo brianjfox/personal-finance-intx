@@ -11,6 +11,10 @@ import { api, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, se
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
+import tauriConf from "../src-tauri/tauri.conf.json";
+
+/** The product version: tauri.conf.json is the single source of truth (it stamps the bundle too). */
+const APP_VERSION: string = tauriConf.version;
 
 type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents" | "settings";
 
@@ -231,6 +235,24 @@ export function App() {
   return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} onRenamed={gate.renameLocal ?? (() => {})} />;
 }
 
+/** The About popup: the mark, the name, and the version. */
+function AboutModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <LogoMark size={72} />
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--strong)", textTransform: "none", letterSpacing: 0 }}>Corbits Personal Finance</h3>
+        <span className="pill info">Version {APP_VERSION}</span>
+        <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
+          A local-first household finance console. Your ledger, documents, and keys live on this Mac — and every figure
+          links back to dated evidence.
+        </p>
+        <button className="secondary" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 /** The sidebar's entries: page id, label, icon. */
 const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
   ["dashboard", "Dashboard", "squares-four"],
@@ -296,6 +318,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     user !== null
       ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
       : "ME";
+  const [showAbout, setShowAbout] = useState(false);
   // The privacy veil: masks every rendered financial figure with *s.
   const [masked, setMaskedState] = useState(isMasked());
   const toggleMask = () => {
@@ -309,7 +332,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     <div className={`app${navCollapsed ? " nav-collapsed" : ""}`}>
       <header className="topbar">
         <div className="tb-left">
-          <span className="tb-brand"><LogoMark /> Corbits Personal Finance</span>
+          <span className="tb-brand click" role="button" title="About Corbits Personal Finance" onClick={() => setShowAbout(true)}><LogoMark /> Corbits Personal Finance</span>
           <span className="tb-divider" />
           <span className="tb-networth">
             <span className="lbl">Net Worth</span>
@@ -386,6 +409,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
         </main>
       </div>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </div>
   );
 }
