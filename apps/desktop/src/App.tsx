@@ -330,7 +330,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
           <span className="tb-avatar" title={user?.name ?? "You"}>{initials}</span>
           <button
             className="iconbtn"
-            title={queue.length > 0 ? `${queue.length} item${queue.length === 1 ? "" : "s"} need${queue.length === 1 ? "s" : ""} you` : "Nothing needs you"}
+            title={queue.length > 0 ? `${queue.length} item${queue.length === 1 ? "" : "s"} require${queue.length === 1 ? "s" : ""} your attention` : "Nothing requires your attention"}
             onClick={() => setPage("queue")}
           >
             <Icon name="bell" />
@@ -3241,7 +3241,7 @@ function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () 
       {tab === "exceptions" && (
         <>
           {items.length === 0 ? (
-            <p className="muted">Nothing needs you. Every account reconciled clean.</p>
+            <p className="muted">Nothing requires your attention. Every account reconciled clean.</p>
           ) : (
             <>
               <div className="section-label" style={{ marginTop: 0 }}><Icon name="warning-circle" /> Conflict Resolution Required</div>
