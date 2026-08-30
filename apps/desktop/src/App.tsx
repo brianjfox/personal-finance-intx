@@ -2810,6 +2810,9 @@ function chopMiddle(name: string): string {
   return name.length > 70 ? `${name.slice(0, 32)}...${name.slice(-32)}` : name;
 }
 
+/** The yield slider's ceiling, %/yr. */
+const YIELD_MAX = 15;
+
 /** Scenario growth rates for the horizon modeler: a client-side projection, not advice. */
 const SCENARIOS: ReadonlyArray<readonly [string, string, number]> = [
   ["conservative", "Conservative", 0.03],
@@ -2830,8 +2833,9 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
   const [cf, setCf] = useState<import("./api").CashFlowView | null>(null);
   const [sort, setSort] = useState<{ key: AccountSortKey; dir: 1 | -1 } | null>(null);
   const [tab, setTab] = useState<"accounts" | "positions">("accounts");
-  const [scenario, setScenario] = useState("conservative");
   const [horizonPct, setHorizonPct] = useState(30);
+  // %/yr for the projection: the scenario presets set it, the slider frees it.
+  const [yieldPct, setYieldPct] = useState(3);
   useEffect(() => {
     api.netWorth().then(setNw).catch(() => setNw(null));
     api.cashFlow(12).then(setCf).catch(() => setCf(null));
@@ -2872,7 +2876,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
     }
     return String(Math.round(total * 100) / 100);
   };
-  const rate = SCENARIOS.find(([id]) => id === scenario)?.[2] ?? 0.03;
+  const rate = yieldPct / 100;
   const year0 = new Date().getFullYear();
   const span = 10;
   const targetYear = Math.round(year0 + (horizonPct / 100) * span);
@@ -2943,16 +2947,17 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
             <span className="icon-tile"><Icon name="sparkle" /></span>
             <span>
               Yield Horizon Modeler
-              <div className="panel-sub">Drag the handle to shift your target year and recalculate the projection. A what-if, not advice.</div>
+              <div className="panel-sub">Drag the handles to shift your target year and expected yield; the projection recalculates. A what-if, not advice.</div>
             </span>
           </div>
           <div className="seg">
-            {SCENARIOS.map(([id, label]) => (
-              <button key={id} className={scenario === id ? "on" : ""} onClick={() => setScenario(id)}>{label}</button>
+            {SCENARIOS.map(([id, label, r]) => (
+              <button key={id} className={yieldPct === r * 100 ? "on" : ""} onClick={() => setYieldPct(r * 100)}>{label}</button>
             ))}
           </div>
         </div>
         <div className="slider-row">
+          <span className="sl-name">Horizon</span>
           <span className="yr">{year0}</span>
           <div className="hslider">
             <div className="track" />
@@ -2962,10 +2967,21 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
           </div>
           <span className="yr right">{year0 + span}</span>
         </div>
+        <div className="slider-row">
+          <span className="sl-name">Yield / yr</span>
+          <span className="yr">0%</span>
+          <div className="hslider">
+            <div className="track" />
+            <div className="fill" style={{ width: `${(yieldPct / YIELD_MAX) * 100}%` }} />
+            <input type="range" min="0" max={YIELD_MAX} step="0.25" value={yieldPct} onChange={(e) => setYieldPct(Number(e.target.value))} />
+            <div className="knob" style={{ left: `${(yieldPct / YIELD_MAX) * 100}%` }} />
+          </div>
+          <span className="yr right">{YIELD_MAX}%</span>
+        </div>
         <div className="horizon-meta">
           <span className="small muted">Target horizon</span>
           <span className="num" style={{ fontWeight: 600, color: "var(--strong)" }}>
-            {targetYear} · +{compactMoney(projectedGain)} projected at {(rate * 100).toFixed(0)}%/yr
+            {targetYear} · +{compactMoney(projectedGain)} projected at {yieldPct % 1 === 0 ? yieldPct : yieldPct.toFixed(2)}%/yr
           </span>
         </div>
         <div className="chartbox">

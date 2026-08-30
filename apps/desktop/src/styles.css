@@ -294,6 +294,7 @@ pre { margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--t2); }
 .slider-row { display: flex; align-items: center; gap: 12px; padding: 0 8px; margin: 12px 0 4px; }
 .slider-row .yr { font-size: 11px; color: var(--t3); font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; width: 40px; }
 .slider-row .yr.right { text-align: right; }
+.slider-row .sl-name { width: 64px; flex: none; font-size: 10px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.1em; }
 .hslider { position: relative; flex: 1; height: 32px; display: flex; align-items: center; }
 .hslider .track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 4px; border-radius: 999px; background: var(--n700); }
 .hslider .fill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 4px; border-radius: 999px; background: var(--green); }
