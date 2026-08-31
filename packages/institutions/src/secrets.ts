@@ -2,12 +2,16 @@
 // deliberately holds no credentials; connector adapters resolve theirs
 // through a SecretStore at fetch time. The default store looks in the
 // process environment first (FIN_SECRET_<service>_<account>, uppercased,
-// non-alphanumerics -> _), then in the macOS login Keychain
-// (`security find-generic-password -s <service> -a <account> -w`) --
-// the same pattern the Anthropic key uses (docs/PACKAGING.md). Tests and
-// the GUI connect flows inject their own stores.
+// non-alphanumerics -> _), then in the OS credential store: the macOS
+// login Keychain (`security find-generic-password -s <service> -a
+// <account> -w`, the same pattern the Anthropic key uses --
+// docs/PACKAGING.md) or, on Windows, the Credential Manager stores in
+// secrets-windows.ts. Tests and the GUI connect flows inject their own
+// stores.
 
 import { spawnSync } from "node:child_process";
+
+import { windowsSecretStore, type WindowsSecretStoreOpts } from "./secrets-windows";
 
 export interface SecretStore {
   /** Returns the secret, or null when absent. Must not throw for a missing secret. */
@@ -16,6 +20,8 @@ export interface SecretStore {
   set?(service: string, account: string, value: string): void;
   /** Remove a stored secret; returns whether one existed. Optional: read-only stores omit it. */
   delete?(service: string, account: string): boolean;
+  /** List stored `service/account` names matching a glob (`fin-*`, the delete-all-data sweep). Optional: only stores that can enumerate implement it. */
+  enumerate?(pattern: string): string[];
 }
 
 export function envKeyFor(service: string, account: string): string {
@@ -88,20 +94,35 @@ export function keychainSecretStore(): SecretStore {
   };
 }
 
-/** Environment first (explicit wins), then the Keychain. Writes go to the Keychain. */
+// The Windows store probes PowerShell once to pick W1/W2 (see
+// secrets-windows.ts), so it is built once per process, not per
+// adapter -- defaultSecretStore() is called by every connector.
+let winStore: SecretStore | undefined;
+
+/** The OS-native store for a platform: darwin -> Keychain, win32 -> Credential Manager (with the DPAPI fallback). Passing opts (tests) bypasses the process-wide memo. */
+export function platformSecretStore(platform: NodeJS.Platform = process.platform, opts?: WindowsSecretStoreOpts): SecretStore {
+  if (platform === "win32") {
+    if (opts !== undefined) return windowsSecretStore(opts);
+    return (winStore ??= windowsSecretStore());
+  }
+  return keychainSecretStore();
+}
+
+/** Environment first (explicit wins), then the OS store. Writes go to the OS store. */
 export function defaultSecretStore(): SecretStore {
   const env = envSecretStore();
-  const chain = keychainSecretStore();
+  const store = platformSecretStore();
   return {
     get(service, account) {
-      return env.get(service, account) ?? chain.get(service, account);
+      return env.get(service, account) ?? store.get(service, account);
     },
     set(service, account, value) {
-      chain.set?.(service, account, value);
+      store.set?.(service, account, value);
     },
     delete(service, account) {
-      return chain.delete?.(service, account) ?? false;
+      return store.delete?.(service, account) ?? false;
     },
+    ...(store.enumerate !== undefined ? { enumerate: (pattern: string) => store.enumerate!(pattern) } : {}),
   };
 }
 
