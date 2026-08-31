@@ -39,6 +39,10 @@ function defaultDataDir(): string {
   const env = process.env["FIN_DATA_DIR"];
   if (env !== undefined && env !== "") return env;
   if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "FinInterchange");
+  if (process.platform === "win32") {
+    const appData = process.env["APPDATA"] ?? path.join(os.homedir(), "AppData", "Roaming");
+    return path.join(appData, "CorbitsPersonalFinance");
+  }
   return path.join(os.homedir(), ".fin-interchange");
 }
 

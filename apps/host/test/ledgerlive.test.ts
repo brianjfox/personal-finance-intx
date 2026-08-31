@@ -82,7 +82,8 @@ describe("ledger live import", () => {
   }, 10_000);
 });
 
-describe("permission refusals", () => {
+// The TCC walk-through is macOS-only; off-darwin a refusal is a plain file error.
+describe.skipIf(process.platform !== "darwin")("permission refusals", () => {
   test("an unreadable file is reported as macOS's doing, machine-readably", async () => {
     const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fin-ll-")), "app.json");
     fs.writeFileSync(f, "{}");

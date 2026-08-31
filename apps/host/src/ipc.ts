@@ -145,7 +145,8 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
       try {
         // User plumbing first: these must work before any user exists.
         if (p === "/api/health") {
-          return json({ ok: true, dataDir: opts.users?.rootDir ?? opts.app!.dataDir, now: new Date().toISOString() });
+          // platform lets the GUI word its copy truthfully before anyone signs in.
+          return json({ ok: true, dataDir: opts.users?.rootDir ?? opts.app!.dataDir, platform: process.platform, now: new Date().toISOString() });
         }
         if (p === "/api/users" && req.method === "GET") {
           return json({ multi_user: opts.users !== undefined, users: opts.users?.list() ?? [] });
@@ -282,8 +283,14 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/open" && req.method === "POST") {
           const body = OpenBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-          const proc = Bun.spawn([cmd, body.url], { stdout: "ignore", stderr: "ignore" });
+          if (body.url.startsWith("x-apple.systempreferences:") && process.platform !== "darwin") {
+            return json({ error: "that link opens macOS System Settings, which this machine doesn't have" }, 400);
+          }
+          const argv =
+            process.platform === "darwin" ? ["open", body.url]
+            : process.platform === "win32" ? ["cmd", "/c", "start", "", body.url]
+            : ["xdg-open", body.url];
+          const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
           return json({ opened: (await proc.exited) === 0 });
         }
         if (p === "/api/connect/plaid/start" && req.method === "POST") {

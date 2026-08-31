@@ -20,7 +20,10 @@ import { detectWalletHolding, scaleDown, type WalletKind } from "@fin/institutio
  * both, preferring whichever actually holds an app.json.
  */
 export function defaultLedgerLivePath(): string {
-  const base = path.join(os.homedir(), "Library", "Application Support");
+  const base =
+    process.platform === "win32"
+      ? (process.env["APPDATA"] ?? path.join(os.homedir(), "AppData", "Roaming"))
+      : path.join(os.homedir(), "Library", "Application Support");
   for (const dir of ["Ledger Wallet", "Ledger Live"]) {
     const f = path.join(base, dir, "app.json");
     if (fs.existsSync(f)) return f;
@@ -69,7 +72,7 @@ export interface LedgerLiveImport {
 
 export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Promise<LedgerLiveImport> {
   if (!fs.existsSync(file)) {
-    return { found: false, file, accounts: [], error: "the Ledger app (Ledger Wallet / Ledger Live) doesn't appear to be installed on this Mac" };
+    return { found: false, file, accounts: [], error: `the Ledger app (Ledger Wallet / Ledger Live) doesn't appear to be installed on this ${process.platform === "darwin" ? "Mac" : "machine"}` };
   }
   // The Ledger app rewrites app.json frequently and not atomically, so a
   // read can catch it mid-write -- and during an active sync the writes
@@ -99,7 +102,9 @@ export async function readLedgerLiveAccounts(file = defaultLedgerLivePath()): Pr
   if (parsed === null) {
     const detail = lastError instanceof Error ? lastError.message : String(lastError);
     const code = (lastError as { code?: string } | null)?.code;
-    if (code === "EPERM" || code === "EACCES") {
+    // The TCC walk-through (Full Disk Access) is a macOS concept; on other
+    // platforms a refusal is an ordinary file error, reported plainly below.
+    if ((code === "EPERM" || code === "EACCES") && process.platform === "darwin") {
       return {
         found: true,
         file,
