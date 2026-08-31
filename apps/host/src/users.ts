@@ -20,10 +20,10 @@ import { defaultSecretStore, scopedSecretStore, type SecretStore } from "@fin/in
 import { type } from "arktype";
 
 import { createApp, type App, type AppOptions } from "./app";
-import { defaultStoreCrypt } from "./crypt";
+import { defaultStoreCrypt, type AtRestCapability, type StoreCrypt } from "./crypt";
 
 // One per process: the win32 BitLocker probe runs at most once.
-const crypt = defaultStoreCrypt();
+const processCrypt = defaultStoreCrypt();
 
 const PasswordRecord = type({ salt: "string", hash: "string", n: "number", r: "number", p: "number" });
 
@@ -40,9 +40,13 @@ export const UserInfo = type({
 });
 export type UserInfo = typeof UserInfo.infer;
 
-/** What leaves the host about a user: never the password record. */
-export interface PublicUser { id: string; name: string; created_at: string; password_set: boolean; encrypted: boolean }
-const publicUser = (u: UserInfo): PublicUser => ({ id: u.id, name: u.name, created_at: u.created_at, password_set: u.password !== undefined, encrypted: u.encrypted === true });
+/**
+ * What leaves the host about a user: never the password record.
+ * `encrypted` is the at-rest truth for the machine this host runs on:
+ * "volume" (a per-user AES-256 store this app manages), "os-disk"
+ * (whole-disk encryption like BitLocker), or "none" (plaintext).
+ */
+export interface PublicUser { id: string; name: string; created_at: string; password_set: boolean; encrypted: AtRestCapability }
 
 const SCRYPT = { n: 16384, r: 8, p: 1 } as const;
 function hashPassword(password: string): typeof PasswordRecord.infer {
@@ -119,7 +123,7 @@ export function resolveSingleUserDir(root: string): string {
   const first = file?.users[0];
   if (first === undefined) return root;
   const dir = userDir(root, first.id);
-  if (first.encrypted === true && !crypt.isMounted(dir)) {
+  if (first.encrypted === true && !processCrypt.isMounted(dir)) {
     throw new Error(`${first.name}'s data is encrypted and locked -- open the app and sign in first, then run this again`);
   }
   return dir;
@@ -131,6 +135,8 @@ export interface UserManagerOptions {
   secrets?: SecretStore;
   /** Extra options threaded into every user's App (tests: pollMs, adapters...). */
   appOptions?: Partial<Omit<AppOptions, "dataDir" | "connectors">>;
+  /** At-rest seam (tests script the platform probe); defaults to the process-wide platform pick. */
+  crypt?: StoreCrypt;
   clock?: () => Date;
 }
 
@@ -161,6 +167,7 @@ export interface UserManager {
 export function createUserManager(opts: UserManagerOptions): UserManager {
   const root = opts.rootDir;
   const clock = opts.clock ?? (() => new Date());
+  const crypt = opts.crypt ?? processCrypt;
   const base = opts.secrets ?? defaultSecretStore();
   let file = loadUsers(root, clock);
   const apps = new Map<string, App>();
@@ -170,6 +177,10 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
   const SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
   const findUser = (idOrName: string): UserInfo | undefined =>
     file.users.find((u) => u.id === idOrName) ?? file.users.find((u) => u.name.toLowerCase() === idOrName.trim().toLowerCase());
+  /** The at-rest truth for one user: on volume platforms, "volume" iff their store exists; elsewhere the disk probe verbatim. */
+  const atRest = (u: UserInfo): AtRestCapability =>
+    crypt.capability() === "volume" ? (crypt.storeExists(root, u.id) ? "volume" : "none") : crypt.capability();
+  const publicUser = (u: UserInfo): PublicUser => ({ id: u.id, name: u.name, created_at: u.created_at, password_set: u.password !== undefined, encrypted: atRest(u) });
   const markEncrypted = (id: string): UserInfo => {
     file = { ...file, users: file.users.map((x) => (x.id === id ? { ...x, encrypted: true } : x)) };
     writeUsersFile(root, file);

@@ -173,7 +173,8 @@ function handleUnauthorized(status: number): void {
   }
 }
 
-export interface UserInfo { id: string; name: string; created_at: string; password_set: boolean; encrypted: boolean }
+/** `encrypted` is the machine's at-rest truth: "volume" (per-user AES-256 store), "os-disk" (BitLocker), or "none". */
+export interface UserInfo { id: string; name: string; created_at: string; password_set: boolean; encrypted: "volume" | "os-disk" | "none" }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: userHeaders() });

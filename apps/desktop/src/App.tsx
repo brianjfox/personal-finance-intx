@@ -159,7 +159,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
               setError(null);
             }}
           >
-            {u.encrypted ? "🔒" : "👤"} {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
+            {u.encrypted !== "none" ? "🔒" : "👤"} {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
           </button>
         </p>
       ))}

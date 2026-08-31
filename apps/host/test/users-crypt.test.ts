@@ -24,7 +24,7 @@ describe.if(darwin)("encrypted user stores", () => {
     try {
       users.add("Alice", "alice-pw");
       expect(fs.existsSync(storeImagePath(root, "alice"))).toBe(true);
-      expect(users.list()[0]?.encrypted).toBe(true);
+      expect(users.list()[0]?.encrypted).toBe("volume");
 
       const sess = users.login("alice", "alice-pw");
       expect(sess).not.toBeNull();
@@ -63,9 +63,9 @@ describe.if(darwin)("encrypted user stores", () => {
 
     const users = createUserManager({ rootDir: root, secrets: memorySecretStore() });
     try {
-      expect(users.list()[0]?.encrypted).toBe(false);
+      expect(users.list()[0]?.encrypted).toBe("none");
       users.setPassword("primary", "first-pw");
-      expect(users.list()[0]?.encrypted).toBe(true);
+      expect(users.list()[0]?.encrypted).toBe("volume");
       expect(fs.existsSync(storeImagePath(root, "primary"))).toBe(true);
       // The plaintext staging dir is gone; the data lives inside the volume.
       expect(fs.existsSync(`${userDir(root, "primary")}.migrating`)).toBe(false);
