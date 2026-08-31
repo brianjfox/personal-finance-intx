@@ -276,7 +276,9 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
       });
 
       const draft = validateDraftSnapshot(
-        { institution_id: opts.institution_id, fetched_at: asOf, via: PLAID_VIA, accounts },
+        // Plaid enumerates the item's full account list: an open ledger
+        // account this feed stops reporting has genuinely gone away.
+        { institution_id: opts.institution_id, fetched_at: asOf, via: PLAID_VIA, accounts, complete: true },
         `plaid ${opts.institution_id}`,
       );
       const rawBody = JSON.stringify(

@@ -14,6 +14,8 @@
 
 import {
   decimal,
+  sameRealAccount,
+  type AccountPayload,
   type FactInput,
   type FetchFailure,
   type FetchResult,
@@ -44,6 +46,8 @@ export interface NormalizeAccount {
   fetched_at: string;
   /** True when the ledger had no account fact for this id before tonight. */
   is_new: boolean;
+  /** The provider id this account arrived under when a relink minted a new one; facts were re-homed to the known subject. */
+  remapped_from?: string;
   /** Refs of this account's balance facts, position facts, etc. */
   refs: { account: string; balances: string[]; positions: string[]; lots: string[]; transactions: string[]; tax_documents: string[] };
   source_doc_id: string | null;
@@ -67,6 +71,8 @@ export interface NormalizeOutput {
   accounts: NormalizeAccount[];
   failures: FetchFailure[];
   transfers: TransferPair[];
+  /** Open accounts a complete feed stopped reporting; each got a closing fact. */
+  closed: Array<{ institution_id: string; account_id: string; ref: string }>;
   stats: { snapshots: number; accounts: number; facts: number; transactions_new: number; transactions_known: number };
 }
 
@@ -101,13 +107,41 @@ export function normalize(input: NormalizeInput, ledger: Ledger, thresholds: Thr
 
   // Deterministic ordering: institutions by id, accounts by id (adapters already sort).
   const snapshots = [...input.snapshots].sort((a, b) => a.institution_id.localeCompare(b.institution_id));
+  const closed: NormalizeOutput["closed"] = [];
 
   for (const snap of snapshots) {
-    for (const acct of snap.accounts) {
+    const resolved = resolveAccountIdentities(snap, ledger, push);
+    for (const { acct, remappedFrom } of resolved) {
       accounts.push(normalizeAccount(snap, acct, ledger, push, (n) => {
         txNew += n.added;
         txKnown += n.known;
-      }));
+      }, remappedFrom));
+    }
+    // A complete feed that stops reporting an open account is telling us
+    // the account no longer exists there: close it, the way positions the
+    // institution stopped reporting get a zero-quantity close. Should it
+    // ever reappear, its next account fact reopens it.
+    if (snap.complete === true) {
+      const reported = new Set(resolved.map((r) => r.acct.account_id));
+      for (const f of ledger.asOf({ kind: "account" })) {
+        const p = f.payload as AccountPayload;
+        if (p.institution_id !== snap.institution_id || reported.has(f.subject)) continue;
+        if ((p.closed_at ?? null) !== null || (p.merged_into ?? null) !== null) continue;
+        const ref = push({
+          subject: f.subject,
+          kind: "account",
+          key: "account",
+          writer: "assets_manager",
+          observed_at: snap.fetched_at,
+          effective_at: snap.fetched_at,
+          source_id: snap.institution_id,
+          source_doc_id: snap.raw_document_ids[0] ?? null,
+          supersedes: f.id,
+          provisional: false,
+          payload: { ...p, closed_at: snap.fetched_at.slice(0, 10) },
+        });
+        closed.push({ institution_id: snap.institution_id, account_id: f.subject, ref });
+      }
     }
   }
 
@@ -119,6 +153,7 @@ export function normalize(input: NormalizeInput, ledger: Ledger, thresholds: Thr
     accounts,
     failures: input.failures,
     transfers,
+    closed,
     stats: {
       snapshots: snapshots.length,
       accounts: accounts.length,
@@ -129,12 +164,97 @@ export function normalize(input: NormalizeInput, ledger: Ledger, thresholds: Thr
   };
 }
 
+/**
+ * Resolve tonight's provider account ids to the ledger's subjects. A
+ * relink mints a brand-new provider id for the same real account
+ * (Plaid's account_id is item-scoped; Enable Banking's uid is
+ * session-scoped), so an id the ledger has never seen is first chased
+ * through `merged_into` markers, then identity-matched (mask/type, or
+ * name/currency) against the institution's open accounts. A match
+ * re-homes the whole snapshot account onto the known subject -- history,
+ * balances and transactions stay continuous -- and leaves a closed alias
+ * fact under the new provider id so every later fetch resolves exactly.
+ */
+function resolveAccountIdentities(
+  snap: InstitutionSnapshot,
+  ledger: Ledger,
+  push: (fact: FactInput, prior?: string | null) => string,
+): Array<{ acct: SnapshotAccount; remappedFrom: string | null }> {
+  const incoming = new Set(snap.accounts.map((a) => a.account_id));
+  const known = new Map<string, StoredFact>();
+  for (const f of ledger.asOf({ kind: "account" })) {
+    if ((f.payload as AccountPayload).institution_id === snap.institution_id) known.set(f.subject, f);
+  }
+  const claimed = new Set<string>();
+  const sorted = [...snap.accounts].sort((a, b) => a.account_id.localeCompare(b.account_id));
+  return sorted.map((acct) => {
+    const prior = known.get(acct.account_id);
+    if (prior !== undefined) {
+      // Known subject; follow merge markers to the surviving account.
+      let target: string | null = null;
+      let cur = prior;
+      for (let hops = 0; hops < 8; hops += 1) {
+        const next = (cur.payload as AccountPayload).merged_into ?? null;
+        if (next === null || next === acct.account_id) break;
+        target = next;
+        const nf = known.get(next);
+        if (nf === undefined || nf === cur) break;
+        cur = nf;
+      }
+      if (target === null || claimed.has(target)) return { acct, remappedFrom: null };
+      claimed.add(target);
+      return { acct: { ...acct, account_id: target }, remappedFrom: acct.account_id };
+    }
+    // Never-seen provider id: does it describe an account we already hold?
+    const match = [...known.values()]
+      .filter((f) => {
+        const p = f.payload as AccountPayload;
+        return (
+          (p.closed_at ?? null) === null &&
+          (p.merged_into ?? null) === null &&
+          !incoming.has(f.subject) &&
+          !claimed.has(f.subject) &&
+          sameRealAccount(p, acct)
+        );
+      })
+      .sort((a, b) => a.subject.localeCompare(b.subject))[0];
+    if (match === undefined) return { acct, remappedFrom: null };
+    claimed.add(match.subject);
+    // Alias: the new provider id resolves here from now on, and never
+    // counts as an account of its own.
+    push({
+      subject: acct.account_id,
+      kind: "account",
+      key: "account",
+      writer: "assets_manager",
+      observed_at: snap.fetched_at,
+      effective_at: snap.fetched_at,
+      source_id: snap.institution_id,
+      source_doc_id: snap.raw_document_ids[0] ?? null,
+      supersedes: null,
+      provisional: false,
+      payload: {
+        account_id: acct.account_id,
+        institution_id: snap.institution_id,
+        name: acct.name,
+        type: acct.type,
+        currency: acct.currency,
+        masked_number: acct.masked_number ?? null,
+        closed_at: snap.fetched_at.slice(0, 10),
+        merged_into: match.subject,
+      },
+    });
+    return { acct: { ...acct, account_id: match.subject }, remappedFrom: acct.account_id };
+  });
+}
+
 function normalizeAccount(
   snap: InstitutionSnapshot,
   acct: SnapshotAccount,
   ledger: Ledger,
   push: (fact: FactInput, prior?: string | null) => string,
   countTx: (n: { added: number; known: number }) => void,
+  remappedFrom: string | null = null,
 ): NormalizeAccount {
   const observed = snap.fetched_at;
   const effective = acct.as_of;
@@ -244,6 +364,19 @@ function normalizeAccount(
   let known = 0;
   const existing = new Map<string, StoredFact>();
   for (const f of ledger.asOf({ kind: "transaction", subject: acct.account_id })) existing.set(f.key, f);
+  // A relink re-observes the same movements under new provider txn ids.
+  // A tonight-id the ledger has never seen still counts as known when an
+  // existing transaction (under some other id, not also reported tonight)
+  // has the same content; the multiset count keeps two genuinely
+  // identical purchases from absorbing each other.
+  const incomingIds = new Set((acct.transactions ?? []).map((t) => t.txn_id));
+  const bySig = new Map<string, number>();
+  for (const f of existing.values()) {
+    const p = f.payload as TransactionPayload;
+    if (p.voided === true || incomingIds.has(f.key)) continue;
+    const s = contentSignature(p);
+    bySig.set(s, (bySig.get(s) ?? 0) + 1);
+  }
   for (const t of acct.transactions ?? []) {
     const payload: TransactionPayload = {
       account_id: acct.account_id,
@@ -264,6 +397,15 @@ function normalizeAccount(
     if (prior !== undefined && samePayloadIgnoringClassification(prior.payload as TransactionPayload, payload)) {
       known += 1;
       continue;
+    }
+    if (prior === undefined) {
+      const s = contentSignature(payload);
+      const have = bySig.get(s) ?? 0;
+      if (have > 0) {
+        bySig.set(s, have - 1);
+        known += 1;
+        continue;
+      }
     }
     added += 1;
     transactionRefs.push(
@@ -336,6 +478,7 @@ function normalizeAccount(
     as_of: acct.as_of,
     fetched_at: snap.fetched_at,
     is_new: priorAccount === null,
+    ...(remappedFrom !== null ? { remapped_from: remappedFrom } : {}),
     refs: {
       account: accountRef,
       balances: balanceRefs,
@@ -350,6 +493,12 @@ function normalizeAccount(
 
 export function positionKey(symbol: string): string {
   return symbol.trim().toUpperCase();
+}
+
+/** What makes a movement "the same one" across provider txn ids: day, amount, description, instrument. */
+export function contentSignature(p: Pick<TransactionPayload, "posted_at" | "amount" | "description"> & { instrument?: TransactionPayload["instrument"]; quantity?: TransactionPayload["quantity"] }): string {
+  const desc = p.description.toLowerCase().replace(/\s+/g, " ").trim();
+  return `${p.posted_at.slice(0, 10)}|${p.amount}|${desc}|${p.instrument?.symbol ?? ""}|${p.quantity ?? ""}`;
 }
 
 function samePayloadIgnoringClassification(a: TransactionPayload, b: TransactionPayload): boolean {
@@ -392,6 +541,7 @@ function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Th
   const proposedKeys = new Set(legs.map((l) => `${l.account}|${l.payload.txn_id}`));
   for (const f of ledger.asOf({ kind: "transaction" })) {
     const p = f.payload as TransactionPayload;
+    if (p.voided === true) continue; // a void is not a movement
     if (proposedKeys.has(`${p.account_id}|${p.txn_id}`)) continue;
     if (p.transfer_group !== null && p.transfer_group !== undefined) continue; // already paired
     legs.push({ ref: null, id: f.id, account: p.account_id, amount: p.amount, posted: Date.parse(p.posted_at), type: p.type, payload: p });
