@@ -47,6 +47,7 @@ export function openCommand(platform: string, url: string): string[] {
 
 const LanBody = type({ enabled: "boolean" });
 const AccountIgnoreBody = type({ account_id: "string > 0", ignored: "boolean" });
+const ReorderBody = type({ order: "string[]" });
 
 const ResolveBody = type({
   decision: ResolutionDecision,
@@ -273,6 +274,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/batches") return json(app.ledger.listBatches());
         if (p === "/api/institutions" && req.method === "GET") return json(app.institutions().entries);
         if (p === "/api/institutions-overview") return json(app.institutionsOverview());
+        if (p === "/api/institutions/reorder" && req.method === "POST") {
+          const body = ReorderBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json({ changed: app.reorderInstitutions(body.order) });
+        }
         if (p === "/api/account/ignore" && req.method === "POST") {
           const body = AccountIgnoreBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);

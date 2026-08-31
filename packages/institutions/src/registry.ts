@@ -115,6 +115,30 @@ export function renameInstitutionEntry(dataDir: string, institutionId: string, n
   return true;
 }
 
+/**
+ * Reorder entries: the ids listed take that relative order, occupying
+ * the slots those entries already held -- entries not listed keep their
+ * positions exactly (the GUI reorders one holdings tab at a time, and
+ * the other tabs' cards must not move). Unknown ids are ignored.
+ * Returns whether anything changed.
+ */
+export function reorderInstitutionEntries(dataDir: string, order: readonly string[]): boolean {
+  const file = path.join(dataDir, "institutions.json");
+  const reg = readRegistry(file);
+  const byId = new Map(reg.institutions.map((e) => [e.institution_id, e]));
+  const wanted = order.filter((id, i) => byId.has(id) && order.indexOf(id) === i);
+  if (wanted.length < 2) return false;
+  const listed = new Set(wanted);
+  const slots = reg.institutions.map((e, i) => (listed.has(e.institution_id) ? i : -1)).filter((i) => i >= 0);
+  const next = [...reg.institutions];
+  wanted.forEach((id, k) => {
+    next[slots[k] as number] = byId.get(id)!;
+  });
+  if (next.every((e, i) => e === reg.institutions[i])) return false;
+  writeRegistry(file, { institutions: next });
+  return true;
+}
+
 /** Merge fields into an entry's options (connector reconnects: new consent expiry, etc.). */
 export function updateInstitutionOptions(dataDir: string, institutionId: string, patch: Record<string, unknown>): boolean {
   const file = path.join(dataDir, "institutions.json");

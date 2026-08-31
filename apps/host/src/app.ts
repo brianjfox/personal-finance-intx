@@ -59,6 +59,7 @@ import {
   PLAID_SERVICE,
   removeInstitutionEntry,
   renameInstitutionEntry,
+  reorderInstitutionEntries,
   setInstitutionEnabled as setEnabledInRegistry,
   updateInstitutionOptions,
   type InstitutionAdapter,
@@ -200,6 +201,8 @@ export interface App {
   setAccountIgnored(accountId: string, ignored: boolean): void;
   /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
   renameInstitution(institutionId: string, name: string): boolean;
+  /** Put the listed institutions in that relative order (their slots only; unlisted entries stay put). */
+  reorderInstitutions(order: readonly string[]): boolean;
   /** Pause/resume a connection without losing its configuration or history. */
   setInstitutionEnabled(institutionId: string, enabled: boolean): boolean;
   /** Store an uploaded export file into the institution's inbox; call `refreshInstitution` after. */
@@ -846,6 +849,11 @@ export function createApp(opts: AppOptions): App {
       const trimmed = name.trim();
       if (trimmed === "") throw new Error("give it a name");
       const ok = renameInstitutionEntry(dataDir, institutionId, trimmed);
+      if (ok) loaded = reloadRegistry();
+      return ok;
+    },
+    reorderInstitutions(order) {
+      const ok = reorderInstitutionEntries(dataDir, order);
       if (ok) loaded = reloadRegistry();
       return ok;
     },

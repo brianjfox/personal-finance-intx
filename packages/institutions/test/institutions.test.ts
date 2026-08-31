@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { csvDropAdapter, decodeKeychainValue, encodeKeychainValue, fixtureAdapter, jsonDropAdapter, loadInstitutions, parseCsv, parseMoney } from "../src/index";
+import { csvDropAdapter, decodeKeychainValue, encodeKeychainValue, fixtureAdapter, jsonDropAdapter, loadInstitutions, parseCsv, parseMoney, reorderInstitutionEntries } from "../src/index";
 
 const NOW = new Date("2026-08-23T06:00:00.000Z");
 const FIX = path.join(import.meta.dir, "fixtures");
@@ -88,6 +88,25 @@ describe("jsondrop adapter + registry", () => {
   test("fixture adapter validates the draft", async () => {
     const bad = fixtureAdapter("inst.demo", { accounts: [{ account_id: "acct.demo.x", name: "x", type: "checking", currency: "USD", as_of: "nope", balances: [] }] } as never);
     await expect(bad.fetch({ now: NOW })).rejects.toThrow(/violates contract/);
+  });
+});
+
+describe("registry reorder", () => {
+  test("listed ids take their relative order within their own slots; others stay put", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fin-reorder-"));
+    const entries = ["a", "b", "c", "d"].map((id) => ({ institution_id: `inst.${id}`, name: id.toUpperCase(), adapter: "jsondrop" }));
+    fs.writeFileSync(path.join(dataDir, "institutions.json"), JSON.stringify({ institutions: entries }));
+    const ids = () => loadInstitutions(dataDir).entries.map((e) => e.institution_id);
+    // Reorder a subset (one "tab"): c before a, b and d untouched in place.
+    expect(reorderInstitutionEntries(dataDir, ["inst.c", "inst.a"])).toBe(true);
+    expect(ids()).toEqual(["inst.c", "inst.b", "inst.a", "inst.d"]);
+    // Unknown ids are ignored; an effective no-op reports false.
+    expect(reorderInstitutionEntries(dataDir, ["inst.c", "inst.nope", "inst.a"])).toBe(false);
+    expect(reorderInstitutionEntries(dataDir, ["inst.only"])).toBe(false);
+    expect(ids()).toEqual(["inst.c", "inst.b", "inst.a", "inst.d"]);
+    // A full reorder applies exactly.
+    expect(reorderInstitutionEntries(dataDir, ["inst.d", "inst.a", "inst.b", "inst.c"])).toBe(true);
+    expect(ids()).toEqual(["inst.d", "inst.a", "inst.b", "inst.c"]);
   });
 });
 

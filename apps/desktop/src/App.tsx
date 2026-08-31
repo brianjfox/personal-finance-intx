@@ -1576,6 +1576,28 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
   }, [tick]);
   if (ob === null) return <div className="page"><p className="muted">Host unreachable.</p></div>;
   const inTab = ob.institutions.filter((i) => holdingsTabOf(i) === tab);
+  // Drag-to-reorder within the tab: compute the tab's new id order, apply
+  // it optimistically (the listed cards swap among their own slots), and
+  // persist it as the registry order.
+  const dropOn = (from: string, to: string) => {
+    if (from === to) return;
+    const ids = inTab.map((i) => i.institution_id);
+    const fromIdx = ids.indexOf(from);
+    const toIdx = ids.indexOf(to);
+    if (fromIdx < 0 || toIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(ids.indexOf(to) + (fromIdx < toIdx ? 1 : 0), 0, from);
+    setOb((prev) => {
+      if (prev === null) return prev;
+      const listed = new Set(ids);
+      const slots = prev.institutions.map((x, idx) => (listed.has(x.institution_id) ? idx : -1)).filter((idx) => idx >= 0);
+      const byId = new Map(prev.institutions.map((x) => [x.institution_id, x]));
+      const next = [...prev.institutions];
+      ids.forEach((id, k) => { next[slots[k]!] = byId.get(id)!; });
+      return { ...prev, institutions: next };
+    });
+    api.reorderInstitutions(ids).catch(() => onChanged());
+  };
   const none = inTab.length === 0;
   const counts = new Map<HoldingsTab, number>();
   for (const i of ob.institutions) counts.set(holdingsTabOf(i), (counts.get(holdingsTabOf(i)) ?? 0) + 1);
@@ -1642,7 +1664,9 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
           )}
           {(none || adding) && addForm}
           {inTab.map((i) => (
-            <InstitutionCard key={i.institution_id} inst={i} onChanged={onChanged} />
+            <DraggableCard key={i.institution_id} id={i.institution_id} onDropOn={dropOn}>
+              <InstitutionCard inst={i} onChanged={onChanged} />
+            </DraggableCard>
           ))}
         </div>
         <div className="rail">
@@ -1654,6 +1678,55 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Drag-to-reorder wrapper for one institution card. Dragging is armed
+ * only from the grip on the card's left edge, so text selection and the
+ * inputs inside the card are never hijacked by HTML5 drag.
+ */
+function DraggableCard({ id, onDropOn, children }: { id: string; onDropOn: (from: string, to: string) => void; children: React.ReactNode }) {
+  const [armed, setArmed] = useState(false);
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      className="drag-wrap"
+      draggable={armed}
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/fin-institution", id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onDragEnd={() => setArmed(false)}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("text/fin-institution")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setOver(true);
+        }
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        const from = e.dataTransfer.getData("text/fin-institution");
+        if (from !== "") {
+          e.preventDefault();
+          onDropOn(from, id);
+        }
+      }}
+      style={over ? { outline: "2px solid var(--link)", outlineOffset: 2, borderRadius: 12 } : undefined}
+    >
+      <button
+        className="drag-grip"
+        title="Drag to reorder"
+        onMouseDown={() => setArmed(true)}
+        onMouseUp={() => setArmed(false)}
+      >
+        <Icon name="dots-three" />
+        <Icon name="dots-three" />
+      </button>
+      {children}
     </div>
   );
 }
