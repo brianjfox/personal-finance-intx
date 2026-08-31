@@ -80,6 +80,9 @@ To go from a fresh clone to `Corbits Personal Finance.app` on your Mac:
    bundle: apps/desktop/src-tauri/target/release/bundle/macos/Corbits Personal Finance.app
    dmg:    apps/desktop/src-tauri/target/release/bundle/dmg/Corbits Personal Finance_<version>_aarch64.dmg
    ```
+   (`TRIPLE=universal-apple-darwin ./scripts/build-app.sh` builds the
+   one-app-for-both-architectures dmg that releases ship; it lands under
+   `target/universal-apple-darwin/`.)
 6. **Double-click it.** Drag the `.app` to `/Applications` (or open the
    dmg). The default build is ad-hoc signed, which macOS runs happily on
    the Mac that built it. Your data lives in

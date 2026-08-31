@@ -3,22 +3,39 @@
 How "Financial Interchange.app" is built, what it does at startup, and
 what shipping it to another machine requires.
 
+Versioned releases — the tag, the CI run, the draft GitHub release
+with the universal dmg and the Windows installer — are in
+[RELEASING.md](RELEASING.md). This document is about the build itself.
+
 ## Build
 
 ```bash
-./scripts/build-host.sh      # compiled fin-host binary + GUI dist
-./scripts/build-app.sh       # the .app and .dmg (Tauri v2)
-# result: apps/desktop/src-tauri/target/release/bundle/macos/Financial Interchange.app
+./scripts/build-host.sh [bun-target] [outfile]   # compiled fin-host binary + GUI dist
+./scripts/build-app.sh                            # the .app and .dmg (Tauri v2), this Mac's arch
+TRIPLE=universal-apple-darwin ./scripts/build-app.sh   # arm64 + x86_64 in one app (what releases ship)
+# result: apps/desktop/src-tauri/target/release/bundle/macos/Corbits Personal Finance.app
 #         apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+#         (universal: target/universal-apple-darwin/release/bundle/...)
 ```
 
 Pieces:
 
 - **fin-host** is compiled with `bun build --compile` into a single
-  arm64 binary. The ad-hoc `codesign --force --sign -` after compilation
-  is load-bearing: bun injects the JS bundle after linking, leaving a
-  stale "linker-signed" signature that this macOS kills at exec
-  (SIGKILL/137).
+  binary per architecture (`bun-darwin-arm64`, `bun-darwin-x64`,
+  `bun-windows-x64`). The ad-hoc `codesign --force --sign -` after
+  compilation is load-bearing on macOS: bun injects the JS bundle after
+  linking, leaving a stale "linker-signed" signature that this macOS
+  kills at exec (SIGKILL/137).
+- **Universal builds** compile both darwin slices, `lipo` them into
+  `binaries/fin-host-universal-apple-darwin` (the name Tauri expects for
+  `--target universal-apple-darwin`), re-sign, and let Tauri compile the
+  shell for both targets (`rustup target add x86_64-apple-darwin` once).
+  The x86_64 slice runs under Rosetta with a harmless "CPU lacks AVX
+  support" warning from bun (Rosetta hides AVX; every Intel Mac on
+  macOS 13+ has it). Bun's `bun-darwin-x64-baseline` target builds and
+  runs too, but prints the same warning under Rosetta, so the plain
+  x64 build is kept; the release workflow smoke-tests the Intel slice
+  under Rosetta on the arm64 runner.
 - **The Tauri shell** bundles that binary as the `fin-host` sidecar and
   the built GUI as a `gui/` resource. Do not set `strip = true` in the
   release profile: on this macOS it corrupts proc-macro dylibs
@@ -63,44 +80,47 @@ not distributable. To ship:
 
 1. Get a **Developer ID Application** certificate into the login
    keychain (present on this machine since 2026-08-24: team UZHK52XR6P).
-2. Sign the sidecar and bundle with it:
+2. Sign the sidecar and bundle with it (Tauri's own variable;
+   `SIGN_IDENTITY` is accepted as an alias):
    ```bash
-   export SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-   export APPLE_SIGNING_IDENTITY="$SIGN_IDENTITY"   # used by tauri
-   ./scripts/build-app.sh
+   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+   TRIPLE=universal-apple-darwin ./scripts/build-app.sh
    ```
    The entitlements (`src-tauri/entitlements.plist`) already carry the
    hardened-runtime JIT exceptions the Bun binary needs — that is the
    usual notarization snag, pre-solved.
-3. Notarize and staple (credentials live in the keychain as the
-   `fin-notary` profile, created once with `xcrun notarytool
-   store-credentials`):
-   ```bash
-   xcrun notarytool submit <dmg> --keychain-profile fin-notary --wait
-   xcrun stapler staple <dmg>
-   xcrun stapler staple "<...>/Financial Interchange.app"
-   spctl --assess --type execute -v "<...>/Financial Interchange.app"   # accepted, Notarized Developer ID
-   ```
-   First done 2026-08-24 (submission 6f1634d0, Accepted). Note for a
-   fully-offline install story: on the next release, staple the .app
-   BEFORE the dmg is packed (staple app -> rebuild dmg -> staple dmg);
-   the current stapled dmg + notarized app is fine whenever the
-   installing Mac can reach Apple once.
+3. Notarize and staple, one of two ways:
+   - **Locally**, with the `fin-notary` keychain profile (created once
+     with `xcrun notarytool store-credentials`): add
+     `NOTARY_PROFILE=fin-notary` to the command above and the script
+     submits the finished dmg and staples it. To check afterwards:
+     ```bash
+     spctl --assess --type execute -v "<...>/Corbits Personal Finance.app"   # accepted, Notarized Developer ID
+     ```
+   - **Through Tauri** (what CI does, RELEASING.md): with `APPLE_ID`,
+     `APPLE_PASSWORD`, `APPLE_TEAM_ID` (or the App Store Connect API key
+     trio) in the environment, `tauri build` notarizes and staples the
+     `.app` *before* packing the dmg — the fully-offline install story
+     (a stapled app inside the dmg needs no round-trip to Apple on the
+     installing Mac).
+
+   First notarization done 2026-08-24 (submission 6f1634d0, Accepted).
 
 ## Windows (CI only)
 
 Tauri cannot bundle Windows installers from macOS, so the Windows build
-lives in CI (`.github/workflows/ci.yml`, WINDOWS_PORT §5):
+lives in CI (`.github/workflows/ci.yml` on every push, and
+`release.yml` for tagged releases; WINDOWS_PORT §5):
 
 - The `test` matrix runs the full suite on `macos-latest` and
   `windows-latest`; the win32-gated live Credential Manager / DPAPI
   suite (`packages/institutions/test/secrets-windows-live.test.ts`)
   executes only on the Windows runner.
 - The `windows-installer` job compiles fin-host with
-  `bun build --compile --target=bun-windows-x64` into the sidecar slot
-  (`src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe` — no
-  codesign step; that gotcha is macOS-only), then runs
-  `tauri build --bundles nsis`. WebView2 ships in
+  `scripts/build-host.sh bun-windows-x64 <sidecar slot>`
+  (`src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe` — the
+  script skips codesign off-darwin; that gotcha is macOS-only), then
+  runs `tauri build --bundles nsis`. WebView2 ships in
   `downloadBootstrapper` mode: the installer fetches the runtime only
   on machines that lack it (stock Windows 11 has it).
 - The `*-setup.exe` under `bundle/nsis/` is uploaded as the
