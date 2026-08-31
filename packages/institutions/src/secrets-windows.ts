@@ -43,7 +43,9 @@ export interface RunResult {
 export type CommandRunner = (command: string, args: string[]) => RunResult;
 
 function spawnRunner(command: string, args: string[]): RunResult {
-  const r = spawnSync(command, args, { encoding: "utf8", windowsHide: true });
+  // 15s cap, matching the BitLocker probe: a hung PowerShell (AV scan,
+  // profile server) must not wedge the host.
+  const r = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 15_000 });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
@@ -170,6 +172,11 @@ export function credentialManagerSecretStore(opts: CredentialManagerOpts = {}): 
       const hit = cache.get(t);
       if (hit !== undefined) return hit;
       const r = runPowerShell(run, credGetScript(t));
+      // Exit 3 is the genuine not-found; any other failure (spawn error,
+      // AV stall) is transient and must not hide the credential for the
+      // process lifetime -- return null without caching, so the next
+      // read re-spawns.
+      if (r.status !== 0 && r.status !== 3) return null;
       const decoded = r.status === 0 ? fromB64(r.stdout.trim()) : "";
       const v = decoded === "" ? null : decoded;
       cache.set(t, v);
@@ -256,12 +263,17 @@ export function dpapiFileSecretStore(opts: DpapiFileOpts = {}): SecretStore {
       const hit = cache.get(t);
       if (hit !== undefined) return hit;
       const blob = readEntries()[t];
-      let v: string | null = null;
-      if (blob !== undefined) {
-        const r = runPowerShell(run, dpapiUnprotectScript(blob));
-        const decoded = r.status === 0 ? fromB64(r.stdout.trim()) : "";
-        v = decoded === "" ? null : decoded;
+      if (blob === undefined) {
+        // The genuine not-found: no entry in the file.
+        cache.set(t, null);
+        return null;
       }
+      const r = runPowerShell(run, dpapiUnprotectScript(blob));
+      // An Unprotect failure is transient (spawn error, AV stall): the
+      // blob exists, so return null without caching and re-spawn next read.
+      if (r.status !== 0) return null;
+      const decoded = fromB64(r.stdout.trim());
+      const v = decoded === "" ? null : decoded;
       cache.set(t, v);
       return v;
     },

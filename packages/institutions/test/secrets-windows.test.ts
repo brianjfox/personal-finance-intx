@@ -130,6 +130,22 @@ describe("credential manager store (W1, fake PowerShell)", () => {
     expect(store.get("fin-plaid", "client_id")).toBe("cid");
   });
 
+  test("a status-1 read (transient failure) is not cached: the second read re-spawns", () => {
+    const shell = fakePowerShell({ initial: { "fin-plaid/secret": "s3cret" } });
+    let calls = 0;
+    const run: CommandRunner = (command, args) => {
+      calls += 1;
+      if (calls === 1) return { status: 1, stdout: "", stderr: "PowerShell stalled" };
+      return shell.run(command, args);
+    };
+    const store = credentialManagerSecretStore({ run });
+    expect(store.get("fin-plaid", "secret")).toBeNull(); // the failure surfaces as null...
+    expect(store.get("fin-plaid", "secret")).toBe("s3cret"); // ...but was not cached
+    expect(calls).toBe(2);
+    expect(store.get("fin-plaid", "secret")).toBe("s3cret"); // the hit IS cached
+    expect(calls).toBe(2);
+  });
+
   test("enumerate('fin-*') lists the app's targets for the delete-all-data sweep", () => {
     const shell = fakePowerShell({
       initial: { "fin-plaid/client_id": "a", "fin-kraken/api_key:inst.k": "b", "other-app/token": "c" },
@@ -173,6 +189,22 @@ describe("dpapi blob file store (W2, fake PowerShell)", () => {
     expect(store.delete!("fin-plaid", "secret")).toBe(true);
     expect(store.get("fin-plaid", "secret")).toBeNull();
     expect(store.delete!("fin-plaid", "secret")).toBe(false);
+  });
+
+  test("an Unprotect failure is not cached; a genuinely missing key is (no spawn at all)", () => {
+    const shell = fakePowerShell();
+    const file = tmpFile();
+    dpapiFileSecretStore({ file, run: shell.run }).set!("fin-plaid", "secret", "v1");
+    let fail = true;
+    const run: CommandRunner = (command, args) => (fail ? { status: 1, stdout: "", stderr: "PowerShell stalled" } : shell.run(command, args));
+    const store = dpapiFileSecretStore({ file, run });
+    expect(store.get("fin-plaid", "secret")).toBeNull(); // transient: surfaces as null...
+    fail = false;
+    expect(store.get("fin-plaid", "secret")).toBe("v1"); // ...not cached, so the retry recovers
+    const spawns = shell.scripts.length;
+    expect(store.get("fin-plaid", "nope")).toBeNull(); // missing entry: cached, never spawns
+    expect(store.get("fin-plaid", "nope")).toBeNull();
+    expect(shell.scripts).toHaveLength(spawns);
   });
 
   test("enumerate matches the sweep pattern against stored targets", () => {

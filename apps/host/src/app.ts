@@ -1524,12 +1524,13 @@ export function createApp(opts: AppOptions): App {
       }
       // The same sweep where the store can list itself (win32: CredEnumerate
       // over Credential Manager, or the DPAPI file's entries; the darwin
-      // Keychain store cannot). It goes through `secrets` -- never a raw CLI
-      // -- so an injected store is safe; keychainSweepOnWipe still gates it
-      // to the sole unscoped user in multi-user mode. Every item the app
-      // ever stored carries a fin- service prefix, so `fin-*` is exactly the
-      // app's footprint; targets are named `<service>/<account>`.
-      if (secrets.enumerate !== undefined && (opts.keychainSweepOnWipe?.() ?? true)) {
+      // Keychain store cannot). Same gate semantics as the darwin sweep
+      // above: keychainSweepOnWipe decides when given (multi-user wires it),
+      // otherwise sweep only with the real store -- tests that inject one
+      // opt in explicitly. Every item the app ever stored carries a fin-
+      // service prefix, so `fin-*` is exactly the app's footprint; targets
+      // are named `<service>/<account>`.
+      if (secrets.enumerate !== undefined && (opts.keychainSweepOnWipe?.() ?? opts.connectors?.secrets === undefined)) {
         for (const target of secrets.enumerate("fin-*")) {
           const slash = target.indexOf("/");
           if (slash <= 0) continue;

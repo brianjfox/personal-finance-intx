@@ -122,7 +122,9 @@ describe("delete all data", () => {
   });
 
   // The win32 path: no `security` CLI, but the store can enumerate, so the
-  // stray-item sweep asks it for the app's whole fin-* footprint.
+  // stray-item sweep asks it for the app's whole fin-* footprint. The gate
+  // defaults off for injected stores (same semantics as the darwin sweep),
+  // so this test opts in the way multi-user mode wires it.
   test("sweeps stray fin-* items via enumerate when the store supports it", () => {
     const dataDir = tmp();
     const base = memorySecretStore({
@@ -139,7 +141,7 @@ describe("delete all data", () => {
         return Object.keys(base.dump()).filter((k) => k.startsWith(prefix));
       },
     };
-    const app = createApp({ dataDir, connectors: { secrets } });
+    const app = createApp({ dataDir, connectors: { secrets }, keychainSweepOnWipe: () => true });
     try {
       app.deleteAllData();
       expect(patterns).toEqual(["fin-*"]);
