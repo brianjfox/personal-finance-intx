@@ -19,8 +19,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TRIPLE="${TRIPLE:-aarch64-apple-darwin}"
-SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-${SIGN_IDENTITY:--}}"
-export SIGN_IDENTITY
+SIGN_IDENTITY_ARG="${SIGN_IDENTITY:--}"   # the caller's alias for APPLE_SIGNING_IDENTITY
+# The sidecar is compiled and ad-hoc signed here only so that bun's stale
+# post-compile signature is replaced; Tauri re-signs every binary in the
+# bundle with the real identity during bundling (the identity may not
+# even exist in a keychain before then: in CI the Tauri CLI imports
+# APPLE_CERTIFICATE into a temporary keychain when `tauri build` runs).
+export SIGN_IDENTITY=-
 HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 BIN="apps/desktop/src-tauri/binaries"
 TAURI_TARGET_ARGS=()
@@ -42,7 +47,7 @@ case "$TRIPLE" in
     BUILD_GUI=0 ./scripts/build-host.sh "$(bun_target x86_64)" "$BIN/fin-host-x86_64-apple-darwin"
     lipo -create -output "$BIN/fin-host-universal-apple-darwin" \
       "$BIN/fin-host-aarch64-apple-darwin" "$BIN/fin-host-x86_64-apple-darwin"
-    codesign --force --sign "$SIGN_IDENTITY" "$BIN/fin-host-universal-apple-darwin"
+    codesign --force --sign - "$BIN/fin-host-universal-apple-darwin"
     lipo -info "$BIN/fin-host-universal-apple-darwin"
     ;;
   aarch64-apple-darwin|x86_64-apple-darwin)
@@ -55,11 +60,12 @@ if [ "$TRIPLE" != "$HOST_TRIPLE" ]; then
   BUNDLE_DIR="apps/desktop/src-tauri/target/$TRIPLE/release/bundle"
 fi
 
+SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-${SIGN_IDENTITY_ARG:--}}"
 if [ "$SIGN_IDENTITY" != "-" ]; then
-  # Let Tauri sign DURING bundling (sidecar + app, with the entitlements
-  # from tauri.conf.json) so the .dmg contains the correctly signed app;
-  # with APPLE_ID/APPLE_API_KEY credentials in the environment it also
-  # notarizes and staples the .app before the .dmg is packed.
+  # Let Tauri sign DURING bundling (sidecar + app + dmg, with the
+  # entitlements from tauri.conf.json); with APPLE_ID/APPLE_API_KEY
+  # credentials in the environment it also notarizes and staples the
+  # .app before the .dmg is packed.
   export APPLE_SIGNING_IDENTITY="$SIGN_IDENTITY"
 fi
 ( cd apps/desktop && bunx @tauri-apps/cli@^2 build "${TAURI_TARGET_ARGS[@]}" "$@" )
@@ -73,8 +79,8 @@ if [ "$SIGN_IDENTITY" = "-" ]; then
   codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP/Contents/MacOS/fin-host"
   codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP"
 else
-  # Distribution: sign the dmg too.
-  [ -n "$DMG" ] && codesign --force --sign "$SIGN_IDENTITY" "$DMG"
+  # Distribution: Tauri already signed the dmg. Locally, with a notarytool
+  # keychain profile, notarize + staple the dmg as well.
   if [ -n "${NOTARY_PROFILE:-}" ] && [ -n "$DMG" ]; then
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"

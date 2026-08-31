@@ -9,9 +9,10 @@
 #
 # The ad-hoc re-sign of darwin binaries is load-bearing: bun's --compile
 # injects the bundle after linking, leaving a stale "linker-signed"
-# signature that macOS kills at exec (SIGKILL, exit 137). Distribution
-# builds replace "-" with a Developer ID Application identity (see
-# docs/PACKAGING.md). Windows binaries are not signed (DECISIONS D-038).
+# signature that macOS kills at exec (SIGKILL, exit 137). Ad-hoc is all
+# this step needs: Tauri re-signs the sidecar with the Developer ID during
+# bundling (see docs/PACKAGING.md). Windows binaries are not signed
+# (DECISIONS D-038).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET="${1:-bun-darwin-arm64}"
