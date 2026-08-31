@@ -1,9 +1,8 @@
 # Corbits Personal Finance
 
 A bench of specialist agents, one shared ledger, and a human gate on
-everything that moves money — built on the Corbits/Faremeter Interchange
-agentic OS (`@intx/*`, pinned `0.3.0`). See `docs/BUILD_PLAN.md` for the
-plan and `docs/financial-interchange-hub.pdf` for the deck this implements.
+everything that moves money — built on Corbits Core 
+agentic OS (`@intx/*`, pinned `0.3.0`). See `docs/financial-interchange-hub.pdf` for the deck this implements.
 
 Track A (BUILD_PLAN §2): an embedded filesystem host (`fin-host`), no hub,
 no Postgres, no network listener beyond localhost. What is lost without the
@@ -35,20 +34,25 @@ bunx tsc -b --noEmit           # typecheck
 
 # demo: two FICTIONAL institutions, night 1 then night 2 (with injected breaks)
 cd apps/host
-bun src/cli.ts init    --data /tmp/fin --demo 1
-bun src/cli.ts nightly --data /tmp/fin
-bun src/cli.ts init    --data /tmp/fin --demo 2
-bun src/cli.ts nightly --data /tmp/fin
-bun src/cli.ts queue   --data /tmp/fin
+bun apps/host/src/cli.ts init    --data /tmp/fin --demo 1
+bun apps/host/src/cli.ts nightly --data /tmp/fin
+bun apps/host/src/cli.ts init    --data /tmp/fin --demo 2
+bun apps/host/src/cli.ts nightly --data /tmp/fin
+bun apps/host/src/cli.ts queue   --data /tmp/fin
 
 # GUI
 (cd ../desktop && bun run build)
-bun src/cli.ts serve   --data /tmp/fin --port 7777     # open http://127.0.0.1:7777/
+bun apps/host/src/cli.ts serve   --data /tmp/fin --port 7777
+# open http://127.0.0.1:7777/
+
+# or, run it open to your entire lan
+bun apps/host/src/cli.ts serve --lan
+# open http://<hostname.local>:7777/
 ```
 
 ## Build the double-clickable app
 
-From a fresh clone to `Corbits Personal Finance.app` on your Mac:
+To go from a fresh clone to `Corbits Personal Finance.app` on your Mac:
 
 1. **A Mac on macOS 13+.** Apple Silicon builds out of the box; on an
    Intel Mac prefix step 5 with `TRIPLE=x86_64-apple-darwin`.
