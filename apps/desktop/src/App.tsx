@@ -335,7 +335,9 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
   // The welcome screen owns the DATA pages while there's nothing to show,
   // but never the setup pages: a fresh user must be able to reach
   // Credentials (Plaid/EB keys, the wizard) and People before any data exists.
-  const SETUP_PAGES: ReadonlySet<Page> = new Set(["institutions", "credentials", "profile"]);
+  // Pages that render even before any data exists: the setup flow, plus
+  // Settings, which is pure display preferences with no ledger behind it.
+  const SETUP_PAGES: ReadonlySet<Page> = new Set(["institutions", "credentials", "profile", "settings"]);
   const takeover = nothingYet && !SETUP_PAGES.has(page);
 
   const [navCollapsed, setNavCollapsed] = useState(() => {
