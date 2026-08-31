@@ -55,6 +55,8 @@ describe("boot-time repair of relink duplicates", () => {
           // Two manual accounts that LOOK identical but are distinct.
           account("acct.shoebox.a", managed.institution_id, "2026-08-24T00:00:00.000Z", { masked_number: null }),
           account("acct.shoebox.b", managed.institution_id, "2026-08-31T00:00:00.000Z", { masked_number: null }),
+          // A genuinely closed account: the feed stopped reporting it.
+          account("acct.bank.gone", plaid.institution_id, "2026-08-24T00:00:00.000Z", { name: "Old CD", type: "savings", masked_number: "9999", closed_at: "2026-08-30" }),
         ],
       });
       ledger.close();
@@ -69,6 +71,13 @@ describe("boot-time repair of relink duplicates", () => {
       const shoebox = accts.filter((a) => a.institution_id === managed.institution_id);
       expect(shoebox.filter((a) => a.closed_at === null)).toHaveLength(2);
       expect(shoebox.every((a) => a.merged_into === null)).toBe(true);
+      // The card hides what is not live: a merged alias never appears as
+      // a row at all, and a ledger-closed account carries the closed flag
+      // the GUI's row filter respects (issue #13's ghost rows).
+      const card = app.institutionsOverview().institutions.find((i) => i.institution_id === plaid.institution_id);
+      expect(card?.accounts.some((r) => r.account_id === "acct.bank.new")).toBe(false);
+      expect(card?.accounts.find((r) => r.account_id === "acct.bank.gone")?.closed).toBe(true);
+      expect(card?.accounts.find((r) => r.account_id === "acct.bank.old")?.closed).toBe(false);
       // The repair is journaled, and a second boot changes nothing.
       expect(app.ledger.listJournal(10).some((j) => j.kind === "system" && j.summary.includes("merged duplicate account"))).toBe(true);
       const facts = app.ledger.factCount();

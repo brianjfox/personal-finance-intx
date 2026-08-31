@@ -159,7 +159,7 @@ describe("plaid adapter (mock API)", () => {
 
   test("missing credentials and missing connection fail in plain words", async () => {
     const noCreds = plaidAdapter({ institution_id: "inst.chase", base_url: "http://127.0.0.1:9", secrets: memorySecretStore() });
-    expect(noCreds.fetch({ now: NOW })).rejects.toThrow(/not connected|connect from the Institutions page/);
+    expect(noCreds.fetch({ now: NOW })).rejects.toThrow(/not connected|connect from the Assets page/);
     const noToken = plaidAdapter({
       institution_id: "inst.other",
       base_url: "http://127.0.0.1:9",
@@ -288,11 +288,11 @@ describe("enable banking adapter (mock API)", () => {
   test("an expired or revoked consent says so in plain words", async () => {
     const { base } = ebMock({ ...EB_SESSION, access: { valid_until: "2026-08-01T00:00:00.000Z" } });
     const adapter = enableBankingAdapter({ institution_id: "inst.nordbank", base_url: base, secrets: ebSecrets() });
-    expect(adapter.fetch({ now: NOW })).rejects.toThrow(/consent has expired.*reconnect from the Institutions page/);
+    expect(adapter.fetch({ now: NOW })).rejects.toThrow(/consent has expired.*reconnect from the Assets page/);
   });
 
   test("missing credentials fail before any network call", async () => {
     const adapter = enableBankingAdapter({ institution_id: "inst.nordbank", base_url: "http://127.0.0.1:9", secrets: memorySecretStore() });
-    expect(adapter.fetch({ now: NOW })).rejects.toThrow(/not connected|connect from the Institutions page/);
+    expect(adapter.fetch({ now: NOW })).rejects.toThrow(/not connected|connect from the Assets page/);
   });
 });

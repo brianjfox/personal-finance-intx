@@ -76,7 +76,7 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
       const apiKey = secrets.get(KRAKEN_SERVICE, `api_key:${opts.institution_id}`);
       const secret = secrets.get(KRAKEN_SERVICE, `private_key:${opts.institution_id}`);
       if (apiKey === null || secret === null) {
-        throw new Error(`kraken ${opts.institution_id}: not connected -- add your Kraken API key from the Institutions page`);
+        throw new Error(`kraken ${opts.institution_id}: not connected -- add your Kraken API key from the Assets page`);
       }
       const asOf = ctx.now.toISOString();
       const path = "/0/private/Balance";
@@ -94,7 +94,7 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
       if (!r.ok) throw new Error(`kraken ${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
       const body = (await r.json()) as { error?: string[]; result?: Record<string, string> };
       if ((body.error ?? []).length > 0) {
-        throw new Error(`kraken: the API refused: ${body.error!.join("; ")} -- check the key on the Institutions page`);
+        throw new Error(`kraken: the API refused: ${body.error!.join("; ")} -- check the key on the Assets page`);
       }
 
       // Sum same-asset variants (spot + earn/staking suffixes) exactly.

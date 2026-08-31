@@ -186,7 +186,7 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
       httpSink = ctx.http ?? null;
       const accessToken = secrets.get(PLAID_SERVICE, `access_token:${opts.institution_id}`);
       if (accessToken === null) {
-        throw new Error(`plaid ${opts.institution_id}: not connected -- run the Plaid connect flow from the Institutions page`);
+        throw new Error(`plaid ${opts.institution_id}: not connected -- run the Plaid connect flow from the Assets page`);
       }
       const asOf = ctx.now.toISOString();
       const lookback = opts.lookback_days ?? ctx.lookback_days ?? 30;
