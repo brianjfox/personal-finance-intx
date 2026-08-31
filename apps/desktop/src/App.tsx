@@ -1435,6 +1435,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
 function TokenRow({ t, onChanged }: { t: CredentialsData["tokens"][number]; onChanged: () => void }) {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const kind = t.adapter === "plaid" ? "Plaid access token" : t.adapter === "enablebanking" ? "bank consent session" : t.adapter === "kraken" ? "Kraken API key" : "Coinbase API key";
   const remove = async () => {
     setBusy(true);
@@ -1445,24 +1446,50 @@ function TokenRow({ t, onChanged }: { t: CredentialsData["tokens"][number]; onCh
       setBusy(false);
     }
   };
+  const done = () => {
+    setReconnecting(false);
+    onChanged();
+  };
   return (
-    <tr>
-      <td>{t.name}<div className="small muted">{t.institution_id}</div></td>
-      <td className="small">{kind}</td>
-      <td>{t.set ? <span className="pill low">stored</span> : <span className="pill medium">missing — reconnect</span>}</td>
-      <td>
-        {t.set &&
-          (confirm ? (
-            <>
-              <span className="small">Disconnects until you reconnect. </span>
-              <button disabled={busy} onClick={() => void remove()}>Yes, remove</button>{" "}
-              <button className="secondary" onClick={() => setConfirm(false)}>Cancel</button>
-            </>
+    <>
+      <tr>
+        <td>{t.name}<div className="small muted">{t.institution_id}</div></td>
+        <td className="small">{kind}</td>
+        <td>
+          {t.set ? (
+            <span className="pill low">stored</span>
           ) : (
-            <button className="secondary" disabled={busy} onClick={() => setConfirm(true)}>Remove</button>
-          ))}
-      </td>
-    </tr>
+            // The words ARE the fix: clicking opens the reconnect flow for
+            // this institution right here.
+            <button className="linklike" title={`Reconnect ${t.name} now`} onClick={() => setReconnecting((r) => !r)}>
+              <span className="pill medium">missing — reconnect</span>
+            </button>
+          )}
+        </td>
+        <td>
+          {t.set &&
+            (confirm ? (
+              <>
+                <span className="small">Disconnects until you reconnect. </span>
+                <button disabled={busy} onClick={() => void remove()}>Yes, remove</button>{" "}
+                <button className="secondary" onClick={() => setConfirm(false)}>Cancel</button>
+              </>
+            ) : (
+              <button className="secondary" disabled={busy} onClick={() => setConfirm(true)}>Remove</button>
+            ))}
+        </td>
+      </tr>
+      {reconnecting && (
+        <tr>
+          <td colSpan={4}>
+            {t.adapter === "plaid" && <PlaidConnect name={t.name} institutionId={t.institution_id} onDone={done} />}
+            {t.adapter === "enablebanking" && <EbConnect name={t.name} institutionId={t.institution_id} preset={null} onDone={done} />}
+            {t.adapter === "coinbase" && <CoinbaseConnect name={t.name} institutionId={t.institution_id} onDone={done} />}
+            {t.adapter === "kraken" && <KrakenConnect name={t.name} institutionId={t.institution_id} onDone={done} />}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
