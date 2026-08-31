@@ -87,9 +87,34 @@ not distributable. To ship:
    the current stapled dmg + notarized app is fine whenever the
    installing Mac can reach Apple once.
 
+## Windows (CI only)
+
+Tauri cannot bundle Windows installers from macOS, so the Windows build
+lives in CI (`.github/workflows/ci.yml`, WINDOWS_PORT §5):
+
+- The `test` matrix runs the full suite on `macos-latest` and
+  `windows-latest`; the win32-gated live Credential Manager / DPAPI
+  suite (`packages/institutions/test/secrets-windows-live.test.ts`)
+  executes only on the Windows runner.
+- The `windows-installer` job compiles fin-host with
+  `bun build --compile --target=bun-windows-x64` into the sidecar slot
+  (`src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe` — no
+  codesign step; that gotcha is macOS-only), then runs
+  `tauri build --bundles nsis`. WebView2 ships in
+  `downloadBootstrapper` mode: the installer fetches the runtime only
+  on machines that lack it (stock Windows 11 has it).
+- The `*-setup.exe` under `bundle/nsis/` is uploaded as the
+  `windows-installer` workflow artifact.
+
+The installer is **unsigned** (DECISIONS.md D-038): SmartScreen will
+warn on first run — "More info → Run anyway" is the expected path for
+friends-and-family installs. An Authenticode cert is a separate
+purchase decision; x64 only, MSI optional later.
+
 ## What is deliberately NOT in the bundle
 
 - No auto-updater, no telemetry, no network surface beyond loopback and
   outbound HTTPS to the inference provider.
-- No Windows/Linux targets (out of scope for v1).
+- No Linux targets (out of scope for v1); Windows is CI-built only
+  (above), never from this machine.
 - Execution stays disabled; packaging does not change Phase 5's status.

@@ -25,9 +25,15 @@
       "../dist": "gui"
     },
     "icon": [
-      "icons/icon.icns"
+      "icons/icon.icns",
+      "icons/icon.ico"
     ],
     "category": "Finance",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": "entitlements.plist",
