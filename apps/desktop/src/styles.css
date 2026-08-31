@@ -590,8 +590,11 @@ input[type="color"] { width: 40px; height: 30px; padding: 2px; border: 1px solid
   .tb-right .tb-avatar { display: none; }
 
   /* The sidebar becomes a slide-in drawer under the top bar. */
-  nav.side, .app.nav-collapsed nav.side { position: fixed; top: 64px; bottom: 0; left: 0; z-index: 150; width: 264px; padding: 20px 12px 12px; transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: 24px 0 48px rgba(0, 0, 0, 0.4); }
-  nav.side.open { transform: translateX(0); }
+  /* Closed: no shadow (it would bleed back into the viewport as a dark gradient
+     down the left edge) and hidden, so Tab can't land on off-screen links. The
+     visibility flip is delayed on close so the slide-out animation still plays. */
+  nav.side, .app.nav-collapsed nav.side { position: fixed; top: 64px; bottom: 0; left: 0; z-index: 150; width: 264px; padding: 20px 12px 12px; transform: translateX(-100%); box-shadow: none; visibility: hidden; transition: transform 0.2s ease, box-shadow 0.2s ease, visibility 0s linear 0.2s; }
+  nav.side.open { transform: translateX(0); box-shadow: 24px 0 48px rgba(0, 0, 0, 0.4); visibility: visible; transition: transform 0.2s ease, box-shadow 0.2s ease, visibility 0s; }
   .app.nav-collapsed nav.side a { justify-content: flex-start; padding: 8px 12px; }
   .app.nav-collapsed nav.side a .label { display: block; }
   .app.nav-collapsed .nav-badge { position: static; margin-left: auto; padding: 1px 7px; }
