@@ -45,7 +45,7 @@ pre-release.
    and pushes main and the tag.
 3. **Watch** — `gh run watch`, or the Actions tab. The `release`
    workflow runs the full test suite on macOS and Windows, then builds
-   the artifacts (≈15–25 minutes; the universal macOS build compiles the
+   the artifacts (≈10–25 minutes; the universal macOS build compiles the
    shell twice).
 4. **Review and publish** the draft — `gh release view vX.Y.Z --web`.
    Download the dmg, open it, check the About popup shows X.Y.Z. Then:
@@ -60,9 +60,11 @@ pre-release.
 | --- | --- |
 | `Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg` | The app, one universal binary (Apple silicon + Intel); the `fin-host` sidecar inside is a fat binary too |
 | `Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe` | NSIS installer, WebView2 bootstrapper mode; **unsigned** (D-038) |
-| `fin-host-X.Y.Z-macOS-universal.tar.gz` | The CLI on its own — same data directory as the app |
-| `fin-host-X.Y.Z-Windows-x64.zip` | Same, Windows |
 | `SHA256SUMS.txt` | `shasum -a 256 -c SHA256SUMS.txt` |
+
+Only what an installer needs. The `fin-host` CLI ships inside both
+bundles (`Contents/MacOS/fin-host`; the install directory on Windows)
+and is not a separate download.
 
 The release body is `docs/releases/X.Y.Z.md` followed by a generated
 **Downloads** section that says truthfully whether the macOS build is

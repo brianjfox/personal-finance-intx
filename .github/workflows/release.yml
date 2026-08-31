@@ -3,12 +3,11 @@
 # and opens a DRAFT GitHub release carrying docs/releases/X.Y.Z.md as its
 # notes. Publishing the draft is a deliberate click after review.
 #
-# Artifacts:
+# Artifacts — only what an installer needs:
 #   Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg   arm64 + x86_64 app
 #   Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe NSIS installer
-#   fin-host-X.Y.Z-macOS-universal.tar.gz                the CLI, standalone
-#   fin-host-X.Y.Z-Windows-x64.zip                       the CLI, standalone
-#   SHA256SUMS.txt
+#   SHA256SUMS.txt                                       to verify the two above
+# (The standalone fin-host CLI ships inside both; it is not a separate download.)
 #
 # macOS signing is opt-in through repository secrets (APPLE_CERTIFICATE,
 # APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID,
@@ -139,9 +138,6 @@ jobs:
           OUT=release; mkdir -p "$OUT"
           DMG=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -1)
           cp "$DMG" "$OUT/Corbits-Personal-Finance-$VERSION-macOS-universal.dmg"
-          lipo -info apps/desktop/src-tauri/binaries/fin-host-universal-apple-darwin
-          cp apps/desktop/src-tauri/binaries/fin-host-universal-apple-darwin "$OUT/fin-host"
-          tar -C "$OUT" -czf "$OUT/fin-host-$VERSION-macOS-universal.tar.gz" fin-host && rm "$OUT/fin-host"
           echo "$SIGNING" > "$OUT/macos-signing.txt"
           ls -la "$OUT"
       - uses: actions/upload-artifact@v4
@@ -183,8 +179,6 @@ jobs:
           OUT=release; mkdir -p "$OUT"
           EXE=$(ls apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
           cp "$EXE" "$OUT/Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe"
-          cp apps/desktop/src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe "$OUT/fin-host.exe"
-          (cd "$OUT" && 7z a -tzip "fin-host-$VERSION-Windows-x64.zip" fin-host.exe >/dev/null && rm fin-host.exe)
           ls -la "$OUT"
       - uses: actions/upload-artifact@v4
         with:
@@ -212,7 +206,7 @@ jobs:
         run: |
           set -x
           mkdir -p release
-          cp artifacts/*.dmg artifacts/*.exe artifacts/*.tar.gz artifacts/*.zip release/
+          cp artifacts/*.dmg artifacts/*.exe release/
           SIGNING="$(cat artifacts/macos-signing.txt)"
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
           {
@@ -227,7 +221,6 @@ jobs:
               echo "  - Developer ID signed and notarized."
             fi
             echo "- **Windows 10/11 x64**: \`Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe\` — unsigned; SmartScreen will warn (More info → Run anyway)."
-            echo "- **fin-host CLI** (standalone, same data directory as the app): \`fin-host-$VERSION-macOS-universal.tar.gz\`, \`fin-host-$VERSION-Windows-x64.zip\`"
             echo "- \`SHA256SUMS.txt\` — verify with \`shasum -a 256 -c SHA256SUMS.txt\` (macOS) or \`certutil -hashfile <file> SHA256\` (Windows)."
           } > release-notes.md
       - name: Create or update the draft release
