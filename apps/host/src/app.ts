@@ -34,6 +34,7 @@ import {
   newId,
   TAX_QUARTERS,
   TaxProfile,
+  type AccountPayload,
   type ChatAgent,
   type ChatTurn,
   type Principal,
@@ -195,6 +196,8 @@ export interface App {
   addInstitution(input: { name: string; mode: "managed" | "files"; category?: "real_estate" | "crypto" }): InstitutionEntry;
   /** Remove a connection from the registry. Ledger history and inbox files stay -- nothing is erased. */
   removeInstitution(institutionId: string): boolean;
+  /** Hide one account (closed + ignored: no data recorded, the feed cannot reopen it) or restore it (reopened; the next fetch fills it in). */
+  setAccountIgnored(accountId: string, ignored: boolean): void;
   /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
   renameInstitution(institutionId: string, name: string): boolean;
   /** Pause/resume a connection without losing its configuration or history. */
@@ -376,6 +379,8 @@ export interface InstitutionAccountRow {
   value: string | null;
   observed_at: string | null;
   closed: boolean;
+  /** Hidden by the operator: closed and skipped by every fetch until restored. */
+  ignored: boolean;
 }
 
 export interface InstitutionOverview {
@@ -788,6 +793,7 @@ export function createApp(opts: AppOptions): App {
               // duplicate's leftover) hides the row the same way a removed
               // managed account does; history stays queryable.
               closed: closedIds.has(a.account_id) || a.closed_at !== null,
+              ignored: a.ignored,
             };
           });
         // Managed accounts typed in but not yet reconciled into the ledger.
@@ -801,6 +807,7 @@ export function createApp(opts: AppOptions): App {
               value: m.closed_at !== undefined ? "0" : m.value,
               observed_at: null,
               closed: m.closed_at !== undefined,
+              ignored: false,
             });
           }
         }
@@ -879,6 +886,38 @@ export function createApp(opts: AppOptions): App {
       const removed = removeInstitutionEntry(dataDir, institutionId);
       if (removed) loaded = reloadRegistry();
       return removed;
+    },
+    setAccountIgnored(accountId, ignored) {
+      const prior = ledger.asOf({ kind: "account", subject: accountId })[0];
+      if (prior === undefined) throw new Error(`${accountId} is not an account the ledger knows`);
+      const p = prior.payload as AccountPayload;
+      if ((p.merged_into ?? null) !== null) throw new Error(`${accountId} was merged into ${p.merged_into}; hide or restore that account instead`);
+      if ((p.ignored === true) === ignored) return; // already there: idempotent
+      const now = clock();
+      ledger.commit({
+        batchId: `${ignored ? "ignore" : "restore"}:${accountId}:${now.toISOString()}`,
+        writer: "assets_manager",
+        note: `account ${accountId} ${ignored ? "hidden" : "restored"} by the operator`,
+        facts: [
+          {
+            kind: "account",
+            subject: accountId,
+            key: "account",
+            // Hiding closes the account (it leaves net worth and the card
+            // now); restoring reopens it and the next fetch fills it in.
+            payload: ignored
+              ? { ...p, closed_at: p.closed_at ?? now.toISOString().slice(0, 10), ignored: true }
+              : { ...p, closed_at: null, ignored: false },
+            observed_at: now.toISOString(),
+            effective_at: now.toISOString(),
+            source_id: p.institution_id,
+            source_doc_id: null,
+            supersedes: prior.id,
+            writer: "assets_manager",
+            provisional: false,
+          },
+        ],
+      });
     },
     ledgerLiveAccounts: (file) => readLedgerLiveAccounts(file),
     getFetchLogs(institutionId) {

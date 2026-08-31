@@ -115,6 +115,12 @@ export function normalize(input: NormalizeInput, ledger: Ledger, thresholds: Thr
   for (const snap of snapshots) {
     const resolved = resolveAccountIdentities(snap, ledger, push);
     for (const { acct, remappedFrom } of resolved) {
+      // The operator ignored this account: record NOTHING while the flag
+      // is set. It stays closed (the feed cannot reopen it), it still
+      // counts as reported so the stale-close below leaves it alone, and
+      // restoring the account lets the next fetch fill it in again.
+      const prior = ledger.asOf({ kind: "account", subject: acct.account_id })[0];
+      if (prior !== undefined && (prior.payload as AccountPayload).ignored === true) continue;
       accounts.push(normalizeAccount(snap, acct, ledger, push, (n) => {
         txNew += n.added;
         txKnown += n.known;
@@ -209,12 +215,15 @@ function resolveAccountIdentities(
       claimed.add(target);
       return { acct: { ...acct, account_id: target }, remappedFrom: acct.account_id };
     }
-    // Never-seen provider id: does it describe an account we already hold?
+    // Never-seen provider id: does it describe an account we already
+    // hold? Open accounts match, and so do operator-ignored ones -- a
+    // relink's new id must resolve to the ignored account (which stays
+    // ignored) rather than resurrect it as a fresh visible one.
     const match = [...known.values()]
       .filter((f) => {
         const p = f.payload as AccountPayload;
         return (
-          (p.closed_at ?? null) === null &&
+          ((p.closed_at ?? null) === null || p.ignored === true) &&
           (p.merged_into ?? null) === null &&
           !incoming.has(f.subject) &&
           !claimed.has(f.subject) &&

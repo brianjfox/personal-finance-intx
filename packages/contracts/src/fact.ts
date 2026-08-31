@@ -90,6 +90,12 @@ export const AccountPayload = type({
   "closed_at?": IsoDate.or("null"),
   /** Set when the account was folded into another (a relink minted a second subject for the same real account): the surviving subject. Fetches for this subject re-home there. */
   "merged_into?": Subject.or("null"),
+  /**
+   * The operator chose to ignore this account: it stays closed, and
+   * normalize records none of its data while the flag is set -- the feed
+   * cannot reopen it. Restoring clears the flag and reopens.
+   */
+  "ignored?": "boolean",
 });
 export type AccountPayload = typeof AccountPayload.infer;
 

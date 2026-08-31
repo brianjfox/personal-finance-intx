@@ -2369,7 +2369,8 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
     }
   };
   const open = inst.accounts.filter((a) => !a.closed);
-  const closedCount = inst.accounts.length - open.length;
+  const ignored = inst.accounts.filter((a) => a.ignored);
+  const closedCount = inst.accounts.length - open.length - ignored.length;
   const isProperty = inst.managed && inst.category === "real_estate" && open.length === 1;
   const isConnector = CONNECTOR_ADAPTERS.has(inst.adapter);
   const lastObserved = open.map((a) => a.observed_at).filter((x): x is string => x !== null).sort().pop() ?? null;
@@ -2427,7 +2428,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
       ) : (
         open.length > 0 && (
           <table>
-            <thead><tr><th>Account Name</th><th>Type</th><th className="num">Balance</th><th>Last updated</th>{(inst.managed || isProperty) && <th></th>}</tr></thead>
+            <thead><tr><th>Account Name</th><th>Type</th><th className="num">Balance</th><th>Last updated</th>{(inst.managed || isProperty || isConnector) && <th></th>}</tr></thead>
             <tbody>
               {open.map((a) => (
                 <tr key={a.account_id}>
@@ -2438,7 +2439,7 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
                     {OWED_TYPES.has(a.type) && a.value !== null ? <span className="small muted" style={{ fontWeight: 400 }}> owed</span> : null}
                   </td>
                   <td className="small muted">{when(a.observed_at)}</td>
-                  {(inst.managed || isProperty) && (
+                  {(inst.managed || isProperty || isConnector) && (
                     <td style={{ textAlign: "right" }}>
                       {isProperty && (
                         <button className="ghost" disabled={busy !== null} onClick={() => setEditingProperty((e) => !e)} title="Edit this property">
@@ -2453,6 +2454,16 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
                           onClick={() => void act("update", () => api.removeManagedAccount(inst.institution_id, a.account_id))}
                         >
                           <Icon name="trash" />
+                        </button>
+                      )}
+                      {isConnector && (
+                        <button
+                          className="ghost"
+                          title="Hide this account — it leaves your totals and updates stop recording it until you restore it"
+                          disabled={busy !== null}
+                          onClick={() => void act("update", () => api.setAccountIgnored(a.account_id, true))}
+                        >
+                          <Icon name="eye-slash" />
                         </button>
                       )}
                     </td>
@@ -2496,6 +2507,24 @@ function InstitutionCard({ inst, onChanged }: { inst: InstitutionOverview; onCha
               onUpdate={() => void act("update", () => api.refreshInstitution(inst.institution_id))}
               onChanged={onChanged}
             />
+          )}
+          {ignored.length > 0 && (
+            <div className="small muted" style={{ marginTop: 8 }}>
+              {ignored.length} hidden account{ignored.length > 1 ? "s" : ""}:{" "}
+              {ignored.map((a) => (
+                <span key={a.account_id} style={{ marginRight: 10, whiteSpace: "nowrap" }}>
+                  {a.name}{" "}
+                  <button
+                    className="ghost"
+                    title="Restore this account — the next update fills it in again"
+                    disabled={busy !== null}
+                    onClick={() => void act("update", () => api.setAccountIgnored(a.account_id, false))}
+                  >
+                    <Icon name="eye" />
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
           {closedCount > 0 && <p className="small muted">{closedCount} removed account{closedCount > 1 ? "s" : ""} kept in history.</p>}
           {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}

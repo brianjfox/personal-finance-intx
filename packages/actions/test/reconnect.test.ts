@@ -242,6 +242,106 @@ describe("after a repair merge", () => {
   });
 });
 
+describe("ignored accounts", () => {
+  const ignoreAccount = (ledger: ReturnType<typeof freshLedger>, subject: string, at: string): void => {
+    const prior = views.accounts(ledger).find((a) => a.account_id === subject);
+    const priorFact = ledger.asOf({ kind: "account", subject })[0]!;
+    ledger.commit({
+      batchId: `ignore:${subject}`,
+      writer: "assets_manager",
+      facts: [
+        {
+          kind: "account",
+          subject,
+          key: "account",
+          payload: { ...(priorFact.payload as AccountPayload), closed_at: at.slice(0, 10), ignored: true },
+          observed_at: at,
+          effective_at: at,
+          source_id: prior!.institution_id,
+          source_doc_id: null,
+          supersedes: priorFact.id,
+          writer: "assets_manager",
+          provisional: false,
+        },
+      ],
+    });
+  };
+
+  test("the feed cannot reopen an ignored account, records nothing for it, and never closes it as gone", () => {
+    const ledger = freshLedger();
+    runNight(
+      ledger,
+      "n1",
+      {
+        snapshots: [
+          {
+            ...snap("inst.bank", NIGHT1, [
+              checking("acct.bank.keep", ASOF1, "100", { name: "Keep", masked_number: "1111" }),
+              checking("acct.bank.hide", ASOF1, "200", { name: "Hide Me", masked_number: "2222" }),
+            ]),
+            complete: true,
+          },
+        ],
+        failures: [],
+      },
+      NIGHT1,
+    ).commit();
+    ignoreAccount(ledger, "acct.bank.hide", NIGHT1);
+    // Night 2: the feed still reports both accounts.
+    const night2 = runNight(
+      ledger,
+      "n2",
+      {
+        snapshots: [
+          {
+            ...snap("inst.bank", NIGHT2, [
+              checking("acct.bank.keep", ASOF2, "110", { name: "Keep", masked_number: "1111" }),
+              checking("acct.bank.hide", ASOF2, "210", { name: "Hide Me", masked_number: "2222", transactions: [txn("t1", "2026-08-22T12:00:00.000Z", "-5", "Coffee")] }),
+            ]),
+            complete: true,
+          },
+        ],
+        failures: [],
+      },
+      NIGHT2,
+    );
+    // Nothing at all is proposed for the hidden account -- and it is not "gone".
+    expect(night2.norm.accounts.map((a) => a.account_id)).toEqual(["acct.bank.keep"]);
+    expect(night2.norm.facts.every((f) => f.fact.subject !== "acct.bank.hide")).toBe(true);
+    expect(night2.norm.closed).toHaveLength(0);
+    night2.commit();
+    const hidden = views.accounts(ledger).find((a) => a.account_id === "acct.bank.hide");
+    expect(hidden?.closed_at).not.toBeNull();
+    expect(hidden?.ignored).toBe(true);
+    expect(views.transactions(ledger, { subject: "acct.bank.hide" })).toHaveLength(0);
+    expect(views.netWorth(ledger).net_worth).toBe("110");
+  });
+
+  test("a relink's new provider id resolves to the ignored account instead of resurrecting it", () => {
+    const ledger = freshLedger();
+    runNight(
+      ledger,
+      "n1",
+      { snapshots: [{ ...snap("inst.bank", NIGHT1, [checking("acct.bank.hide", ASOF1, "200", { name: "Hide Me", masked_number: "2222" })]), complete: true }], failures: [] },
+      NIGHT1,
+    ).commit();
+    ignoreAccount(ledger, "acct.bank.hide", NIGHT1);
+    const night2 = runNight(
+      ledger,
+      "n2",
+      { snapshots: [{ ...snap("inst.bank", NIGHT2, [checking("acct.bank.relinked", ASOF2, "210", { name: "Hide Me", masked_number: "2222" })]), complete: true }], failures: [] },
+      NIGHT2,
+    );
+    // Matched to the ignored account -> skipped entirely; only the alias
+    // fact for the new provider id is proposed.
+    expect(night2.norm.accounts).toHaveLength(0);
+    night2.commit();
+    const open = views.accounts(ledger).filter((a) => a.closed_at === null);
+    expect(open).toHaveLength(0);
+    expect(views.accounts(ledger).find((a) => a.account_id === "acct.bank.relinked")?.merged_into).toBe("acct.bank.hide");
+  });
+});
+
 describe("voided transactions count nowhere", () => {
   test("views and cash flow skip a voided fact", () => {
     const ledger = freshLedger();
