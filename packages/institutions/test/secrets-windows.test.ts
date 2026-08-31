@@ -22,14 +22,17 @@ const globMatch = (pattern: string, target: string): boolean =>
 
 interface FakeShell {
   run: CommandRunner;
+  /** Target -> blob as base64: the real store holds BYTES, and a chunk may not be valid UTF-8 on its own. */
   creds: Map<string, string>;
+  /** The blob at `target`, decoded as UTF-8 text (for whole-value assertions). */
+  text: (target: string) => string | undefined;
   /** Every script handed to "PowerShell", in order. */
   scripts: string[];
 }
 
 /** A PowerShell that answers the shim scripts from a Map. failAddType simulates the no-compiler box (W2 territory). */
 function fakePowerShell(opts: { failAddType?: boolean; initial?: Record<string, string> } = {}): FakeShell {
-  const creds = new Map(Object.entries(opts.initial ?? {}));
+  const creds = new Map(Object.entries(opts.initial ?? {}).map(([t, v]) => [t, b64(v)]));
   const scripts: string[] = [];
   const run: CommandRunner = (command, args) => {
     expect(command).toBe("powershell");
@@ -43,14 +46,14 @@ function fakePowerShell(opts: { failAddType?: boolean; initial?: Record<string, 
     if (script.includes("[FinCred]::Write(")) {
       const m = script.match(new RegExp(`FromBase64String\\('${B64_RE}'\\)`));
       const v = script.match(new RegExp(`::Write\\(\\$t,'${B64_RE}'\\)`));
-      creds.set(fromB64(m![1]!), fromB64(v![1]!));
+      creds.set(fromB64(m![1]!), v![1]!);
       return { status: 0, stdout: "", stderr: "" };
     }
     if (script.includes("[FinCred]::Read(")) {
       const m = script.match(new RegExp(`FromBase64String\\('${B64_RE}'\\)`));
       const v = creds.get(fromB64(m![1]!));
       if (v === undefined) return { status: 3, stdout: "", stderr: "" };
-      return { status: 0, stdout: b64(v), stderr: "" };
+      return { status: 0, stdout: v, stderr: "" };
     }
     if (script.includes("[FinCred]::Delete(")) {
       const m = script.match(new RegExp(`FromBase64String\\('${B64_RE}'\\)`));
@@ -74,7 +77,7 @@ function fakePowerShell(opts: { failAddType?: boolean; initial?: Record<string, 
     }
     throw new Error(`fake PowerShell got an unrecognized script:\n${script}`);
   };
-  return { run, creds, scripts };
+  return { run, creds, text: (t) => (creds.has(t) ? fromB64(creds.get(t)!) : undefined), scripts };
 }
 
 const tmpFile = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fin-credstore-")), "credstore.bin");
@@ -86,7 +89,7 @@ describe("credential manager store (W1, fake PowerShell)", () => {
     store.set!("fin-plaid", "client_id", "cid-123");
     store.set!("fin-enablebanking", "private_key", PEM);
     expect([...shell.creds.keys()]).toEqual(["fin-plaid/client_id", "fin-enablebanking/private_key"]);
-    expect(shell.creds.get("fin-enablebanking/private_key")).toBe(PEM);
+    expect(shell.text("fin-enablebanking/private_key")).toBe(PEM);
     expect(store.get("fin-enablebanking", "private_key")).toBe(PEM);
     expect(store.get("fin-plaid", "nope")).toBeNull();
   });
@@ -113,10 +116,10 @@ describe("credential manager store (W1, fake PowerShell)", () => {
     expect(shell.scripts).toHaveLength(1); // second get answered from cache
     store.set!("fin-plaid", "secret", "rotated");
     expect(store.get("fin-plaid", "secret")).toBe("rotated"); // cache write-through, no read spawn
-    expect(shell.scripts).toHaveLength(2);
+    expect(shell.scripts).toHaveLength(3); // the write + the stale-chunk probe
     expect(store.delete!("fin-plaid", "secret")).toBe(true);
     expect(store.get("fin-plaid", "secret")).toBeNull(); // cache invalidated: re-reads the OS
-    expect(shell.scripts).toHaveLength(4);
+    expect(shell.scripts).toHaveLength(6); // + bare delete, chunk probe, re-read
     expect(store.delete!("fin-plaid", "secret")).toBe(false); // already gone
   });
 
@@ -153,6 +156,87 @@ describe("credential manager store (W1, fake PowerShell)", () => {
     const store = credentialManagerSecretStore({ run: shell.run });
     expect(store.enumerate!("fin-*").sort()).toEqual(["fin-kraken/api_key:inst.k", "fin-plaid/client_id"]);
     expect(store.enumerate!("nomatch-*")).toEqual([]);
+  });
+});
+
+// A generic credential's blob is capped at CRED_MAX_CREDENTIAL_BLOB_SIZE
+// (2560 bytes); CredWrite fails an oversized blob with Win32 error 1783.
+// The Enable Banking RSA private key PEM (~3.2 KB at 4096 bits) does not
+// fit, so oversized values are chunked across `<target>#1..#N` behind a
+// sentinel at the bare target.
+describe("credential manager store: values over the 2560-byte blob cap", () => {
+  const SENTINEL = "\u0000fin-chunks:";
+  // ~4.7 KB of PEM-looking text: 3 chunks at 2048 bytes each.
+  const BIG = `-----BEGIN PRIVATE KEY-----\n${"MIIfakebase64line/0123456789+abcdefghijklmnopqrstuv\n".repeat(90)}-----END PRIVATE KEY-----\n`;
+
+  test("an oversized value is chunked, round-trips, and reads are cached", () => {
+    expect(Buffer.byteLength(BIG, "utf8")).toBeGreaterThan(2560);
+    const shell = fakePowerShell();
+    const store = credentialManagerSecretStore({ run: shell.run });
+    store.set!("fin-enablebanking", "u.bfox.private_key", BIG);
+    const t = "fin-enablebanking/u.bfox.private_key";
+    const n = Math.ceil(Buffer.byteLength(BIG, "utf8") / 2048);
+    expect(shell.text(t)).toBe(`${SENTINEL}${n}`);
+    expect([...shell.creds.keys()].filter((k) => k.startsWith(`${t}#`)).sort()).toEqual(
+      Array.from({ length: n }, (_, i) => `${t}#${i + 1}`).sort(),
+    );
+    // No chunk exceeds the cap, and no script carries the raw key.
+    for (const [k, v] of shell.creds) {
+      if (k.startsWith(`${t}#`)) expect(Buffer.from(v, "base64").length).toBeLessThanOrEqual(2560);
+    }
+    for (const script of shell.scripts) expect(script).not.toContain("BEGIN PRIVATE KEY");
+    // Write-through cache, then a genuinely cold reassembling read.
+    expect(store.get("fin-enablebanking", "u.bfox.private_key")).toBe(BIG);
+    const fresh = credentialManagerSecretStore({ run: shell.run });
+    expect(fresh.get("fin-enablebanking", "u.bfox.private_key")).toBe(BIG);
+    const spawns = shell.scripts.length;
+    expect(fresh.get("fin-enablebanking", "u.bfox.private_key")).toBe(BIG); // cached
+    expect(shell.scripts).toHaveLength(spawns);
+  });
+
+  test("a chunk boundary that cuts a UTF-8 code point still round-trips", () => {
+    // "€" is 3 bytes; 2048 % 3 != 0, so the first boundary lands mid-char.
+    const euros = "€".repeat(1000); // 3000 bytes -> 2 chunks
+    const shell = fakePowerShell();
+    credentialManagerSecretStore({ run: shell.run }).set!("fin-test", "wide", euros);
+    expect(credentialManagerSecretStore({ run: shell.run }).get("fin-test", "wide")).toBe(euros);
+  });
+
+  test("enumerate hides chunk targets; delete removes the whole chain", () => {
+    const shell = fakePowerShell();
+    const store = credentialManagerSecretStore({ run: shell.run });
+    store.set!("fin-enablebanking", "u.bfox.private_key", BIG);
+    store.set!("fin-plaid", "client_id", "cid");
+    expect(store.enumerate!("fin-*").sort()).toEqual(["fin-enablebanking/u.bfox.private_key", "fin-plaid/client_id"]);
+    expect(store.delete!("fin-enablebanking", "u.bfox.private_key")).toBe(true);
+    expect([...shell.creds.keys()]).toEqual(["fin-plaid/client_id"]); // no orphaned chunks
+    expect(store.get("fin-enablebanking", "u.bfox.private_key")).toBeNull();
+  });
+
+  test("rotation cleans up: big -> small leaves no chunks, big -> smaller-big trims the tail", () => {
+    const shell = fakePowerShell();
+    const store = credentialManagerSecretStore({ run: shell.run });
+    store.set!("fin-test", "key", BIG); // 3 chunks
+    store.set!("fin-test", "key", "small-now");
+    expect([...shell.creds.keys()]).toEqual(["fin-test/key"]);
+    expect(shell.text("fin-test/key")).toBe("small-now");
+    const medium = "x".repeat(3000); // back up to 2 chunks...
+    store.set!("fin-test", "key", medium);
+    store.set!("fin-test", "key", BIG); // ...and 3 again
+    store.set!("fin-test", "key", medium); // down to 2: #3 must go
+    expect([...shell.creds.keys()].sort()).toEqual(["fin-test/key", "fin-test/key#1", "fin-test/key#2"]);
+    expect(credentialManagerSecretStore({ run: shell.run }).get("fin-test", "key")).toBe(medium);
+  });
+
+  test("a missing chunk reads as null without caching, so a later repair is picked up", () => {
+    const shell = fakePowerShell();
+    credentialManagerSecretStore({ run: shell.run }).set!("fin-test", "key", BIG);
+    shell.creds.delete("fin-test/key#2"); // simulate a half-deleted chain
+    const store = credentialManagerSecretStore({ run: shell.run });
+    expect(store.get("fin-test", "key")).toBeNull();
+    store.set!("fin-test", "key", BIG); // repair
+    expect(store.get("fin-test", "key")).toBe(BIG);
+    expect(credentialManagerSecretStore({ run: shell.run }).get("fin-test", "key")).toBe(BIG);
   });
 });
 
@@ -232,7 +316,7 @@ describe("windowsSecretStore: the one-time W1/W2 pick", () => {
     const notices: string[] = [];
     const store = windowsSecretStore({ run: shell.run, log: (m) => void notices.push(m) });
     store.set!("fin-plaid", "client_id", "cid");
-    expect(shell.creds.get("fin-plaid/client_id")).toBe("cid");
+    expect(shell.text("fin-plaid/client_id")).toBe("cid");
     expect(notices).toEqual([]);
   });
 
