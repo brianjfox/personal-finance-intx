@@ -88,6 +88,13 @@ export const InstitutionSnapshot = type({
   via: "string",
   raw_document_ids: Id.array(),
   accounts: SnapshotAccount.array(),
+  /**
+   * True when `accounts` is the institution's COMPLETE current account
+   * list (an API adapter enumerating the connection), so an open ledger
+   * account missing from it has genuinely stopped existing there. File
+   * drops leave this unset: a partial drop must never close accounts.
+   */
+  "complete?": "boolean",
 });
 export type InstitutionSnapshot = typeof InstitutionSnapshot.infer;
 

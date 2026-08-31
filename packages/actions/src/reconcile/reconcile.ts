@@ -87,6 +87,8 @@ const DEDUPE_FOREVER: ReadonlySet<FindingCode> = new Set([
   "corrected_tax_document",
   "crypto_swap_taxable_event",
   "unknown_account",
+  "account_relinked",
+  "account_gone",
   "duplicate_transaction",
   "internal_transfer_booked_as_income",
 ]);
@@ -181,6 +183,20 @@ function detectFetchFailures(ctx: DetectorContext): void {
 
 function detectNewAccounts(ctx: DetectorContext): void {
   for (const a of ctx.input.accounts) {
+    if (a.remapped_from !== undefined) {
+      emit(ctx, {
+        kind: "info",
+        code: "account_relinked",
+        severity: "info",
+        subject: a.account_id,
+        summary: `${a.institution_id} now reports ${a.account_id} as ${a.remapped_from}; the new id was matched to the known account and its history kept`,
+        detail: { institution_id: a.institution_id, provider_id: a.remapped_from },
+        after_refs: [a.refs.account],
+        requires_human: false,
+        holds: false,
+      });
+      continue;
+    }
     if (!a.is_new) continue;
     emit(ctx, {
       kind: "info",
@@ -190,6 +206,19 @@ function detectNewAccounts(ctx: DetectorContext): void {
       summary: `new account ${a.account_id} (${a.type}) at ${a.institution_id}`,
       detail: { institution_id: a.institution_id, type: a.type },
       after_refs: [a.refs.account],
+      requires_human: false,
+      holds: false,
+    });
+  }
+  for (const c of ctx.input.closed ?? []) {
+    emit(ctx, {
+      kind: "info",
+      code: "account_gone",
+      severity: "info",
+      subject: c.account_id,
+      summary: `${c.institution_id} no longer reports ${c.account_id}; the account was closed (it reopens if the feed reports it again)`,
+      detail: { institution_id: c.institution_id },
+      after_refs: [c.ref],
       requires_human: false,
       holds: false,
     });
@@ -240,6 +269,7 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
   const proposedIds = new Set(txs.map((t) => `${t.account}|${t.txn_id}`));
   for (const f of ctx.ledger.asOf({ kind: "transaction" })) {
     const p = f.payload as TransactionPayload;
+    if (p.voided === true) continue;
     if (proposedIds.has(`${p.account_id}|${p.txn_id}`)) continue;
     txs.push({ ref: null, id: f.id, account: p.account_id, sig: sig(p), txn_id: p.txn_id });
   }
@@ -353,7 +383,9 @@ function hasActivitySince(ctx: DetectorContext, account: string, since: string):
   if (ctx.input.facts.some((f) => f.fact.kind === "transaction" && f.fact.subject === account && posted(f.fact.payload as TransactionPayload))) {
     return true;
   }
-  return ctx.ledger.asOf({ kind: "transaction", subject: account }).some((f) => posted(f.payload as TransactionPayload));
+  return ctx.ledger
+    .asOf({ kind: "transaction", subject: account })
+    .some((f) => (f.payload as TransactionPayload).voided !== true && posted(f.payload as TransactionPayload));
 }
 
 // --- 3. corrected tax document ---------------------------------------

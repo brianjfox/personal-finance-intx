@@ -31,6 +31,8 @@ export interface AccountView {
   masked_number: string | null;
   /** Set when the account is closed (or its institution was removed): it holds no value now. */
   closed_at: string | null;
+  /** Set when this subject was folded into another account (a relink alias): render the survivor, not this. */
+  merged_into: string | null;
   provisional: boolean;
   observed_at: string;
 }
@@ -107,6 +109,7 @@ export function accounts(ledger: Ledger, opts: AsOfOpts = {}): AccountView[] {
       currency: p.currency,
       masked_number: p.masked_number ?? null,
       closed_at: p.closed_at ?? null,
+      merged_into: p.merged_into ?? null,
       provisional: f.provisional,
       observed_at: f.observed_at,
     };
@@ -339,9 +342,11 @@ export function netWorth(ledger: Ledger, opts: AsOfOpts & { currency?: string; r
   };
 }
 
-/** Subject -> current transaction facts (one per txn key). */
+/** Subject -> current transaction facts (one per txn key). Voided facts (re-booked movements a merge folded away) are history, not activity. */
 export function transactions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): StoredFact[] {
-  return ledger.asOf({ kind: "transaction", ...opts });
+  return ledger
+    .asOf({ kind: "transaction", ...opts })
+    .filter((f) => (f.payload as TransactionPayload).voided !== true);
 }
 
 export interface CashFlowMonth {
@@ -407,6 +412,7 @@ export function cashFlow(
   let provisional = false;
   for (const f of ledger.asOf({ kind: "transaction", ...opts })) {
     const p = f.payload as TransactionPayload;
+    if (p.voided === true) continue;
     if (p.transfer_group != null || INTERNAL_TYPES.has(p.type)) {
       excluded++;
       continue;

@@ -719,7 +719,9 @@ export function createApp(opts: AppOptions): App {
         const managedList = managed ? readManagedAccounts(dataDir, e.institution_id) : [];
         const closedIds = new Set(managedList.filter((a) => a.closed_at !== undefined).map((a) => a.account_id));
         const rows: InstitutionAccountRow[] = accts
-          .filter((a) => a.institution_id === e.institution_id)
+          // A merged alias subject is the same real account under a relink's
+          // new provider id: the survivor's row is the one to show.
+          .filter((a) => a.institution_id === e.institution_id && a.merged_into === null)
           .map((a) => {
             const line = lineByAccount.get(a.account_id);
             return {

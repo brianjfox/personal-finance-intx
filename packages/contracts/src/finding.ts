@@ -29,6 +29,8 @@ export const FINDING_CODES = [
   "position_balance_mismatch", //          sum(positions) != stated total
   "fetch_failed", //                       an institution did not answer
   "unknown_account", //                    an account appeared that the registry has not seen
+  "account_relinked", //                   a reconnect re-observed a known account under a new provider id
+  "account_gone", //                       a complete feed stopped reporting an open account; it was closed
   // Phase 2 -- Tax Engine (deck slide 17: "nothing surprises you")
   "estimated_tax_due", //                  a quarterly estimated payment is due: pay it from reserve
   "reserve_shortfall", //                  the tax reserve does not cover the upcoming installment

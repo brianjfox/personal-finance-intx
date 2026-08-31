@@ -232,7 +232,8 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
       }
 
       const draft = validateDraftSnapshot(
-        { institution_id: opts.institution_id, fetched_at: asOf, via: ENABLEBANKING_VIA, accounts },
+        // The session lists every account under the consent: complete feed.
+        { institution_id: opts.institution_id, fetched_at: asOf, via: ENABLEBANKING_VIA, accounts, complete: true },
         `enablebanking ${opts.institution_id}`,
       );
       return {

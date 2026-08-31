@@ -88,8 +88,29 @@ export const AccountPayload = type({
   "masked_number?": "string | null",
   "opened_at?": IsoDate.or("null"),
   "closed_at?": IsoDate.or("null"),
+  /** Set when the account was folded into another (a relink minted a second subject for the same real account): the surviving subject. Fetches for this subject re-home there. */
+  "merged_into?": Subject.or("null"),
 });
 export type AccountPayload = typeof AccountPayload.infer;
+
+/**
+ * Do two account records describe the same real account at one
+ * institution? The test a relink has to pass to keep history continuous:
+ * same type, and same masked number when both sides state one --
+ * otherwise same name and currency. Institutions keep masks stable
+ * across link sessions; names and currencies are the fallback when a
+ * feed omits the mask.
+ */
+export function sameRealAccount(
+  a: Pick<AccountPayload, "type" | "name" | "currency"> & { masked_number?: string | null },
+  b: Pick<AccountPayload, "type" | "name" | "currency"> & { masked_number?: string | null },
+): boolean {
+  if (a.type !== b.type) return false;
+  const am = a.masked_number ?? null;
+  const bm = b.masked_number ?? null;
+  if (am !== null && bm !== null) return am === bm;
+  return a.name === b.name && a.currency === b.currency;
+}
 
 export const BalanceType = type("'total' | 'available' | 'cash' | 'owed' | 'credit_limit'");
 export type BalanceType = typeof BalanceType.infer;
@@ -169,8 +190,30 @@ export const TransactionPayload = type({
   "raw_category?": "string | null",
   /** For swaps: the instrument given up. */
   "swap_from?": type({ instrument: Instrument, quantity: Decimal }).or("null"),
+  /**
+   * True when a merge established this fact re-books a movement the ledger
+   * already holds under another id (a relink re-observed it). A voided
+   * transaction stays queryable as history but counts nowhere.
+   */
+  "voided?": "boolean",
 });
 export type TransactionPayload = typeof TransactionPayload.infer;
+
+/**
+ * What makes a movement "the same one" when a relink re-observes it under
+ * a new provider txn id: day, amount, normalised description, instrument.
+ * Used as a multiset key so two genuinely identical purchases never
+ * absorb each other.
+ */
+export function transactionSignature(
+  p: Pick<TransactionPayload, "posted_at" | "amount" | "description"> & {
+    instrument?: TransactionPayload["instrument"];
+    quantity?: TransactionPayload["quantity"];
+  },
+): string {
+  const desc = p.description.toLowerCase().replace(/\s+/g, " ").trim();
+  return `${p.posted_at.slice(0, 10)}|${p.amount}|${desc}|${p.instrument?.symbol ?? ""}|${p.quantity ?? ""}`;
+}
 
 export const TaxForm = type(
   "'1099-B' | '1099-DIV' | '1099-INT' | '1099-MISC' | '1099-R' | '1099-NEC' | 'K-1' | 'W-2' | '1098' | 'other'",
