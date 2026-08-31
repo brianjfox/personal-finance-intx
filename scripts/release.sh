@@ -65,7 +65,7 @@ echo "release: committed $(git rev-parse --short HEAD) and tagged $TAG"
 
 if [ "$PUSH" = 1 ]; then
   git push origin main "$TAG"
-  REPO="$(git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#')"
+  REPO="$(git remote get-url origin | sed -E 's#\.git$##; s#.*[:/]([^/]+/[^/]+)$#\1#')"
   echo "release: pushed. Watch the build:  gh run watch  (or https://github.com/$REPO/actions)"
   echo "release: when it is green, review and publish the draft:"
   echo "         gh release view $TAG --web"
