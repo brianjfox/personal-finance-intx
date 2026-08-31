@@ -43,6 +43,21 @@ describe.skipIf(!win)("credential manager store (real PowerShell)", () => {
     expect(credentialManagerSecretStore().get(SERVICE, "rotate")).toBe("v2");
     store.delete!(SERVICE, "rotate");
   });
+
+  test("a value over CRED_MAX_CREDENTIAL_BLOB_SIZE (2560) chunks, round-trips, and deletes cleanly", () => {
+    // The bug this pins: a 4096-bit RSA private key PEM (~3.2 KB) used to
+    // fail CredWrite with Win32 error 1783. Make it comfortably 3 chunks.
+    const bigPem = `-----BEGIN PRIVATE KEY-----\n${"MIIfakebase64line/0123456789+abcdefghijklmnopqrstuv\n".repeat(90)}-----END PRIVATE KEY-----\n`;
+    expect(Buffer.byteLength(bigPem, "utf8")).toBeGreaterThan(2560);
+    const store = credentialManagerSecretStore();
+    store.set!(SERVICE, "big_key", bigPem);
+    // A genuinely cold read reassembles from the OS store.
+    expect(credentialManagerSecretStore().get(SERVICE, "big_key")).toBe(bigPem);
+    // Chunk credentials are hidden from the sweep's enumerate.
+    expect(credentialManagerSecretStore().enumerate!(`${SERVICE}*`)).toEqual([`${SERVICE}/big_key`]);
+    expect(store.delete!(SERVICE, "big_key")).toBe(true);
+    expect(credentialManagerSecretStore().get(SERVICE, "big_key")).toBeNull();
+  });
 });
 
 describe.skipIf(!win)("dpapi blob file store (real PowerShell)", () => {

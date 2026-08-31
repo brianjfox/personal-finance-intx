@@ -21,7 +21,9 @@
 // values in and out -- travels base64-encoded, so no secret or name
 // is ever quoted into a script (the same motivation as the Keychain
 // `b64:` convention, applied unconditionally). The credential blob
-// itself stores the raw UTF-8 value bytes.
+// itself stores the raw UTF-8 value bytes; a value over the 2560-byte
+// generic-credential cap is split across `<target>#1..#N` chunk
+// credentials behind a sentinel at the bare target (see below).
 //
 // PowerShell spawns cost 200-500ms, so each store keeps a small
 // in-process cache, written through by set and invalidated by delete.
@@ -51,6 +53,21 @@ function spawnRunner(command: string, args: string[]): RunResult {
 
 const toB64 = (s: string): string => Buffer.from(s, "utf8").toString("base64");
 const fromB64 = (s: string): string => Buffer.from(s, "base64").toString("utf8");
+
+// Windows caps a generic credential's blob at CRED_MAX_CREDENTIAL_BLOB_SIZE
+// (5 * 512 = 2560 bytes) and CredWrite reports an oversized blob as Win32
+// error 1783 (RPC_X_BAD_STUB_DATA). An RSA private key PEM -- the Enable
+// Banking key, ~3.2 KB at 4096 bits -- does not fit, so a value beyond the
+// cap is split across chunk credentials `<target>#1..#N` with a small
+// sentinel at the bare target naming the count. The split is at the BYTE
+// level (a chunk may cut a UTF-8 code point), so reads concatenate bytes
+// before decoding. The sentinel starts with NUL, which no real secret --
+// all UTF-8 text: tokens, PEMs, JSON -- begins with; no account name
+// contains `#`, so chunk targets never collide with real ones.
+const MAX_BLOB_BYTES = 2560;
+const CHUNK_BYTES = 2048;
+const CHUNK_SENTINEL = "\u0000fin-chunks:";
+const CHUNK_TARGET_RE = /#\d+$/;
 
 function runPowerShell(run: CommandRunner, script: string): RunResult {
   return run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]);
@@ -136,9 +153,9 @@ if ($null -eq $v) { exit 3 }
 [Console]::Out.Write($v)`;
 }
 
-function credSetScript(target: string, value: string): string {
+function credSetScript(target: string, valueB64: string): string {
   return `${SHIM_HEADER}${decodeTarget(toB64(target))}
-[FinCred]::Write($t,'${toB64(value)}')`;
+[FinCred]::Write($t,'${valueB64}')`;
 }
 
 function credDeleteScript(target: string): string {
@@ -166,6 +183,13 @@ export function credentialManagerSecretStore(opts: CredentialManagerOpts = {}): 
   const run = opts.run ?? spawnRunner;
   const cache = new Map<string, string | null>();
   const target = (service: string, account: string): string => `${service}/${account}`;
+  /** Delete `<t>#from`, `#from+1`, ... until one is not there: clears a chunk chain of unknown length. */
+  const deleteChunkTail = (t: string, from: number): void => {
+    for (let i = from; ; i += 1) {
+      const r = runPowerShell(run, credDeleteScript(`${t}#${i}`));
+      if (r.status !== 0) break;
+    }
+  };
   return {
     get(service, account) {
       const t = target(service, account);
@@ -177,27 +201,68 @@ export function credentialManagerSecretStore(opts: CredentialManagerOpts = {}): 
       // process lifetime -- return null without caching, so the next
       // read re-spawns.
       if (r.status !== 0 && r.status !== 3) return null;
-      const decoded = r.status === 0 ? fromB64(r.stdout.trim()) : "";
+      let decoded = r.status === 0 ? fromB64(r.stdout.trim()) : "";
+      if (decoded.startsWith(CHUNK_SENTINEL)) {
+        // An oversized value: the bare target names the chunk count and
+        // the bytes live in `<t>#1..#N`. Reassemble BYTES first -- a
+        // chunk boundary may cut a UTF-8 code point -- then decode once.
+        const n = Number(decoded.slice(CHUNK_SENTINEL.length));
+        if (!Number.isInteger(n) || n < 1) return null;
+        const parts: Buffer[] = [];
+        for (let i = 1; i <= n; i += 1) {
+          const cr = runPowerShell(run, credGetScript(`${t}#${i}`));
+          // A missing or unreadable chunk is treated as transient: not
+          // cached, so the next read retries the whole chain.
+          if (cr.status !== 0) return null;
+          parts.push(Buffer.from(cr.stdout.trim(), "base64"));
+        }
+        decoded = Buffer.concat(parts).toString("utf8");
+      }
       const v = decoded === "" ? null : decoded;
       cache.set(t, v);
       return v;
     },
     set(service, account, value) {
       const t = target(service, account);
-      const r = runPowerShell(run, credSetScript(t, value));
-      if (r.status !== 0) throw new Error(`Credential Manager write failed for ${t}: ${r.stderr.trim()}`);
+      const write = (tgt: string, valueB64: string): void => {
+        const r = runPowerShell(run, credSetScript(tgt, valueB64));
+        if (r.status !== 0) throw new Error(`Credential Manager write failed for ${tgt}: ${r.stderr.trim()}`);
+      };
+      const bytes = Buffer.from(value, "utf8");
+      let chunks = 0;
+      if (bytes.length > MAX_BLOB_BYTES) {
+        // Chunks first, sentinel last: a reader that sees the sentinel
+        // can rely on every chunk already being in place.
+        chunks = Math.ceil(bytes.length / CHUNK_BYTES);
+        for (let i = 1; i <= chunks; i += 1) {
+          write(`${t}#${i}`, bytes.subarray((i - 1) * CHUNK_BYTES, i * CHUNK_BYTES).toString("base64"));
+        }
+        write(t, toB64(`${CHUNK_SENTINEL}${chunks}`));
+      } else {
+        write(t, toB64(value));
+      }
+      // A previous value may have been longer: clear any stale chunk tail
+      // so rotation never leaves orphaned credentials behind.
+      deleteChunkTail(t, chunks + 1);
       cache.set(t, value);
     },
     delete(service, account) {
       const t = target(service, account);
       cache.delete(t);
       const r = runPowerShell(run, credDeleteScript(t));
+      deleteChunkTail(t, 1);
       return r.status === 0;
     },
     enumerate(pattern) {
       const r = runPowerShell(run, credEnumerateScript(pattern));
       if (r.status !== 0) return [];
-      return r.stdout.split(/\r?\n/).filter((line) => line !== "").map(fromB64);
+      return r.stdout
+        .split(/\r?\n/)
+        .filter((line) => line !== "")
+        .map(fromB64)
+        // Chunk credentials are an implementation detail of one target:
+        // the sweep deletes them through delete() on the bare name.
+        .filter((t) => !CHUNK_TARGET_RE.test(t));
     },
   };
 }
