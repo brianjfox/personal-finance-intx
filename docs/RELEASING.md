@@ -89,12 +89,14 @@ an app-specific password, and cleans up after itself); by hand it is
 | `APPLE_PASSWORD` | an app-specific password (appleid.apple.com → Sign-In and Security) |
 | `APPLE_TEAM_ID` | `UZHK52XR6P` |
 
-The Tauri CLI imports the certificate into a throwaway keychain, signs
-the sidecar and the app with the hardened runtime and
-`entitlements.plist`, notarizes and staples the `.app`, then packs the
-dmg — so the stapled app is what the dmg carries (the fully-offline
-install story PACKAGING.md asked for). Omit `APPLE_ID`/`APPLE_PASSWORD`/
-`APPLE_TEAM_ID` to sign without notarizing.
+The workflow imports the certificate into a throwaway keychain (the
+.p12 may carry every identity on the release Mac — `APPLE_SIGNING_IDENTITY`
+picks the one to use), then the Tauri CLI signs the sidecar, the app,
+and the dmg with the hardened runtime and `entitlements.plist`,
+notarizes and staples the `.app`, and packs the dmg — so the stapled
+app is what the dmg carries (the fully-offline install story
+PACKAGING.md asked for). Omit `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID`
+to sign without notarizing.
 
 ### Building the same artifact locally
 
