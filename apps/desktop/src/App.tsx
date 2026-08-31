@@ -1039,7 +1039,8 @@ function DeleteAllDataCard() {
         <p className="small muted">
           One thing this cannot do: revoke access on the other side. If you had connected banks or exchanges, also
           remove this app's access in their own settings (Plaid-connected banks, Enable Banking consents, Coinbase and
-          Kraken API keys).
+          Kraken API keys).{isWindows() &&
+            " The WebView2 runtime also keeps this window's browsing data under %LOCALAPPDATA%\\com.corbitsdev.macos.personal-finance — delete that folder after quitting."}
         </p>
       </div>
     );
