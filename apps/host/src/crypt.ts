@@ -1,13 +1,38 @@
-// Encryption at rest, the macOS-native way: each user's data directory
-// is an AES-256 encrypted APFS sparse bundle, created and mounted with
-// the user's login password and detached on sign-out or host exit.
-// While locked, the ledger, vault, and every document are ciphertext on
-// disk; no password, no data. The mount point IS the user's dataDir, so
-// nothing else in the app changes.
+// Encryption at rest, behind one seam. On macOS each user's data
+// directory is an AES-256 encrypted APFS sparse bundle, created and
+// mounted with the user's login password and detached on sign-out or
+// host exit. While locked, the ledger, vault, and every document are
+// ciphertext on disk; no password, no data. The mount point IS the
+// user's dataDir, so nothing else in the app changes.
+//
+// Windows has no per-user volume twin without admin+Pro or a storage
+// rewrite, so at-rest encryption is delegated to the OS disk (Device
+// Encryption / BitLocker) and DISCLOSED: the win32 implementation is a
+// no-op that reports the os-disk status truthfully, read-only.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+
+/**
+ * What a platform provides at rest: "volume" = a per-user encrypted
+ * volume this app manages; "os-disk" = whole-disk encryption the OS
+ * manages (BitLocker); "none" = plaintext on disk.
+ */
+export type AtRestCapability = "volume" | "os-disk" | "none";
+
+/** The per-platform seam users.ts drives; darwin keeps hdiutil, win32 delegates to the disk. */
+export interface StoreCrypt {
+  capability(): AtRestCapability;
+  storeImagePath(root: string, id: string): string;
+  storeExists(root: string, id: string): boolean;
+  isMounted(mountPoint: string): boolean;
+  createStore(root: string, id: string, mountPoint: string, password: string): void;
+  mountStore(root: string, id: string, mountPoint: string, password: string): void;
+  unmountStore(mountPoint: string): void;
+  changeStorePassword(root: string, id: string, oldPassword: string, newPassword: string): void;
+  encryptExisting(root: string, id: string, dataDir: string, password: string): void;
+}
 
 /** A marker written inside the volume: present <=> the store is mounted here. */
 const MARKER = ".fin-volume";
@@ -85,4 +110,69 @@ export function encryptExisting(root: string, id: string, dataDir: string, passw
     }
     fs.rmSync(stage, { recursive: true, force: true });
   }
+}
+
+/** macOS: the hdiutil sparsebundle behavior above, verbatim. */
+export function darwinStoreCrypt(): StoreCrypt {
+  return {
+    capability: () => "volume",
+    storeImagePath,
+    storeExists,
+    isMounted,
+    createStore,
+    mountStore,
+    unmountStore,
+    changeStorePassword,
+    encryptExisting,
+  };
+}
+
+/**
+ * Read-only probe of the OS disk's encryption. Get-BitLockerVolume needs
+ * the BitLocker module (Pro/Enterprise); manage-bde -status is the wider
+ * fallback (Home reports through it too). Anything unreadable is "none":
+ * the copy must never claim protection it can't see.
+ */
+function probeOsDiskEncryption(): "os-disk" | "none" {
+  const script =
+    "$d = $env:SystemDrive; " +
+    "try { $v = Get-BitLockerVolume -MountPoint $d -ErrorAction Stop; if (\"$($v.ProtectionStatus)\" -eq 'On') { 'on' } else { 'off' } } " +
+    "catch { $s = (manage-bde -status $d) 2>$null | Out-String; if ($s -match 'Protection On') { 'on' } elseif ($s -ne '') { 'off' } else { 'unknown' } }";
+  const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 15_000 });
+  return r.status === 0 && r.stdout.trim() === "on" ? "os-disk" : "none";
+}
+
+/**
+ * Windows: no per-user volume -- app data sits on the OS disk, whose
+ * encryption (Device Encryption / BitLocker) is probed once and
+ * reported. The volume operations refuse in plain words; users.ts never
+ * reaches them when the capability isn't "volume".
+ */
+export function win32StoreCrypt(probe: () => "os-disk" | "none" = probeOsDiskEncryption): StoreCrypt {
+  let probed: "os-disk" | "none" | null = null;
+  const refuse = (): never => {
+    throw new Error("per-user encrypted volumes need macOS; on Windows the data directory relies on the OS disk's encryption (BitLocker)");
+  };
+  return {
+    capability() {
+      if (probed === null) probed = probe();
+      return probed;
+    },
+    storeImagePath,
+    storeExists: () => false,
+    isMounted: () => false,
+    createStore: refuse,
+    mountStore: refuse,
+    unmountStore: () => {},
+    changeStorePassword: refuse,
+    encryptExisting: refuse,
+  };
+}
+
+/** The platform pick: darwin manages volumes; everything else delegates and discloses. */
+export function defaultStoreCrypt(): StoreCrypt {
+  if (process.platform === "darwin") return darwinStoreCrypt();
+  if (process.platform === "win32") return win32StoreCrypt();
+  // Other unixes: no volume support and no BitLocker to probe.
+  return win32StoreCrypt(() => "none");
 }

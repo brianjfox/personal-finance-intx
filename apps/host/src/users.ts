@@ -20,7 +20,10 @@ import { defaultSecretStore, scopedSecretStore, type SecretStore } from "@fin/in
 import { type } from "arktype";
 
 import { createApp, type App, type AppOptions } from "./app";
-import { changeStorePassword, createStore, encryptExisting, isMounted, mountStore, storeExists, storeImagePath, unmountStore } from "./crypt";
+import { defaultStoreCrypt } from "./crypt";
+
+// One per process: the win32 BitLocker probe runs at most once.
+const crypt = defaultStoreCrypt();
 
 const PasswordRecord = type({ salt: "string", hash: "string", n: "number", r: "number", p: "number" });
 
@@ -116,7 +119,7 @@ export function resolveSingleUserDir(root: string): string {
   const first = file?.users[0];
   if (first === undefined) return root;
   const dir = userDir(root, first.id);
-  if (first.encrypted === true && !isMounted(dir)) {
+  if (first.encrypted === true && !crypt.isMounted(dir)) {
     throw new Error(`${first.name}'s data is encrypted and locked -- open the app and sign in first, then run this again`);
   }
   return dir;
@@ -175,9 +178,9 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
   // Hygiene: a crashed host can leave stores mounted (data readable
   // without a password). Lock everything before serving anyone.
   for (const u of file.users) {
-    if (u.encrypted === true && isMounted(userDir(root, u.id))) {
+    if (u.encrypted === true && crypt.isMounted(userDir(root, u.id))) {
       try {
-        unmountStore(userDir(root, u.id));
+        crypt.unmountStore(userDir(root, u.id));
       } catch {
         /* busy: better mounted than crashed */
       }
@@ -187,13 +190,15 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
   const unlock = (u: UserInfo, password: string): App => {
     const dir = userDir(root, u.id);
     if (u.encrypted === true) {
-      if (!isMounted(dir)) mountStore(root, u.id, dir, password);
-    } else if (process.platform === "darwin") {
+      if (!crypt.isMounted(dir)) crypt.mountStore(root, u.id, dir, password);
+    } else if (crypt.capability() === "volume") {
       // First sign-in with a password: the data moves into an encrypted
       // store now, whether it's a fresh user or a migrated plaintext one.
-      if (storeExists(root, u.id)) mountStore(root, u.id, dir, password);
-      else if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) encryptExisting(root, u.id, dir, password);
-      else createStore(root, u.id, dir, password);
+      // Non-volume platforms skip this: at-rest protection is the OS
+      // disk's (disclosed), and the password stays a scrypt hash.
+      if (crypt.storeExists(root, u.id)) crypt.mountStore(root, u.id, dir, password);
+      else if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) crypt.encryptExisting(root, u.id, dir, password);
+      else crypt.createStore(root, u.id, dir, password);
       u = markEncrypted(u.id);
     }
     const app = bootApp(u);
@@ -243,8 +248,8 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       fs.mkdirSync(userDir(root, id), { recursive: true });
       file = { ...file, users: [...file.users, u] };
       writeUsersFile(root, file);
-      if (password !== undefined && process.platform === "darwin") {
-        createStore(root, id, userDir(root, id), password);
+      if (password !== undefined && crypt.capability() === "volume") {
+        crypt.createStore(root, id, userDir(root, id), password);
         const enc = markEncrypted(id);
         bootApp(enc);
         return publicUser(enc);
@@ -257,7 +262,7 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       if (u === undefined) {
         throw new Error(id === undefined ? "no users yet -- add one first" : `unknown user ${id}`);
       }
-      if (u.encrypted === true && !isMounted(userDir(root, u.id))) {
+      if (u.encrypted === true && !crypt.isMounted(userDir(root, u.id))) {
         throw new Error(`${u.name}'s data is locked -- sign in to unlock it`);
       }
       return bootApp(u);
@@ -275,11 +280,11 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       for (const [token, sess] of sessions) if (sess.id === id) sessions.delete(token);
       if (u.encrypted === true) {
         try {
-          unmountStore(userDir(root, id));
+          crypt.unmountStore(userDir(root, id));
         } catch {
           /* already detached */
         }
-        fs.rmSync(storeImagePath(root, id), { recursive: true, force: true });
+        fs.rmSync(crypt.storeImagePath(root, id), { recursive: true, force: true });
       }
       fs.rmSync(userDir(root, id), { recursive: true, force: true });
       file = { ...file, users: file.users.filter((x) => x.id !== id) };
@@ -289,7 +294,7 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       const out: Array<{ user: string; runId: string; status: string }> = [];
       for (const u of file.users) {
         // An encrypted user's runs resume at sign-in; locked data stays locked.
-        if (u.encrypted === true && !isMounted(userDir(root, u.id))) continue;
+        if (u.encrypted === true && !crypt.isMounted(userDir(root, u.id))) continue;
         const resumed = await bootApp(u).resumeInFlight();
         for (const r of resumed) out.push({ user: u.id, runId: r.runId, status: r.status });
       }
@@ -333,19 +338,19 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
         // Re-key the volume: detach (chpass refuses a mounted image),
         // change, and bring it back with the new password.
         const dir = userDir(root, u.id);
-        const wasMounted = isMounted(dir);
+        const wasMounted = crypt.isMounted(dir);
         if (wasMounted) {
           apps.get(u.id)?.close();
           apps.delete(u.id);
-          unmountStore(dir);
+          crypt.unmountStore(dir);
         }
-        changeStorePassword(root, u.id, oldPassword, newPassword);
-        if (wasMounted) mountStore(root, u.id, dir, newPassword);
+        crypt.changeStorePassword(root, u.id, oldPassword, newPassword);
+        if (wasMounted) crypt.mountStore(root, u.id, dir, newPassword);
       }
       const updated: UserInfo = { ...u, password: hashPassword(newPassword) };
       file = { ...file, users: file.users.map((x) => (x.id === u.id ? updated : x)) };
       writeUsersFile(root, file);
-      if (updated.encrypted === true && isMounted(userDir(root, updated.id))) {
+      if (updated.encrypted === true && crypt.isMounted(userDir(root, updated.id))) {
         const app = bootApp(updated);
         void app.resumeInFlight().catch(() => {});
       }
@@ -381,7 +386,7 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
         apps.get(sess.id)?.close();
         apps.delete(sess.id);
         try {
-          unmountStore(userDir(root, sess.id));
+          crypt.unmountStore(userDir(root, sess.id));
         } catch {
           /* busy: it will lock on host exit */
         }
@@ -399,7 +404,7 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
       for (const u of file.users) {
         if (u.encrypted === true) {
           try {
-            unmountStore(userDir(root, u.id));
+            crypt.unmountStore(userDir(root, u.id));
           } catch {
             /* busy */
           }
