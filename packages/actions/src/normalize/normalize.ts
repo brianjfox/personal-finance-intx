@@ -15,6 +15,7 @@
 import {
   decimal,
   sameRealAccount,
+  transactionSignature,
   type AccountPayload,
   type FactInput,
   type FetchFailure,
@@ -374,7 +375,7 @@ function normalizeAccount(
   for (const f of existing.values()) {
     const p = f.payload as TransactionPayload;
     if (p.voided === true || incomingIds.has(f.key)) continue;
-    const s = contentSignature(p);
+    const s = transactionSignature(p);
     bySig.set(s, (bySig.get(s) ?? 0) + 1);
   }
   for (const t of acct.transactions ?? []) {
@@ -399,7 +400,7 @@ function normalizeAccount(
       continue;
     }
     if (prior === undefined) {
-      const s = contentSignature(payload);
+      const s = transactionSignature(payload);
       const have = bySig.get(s) ?? 0;
       if (have > 0) {
         bySig.set(s, have - 1);
@@ -493,12 +494,6 @@ function normalizeAccount(
 
 export function positionKey(symbol: string): string {
   return symbol.trim().toUpperCase();
-}
-
-/** What makes a movement "the same one" across provider txn ids: day, amount, description, instrument. */
-export function contentSignature(p: Pick<TransactionPayload, "posted_at" | "amount" | "description"> & { instrument?: TransactionPayload["instrument"]; quantity?: TransactionPayload["quantity"] }): string {
-  const desc = p.description.toLowerCase().replace(/\s+/g, " ").trim();
-  return `${p.posted_at.slice(0, 10)}|${p.amount}|${desc}|${p.instrument?.symbol ?? ""}|${p.quantity ?? ""}`;
 }
 
 function samePayloadIgnoringClassification(a: TransactionPayload, b: TransactionPayload): boolean {

@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { AccountPayload, TransactionPayload } from "@fin/contracts";
-import { views } from "@fin/ledger";
+import { mergeAccounts, views } from "@fin/ledger";
 
 import { ASOF1, ASOF2, checking, freshLedger, NIGHT1, NIGHT2, runNight, snap } from "./helpers";
 
@@ -201,6 +201,44 @@ describe("reconnect keeps account identity", () => {
     );
     expect(night2.norm.stats.transactions_known).toBe(2);
     expect(night2.norm.stats.transactions_new).toBe(1);
+  });
+});
+
+describe("after a repair merge", () => {
+  test("the next fetch under the duplicate's provider id resolves to the survivor", () => {
+    const ledger = freshLedger();
+    // Recreate the damage: two generations of the same account. Masks are
+    // withheld on night 2 so identity matching cannot pair them.
+    runNight(
+      ledger,
+      "n1",
+      { snapshots: [{ ...snap("inst.bank", NIGHT1, [checking("acct.bank.old", ASOF1, "500", { name: "Gen One" })]), complete: true }], failures: [] },
+      NIGHT1,
+    ).commit();
+    runNight(
+      ledger,
+      "n2",
+      { snapshots: [{ ...snap("inst.bank", NIGHT2, [checking("acct.bank.new", ASOF2, "510", { name: "Gen Two" })]), complete: true }], failures: [] },
+      NIGHT2,
+    ).commit();
+    expect(views.accounts(ledger)).toHaveLength(2);
+
+    mergeAccounts(ledger, { survivor: "acct.bank.old", duplicate: "acct.bank.new", now: new Date(NIGHT3) });
+    // Night 3 still reports the duplicate's provider id; the merge marker
+    // routes it home and nothing reopens.
+    const night3 = runNight(
+      ledger,
+      "n3",
+      { snapshots: [{ ...snap("inst.bank", NIGHT3, [checking("acct.bank.new", ASOF3, "520", { name: "Gen Two" })]), complete: true }], failures: [] },
+      NIGHT3,
+    );
+    expect(night3.norm.accounts[0]?.account_id).toBe("acct.bank.old");
+    expect(night3.norm.accounts[0]?.remapped_from).toBe("acct.bank.new");
+    expect(night3.norm.closed).toHaveLength(0);
+    night3.commit();
+    const open = views.accounts(ledger).filter((a) => a.closed_at === null);
+    expect(open.map((a) => a.account_id)).toEqual(["acct.bank.old"]);
+    expect(views.netWorth(ledger).net_worth).toBe("520");
   });
 });
 

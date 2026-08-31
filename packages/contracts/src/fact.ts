@@ -199,6 +199,22 @@ export const TransactionPayload = type({
 });
 export type TransactionPayload = typeof TransactionPayload.infer;
 
+/**
+ * What makes a movement "the same one" when a relink re-observes it under
+ * a new provider txn id: day, amount, normalised description, instrument.
+ * Used as a multiset key so two genuinely identical purchases never
+ * absorb each other.
+ */
+export function transactionSignature(
+  p: Pick<TransactionPayload, "posted_at" | "amount" | "description"> & {
+    instrument?: TransactionPayload["instrument"];
+    quantity?: TransactionPayload["quantity"];
+  },
+): string {
+  const desc = p.description.toLowerCase().replace(/\s+/g, " ").trim();
+  return `${p.posted_at.slice(0, 10)}|${p.amount}|${desc}|${p.instrument?.symbol ?? ""}|${p.quantity ?? ""}`;
+}
+
 export const TaxForm = type(
   "'1099-B' | '1099-DIV' | '1099-INT' | '1099-MISC' | '1099-R' | '1099-NEC' | 'K-1' | 'W-2' | '1098' | 'other'",
 );

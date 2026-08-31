@@ -21,6 +21,7 @@
 //   fin-host estate-audit [--data DIR]                     sync estate.json + hygiene audit
 //   fin-host scenario   [--data DIR] --subject S --date YYYY-MM-DD [--price N --basis N --depreciation N]
 //   fin-host projection [--data DIR] --years N [--seed S]
+//   fin-host merge-accounts [--data DIR] [--apply] [--from A --into B]  fold relink-duplicated accounts back together
 //
 // Default data dir: ~/Library/Application Support/FinInterchange (macOS) or $FIN_DATA_DIR.
 
@@ -28,7 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveFinding, views } from "@fin/ledger";
+import { findMergeCandidates, mergeAccounts, resolveFinding, views } from "@fin/ledger";
 
 import { createApp } from "./app";
 import { seedDemo } from "./demo";
@@ -425,9 +426,47 @@ async function main(argv: string[]): Promise<number> {
       users.closeAll();
       return 0;
     }
+    case "merge-accounts": {
+      // Repair for ledgers that relinked an institution before normalize
+      // kept account identity across a relink (issue #2): each relink
+      // minted a duplicate subject for the same real account. Dry-run by
+      // default; --apply merges, --from/--into name one pair explicitly.
+      const app = createApp({ dataDir });
+      try {
+        const explicit = flags["from"] !== undefined || flags["into"] !== undefined;
+        if (explicit && (flags["from"] === undefined || flags["into"] === undefined)) {
+          console.error("usage: fin-host merge-accounts [--apply] [--from <dup_account_id> --into <surviving_account_id>]");
+          return 2;
+        }
+        const clusters = explicit
+          ? [{ survivor: flags["into"] as string, duplicates: [flags["from"] as string], institution_id: "", name: "" }]
+          : findMergeCandidates(app.ledger);
+        if (clusters.length === 0) {
+          console.log("No duplicate accounts found.");
+          return 0;
+        }
+        if (flags["apply"] === undefined) {
+          for (const c of clusters) {
+            console.log(`${c.institution_id !== "" ? `${c.institution_id}  ` : ""}${c.name !== "" ? `${c.name}: ` : ""}${c.duplicates.join(", ")} -> ${c.survivor}`);
+          }
+          console.log(`\n${clusters.length} merge(s) proposed. Re-run with --apply to fold each duplicate into its survivor (history moves; nothing is deleted).`);
+          return 0;
+        }
+        for (const c of clusters) {
+          for (const dup of c.duplicates) {
+            const r = mergeAccounts(app.ledger, { survivor: c.survivor, duplicate: dup });
+            console.log(JSON.stringify(r));
+          }
+        }
+        console.log(JSON.stringify({ net_worth: views.netWorth(app.ledger).net_worth }));
+        return 0;
+      } finally {
+        app.close();
+      }
+    }
     default:
       console.log(
-        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|propose|approvals|decide|instructions|revoke|export|serve> [--data DIR] ...",
+        "fin-host <init|nightly|queue|resolve|runs|tax|tax-start|tax-check|tax-skip|chat|estate-audit|scenario|projection|propose|approvals|decide|instructions|revoke|export|merge-accounts|serve> [--data DIR] ...",
       );
       return cmd === "help" ? 0 : 2;
   }
