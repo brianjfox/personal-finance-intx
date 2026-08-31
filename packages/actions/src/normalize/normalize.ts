@@ -74,6 +74,8 @@ export interface NormalizeOutput {
   transfers: TransferPair[];
   /** Open accounts a complete feed stopped reporting; each got a closing fact. */
   closed: Array<{ institution_id: string; account_id: string; ref: string }>;
+  /** Institutions that produced a snapshot tonight: their open fetch_failed findings are moot. */
+  answered: string[];
   stats: { snapshots: number; accounts: number; facts: number; transactions_new: number; transactions_known: number };
 }
 
@@ -155,6 +157,7 @@ export function normalize(input: NormalizeInput, ledger: Ledger, thresholds: Thr
     failures: input.failures,
     transfers,
     closed,
+    answered: [...new Set(snapshots.map((s) => s.institution_id))],
     stats: {
       snapshots: snapshots.length,
       accounts: accounts.length,
