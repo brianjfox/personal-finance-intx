@@ -139,7 +139,16 @@ jobs:
             [ -n "${!v}" ] && echo "$v=${!v}" >> "$GITHUB_ENV"
           done
           echo "SIGNING=developer-id" >> "$GITHUB_ENV"
-          [ -n "$APPLE_ID" ] && echo "notarization: on" || echo "notarization: off (no APPLE_ID)"
+          if [ -n "$APPLE_ID" ]; then
+            # Fail here, in seconds, rather than after the ten-minute build:
+            # a wrong Apple ID / app-specific password / team id shows up as
+            # HTTP 401 from notarytool.
+            xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null \
+              || { echo "notarization credentials rejected (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID): fix the secrets and re-run"; exit 1; }
+            echo "notarization: on (credentials accepted)"
+          else
+            echo "notarization: off (no APPLE_ID)"
+          fi
       - name: Build the universal app + dmg
         run: TRIPLE=universal-apple-darwin ./scripts/build-app.sh
       # The arm64 runner has Rosetta: prove the Intel slice of the fat
