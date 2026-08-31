@@ -29,6 +29,20 @@ export interface IpcOptions {
   /** Directory holding the built GUI (index.html + assets). */
   guiDir?: string;
   operator?: string;
+  /** Test seam for /api/open: receives openCommand's argv, returns the exit status (default: Bun.spawn). */
+  openSpawner?: (argv: readonly string[]) => Promise<number | null>;
+}
+
+/**
+ * The platform's URL opener as real argv. The URL must always arrive
+ * as a single argv element that no shell re-parses: cmd.exe's `start`
+ * would execute metacharacters (& | ^ ...) embedded in a URL, so
+ * win32 uses rundll32's FileProtocolHandler instead.
+ */
+export function openCommand(platform: string, url: string): string[] {
+  return platform === "darwin" ? ["open", url]
+    : platform === "win32" ? ["rundll32", "url.dll,FileProtocolHandler", url]
+    : ["xdg-open", url];
 }
 
 const LanBody = type({ enabled: "boolean" });
@@ -286,12 +300,8 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body.url.startsWith("x-apple.systempreferences:") && process.platform !== "darwin") {
             return json({ error: "that link opens macOS System Settings, which this machine doesn't have" }, 400);
           }
-          const argv =
-            process.platform === "darwin" ? ["open", body.url]
-            : process.platform === "win32" ? ["cmd", "/c", "start", "", body.url]
-            : ["xdg-open", body.url];
-          const proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
-          return json({ opened: (await proc.exited) === 0 });
+          const spawner = opts.openSpawner ?? ((argv: readonly string[]) => Bun.spawn([...argv], { stdout: "ignore", stderr: "ignore" }).exited);
+          return json({ opened: (await spawner(openCommand(process.platform, body.url))) === 0 });
         }
         if (p === "/api/connect/plaid/start" && req.method === "POST") {
           const body = PlaidStartBody(await req.json().catch(() => ({})));
