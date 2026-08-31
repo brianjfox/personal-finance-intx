@@ -75,7 +75,10 @@ notarized or ad-hoc signed.
 Without secrets the workflow still succeeds, but the dmg is **ad-hoc
 signed** and the draft notes say so — Gatekeeper will refuse it on
 other Macs. To ship a notarized build from CI, add these repository
-secrets once (`gh secret set NAME`):
+secrets once — `scripts/ci-apple-secrets.sh` does all six interactively
+on the release Mac (it exports the identity, asks for the Apple ID and
+an app-specific password, and cleans up after itself); by hand it is
+`gh secret set NAME`:
 
 | Secret | Value |
 | --- | --- |
