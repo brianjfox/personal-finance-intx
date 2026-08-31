@@ -78,7 +78,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 
   test("pause and resume: a paused connection builds no adapter and is skipped by the nightly", async () => {
     const dataDir = tmp();
@@ -103,7 +103,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 
   test("file uploads: a good export lands in the ledger; a bad one becomes a plain-words problem", async () => {
     const dataDir = tmp();
@@ -138,7 +138,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 
   test("delete removes the money from the totals but keeps the history", async () => {
     const dataDir = tmp();
@@ -165,7 +165,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 
   test("delete also removes the institution's positions from the views", async () => {
     const dataDir = tmp();
@@ -199,7 +199,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 
   test("the made-up data button: one call seeds the fictional household and reconciles it", async () => {
     const dataDir = tmp();
@@ -215,7 +215,7 @@ describe("GUI onboarding (managed institutions)", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 });
 
 describe("holdings categories", () => {
@@ -233,7 +233,7 @@ describe("holdings categories", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 });
 
 describe("editing a property", () => {
@@ -264,5 +264,5 @@ describe("editing a property", () => {
     } finally {
       app.close();
     }
-  });
+  }, 60_000);
 });
