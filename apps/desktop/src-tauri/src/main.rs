@@ -2,19 +2,22 @@
 // switch, and the fin-host sidecar -- spawned on startup, killed on
 // exit. The GUI is the same web app fin-host serves; the shell adds
 // only what a browser cannot: the bundled binary, the Keychain-fed API
-// key, and a double-clickable lifecycle.
+// key (macOS), and a double-clickable lifecycle.
 //
-// Startup sequence (§7.2): resolve the data dir -> read the Anthropic
-// key from the macOS Keychain (service "fin-interchange"; the GUI
-// process never sees key material -- it goes straight into the child's
-// environment) -> spawn `fin-host serve` on a free localhost port with
-// the bundled GUI -> wait for /api/health -> open the window on the
-// queue. The host resumes parked runs itself.
+// Startup sequence (§7.2): resolve the platform's data dir -> read the
+// Anthropic key from the macOS Keychain (service "fin-interchange"; the
+// GUI process never sees key material -- it goes straight into the
+// child's environment; off macOS there is no keystore shell-out and the
+// host falls back to its own environment) -> spawn `fin-host serve` on
+// a free localhost port with the bundled GUI -> wait for /api/health ->
+// open the window on the queue. The host resumes parked runs itself.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -33,10 +36,30 @@ fn free_port() -> u16 {
         .unwrap_or(7797)
 }
 
+/// The same per-platform default the CLI's `defaultDataDir` resolves
+/// (apps/host/src/cli.ts), so the app and `fin-host ...` commands share
+/// one household: macOS `~/Library/Application Support/FinInterchange`,
+/// Windows `%APPDATA%\CorbitsPersonalFinance` (falling back to the
+/// conventional `AppData\Roaming` under the home dir when the env var
+/// is unset), elsewhere `~/.fin-interchange`.
+fn default_data_dir(home: PathBuf) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+            .join("CorbitsPersonalFinance")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/FinInterchange")
+    } else {
+        home.join(".fin-interchange")
+    }
+}
+
 /// Read the Anthropic key from the login Keychain. Absent is fine: the
 /// deterministic surfaces (ledger, tax, scenarios, exports) work without
 /// it; only the advisory agents need it. Stored once with:
 ///   security add-generic-password -s fin-interchange -a anthropic -w <KEY>
+#[cfg(target_os = "macos")]
 fn keychain_api_key() -> Option<String> {
     let out = StdCommand::new("/usr/bin/security")
         .args(["find-generic-password", "-s", "fin-interchange", "-a", "anthropic", "-w"])
@@ -51,6 +74,14 @@ fn keychain_api_key() -> Option<String> {
     } else {
         Some(key)
     }
+}
+
+/// Off macOS there is no Keychain and this shell claims none: the
+/// sidecar inherits this process's environment, so a machine-level
+/// ANTHROPIC_API_KEY still reaches the host without our help.
+#[cfg(not(target_os = "macos"))]
+fn keychain_api_key() -> Option<String> {
+    None
 }
 
 fn wait_for_health(port: u16, timeout: Duration) -> bool {
@@ -86,13 +117,7 @@ fn main() {
             let handle = app.handle().clone();
             let port = free_port();
 
-            // ~/Library/Application Support/FinInterchange -- the same
-            // default the CLI uses, so the app and the CLI share state.
-            let data_dir = app
-                .path()
-                .home_dir()
-                .map(|h| h.join("Library/Application Support/FinInterchange"))
-                .expect("no home directory");
+            let data_dir = default_data_dir(app.path().home_dir().expect("no home directory"));
             std::fs::create_dir_all(&data_dir).ok();
 
             // The bundled GUI dist rides as a resource.
