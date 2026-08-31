@@ -122,7 +122,7 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
     const keyName = secrets.get(COINBASE_SERVICE, `api_key_name:${opts.institution_id}`);
     const key = secrets.get(COINBASE_SERVICE, `private_key:${opts.institution_id}`);
     if (keyName === null || key === null) {
-      throw new Error(`coinbase ${opts.institution_id}: not connected -- add your Coinbase API key from the Institutions page`);
+      throw new Error(`coinbase ${opts.institution_id}: not connected -- add your Coinbase API key from the Assets page`);
     }
     const jwt = coinbaseJwt(keyName, key, "GET", host, path.split("?")[0] as string, now);
     const r = await doFetch(`${base}${path}`, { headers: { Authorization: `Bearer ${jwt}` } });

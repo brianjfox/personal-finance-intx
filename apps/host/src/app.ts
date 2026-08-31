@@ -784,7 +784,10 @@ export function createApp(opts: AppOptions): App {
               currency: a.currency,
               value: line?.value ?? null,
               observed_at: line?.observed_at ?? a.observed_at,
-              closed: closedIds.has(a.account_id),
+              // Ledger-closed (the feed stopped reporting it, or a merged
+              // duplicate's leftover) hides the row the same way a removed
+              // managed account does; history stays queryable.
+              closed: closedIds.has(a.account_id) || a.closed_at !== null,
             };
           });
         // Managed accounts typed in but not yet reconciled into the ledger.

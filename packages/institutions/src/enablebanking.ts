@@ -143,14 +143,14 @@ export function enableBankingAdapter(opts: EnableBankingOptions): InstitutionAda
       httpSink = ctx.http ?? null;
       const sessionId = secrets.get(ENABLEBANKING_SERVICE, `session:${opts.institution_id}`);
       if (sessionId === null) {
-        throw new Error(`enablebanking ${opts.institution_id}: not connected -- run the bank consent flow from the Institutions page`);
+        throw new Error(`enablebanking ${opts.institution_id}: not connected -- run the bank consent flow from the Assets page`);
       }
       const asOf = ctx.now.toISOString();
       const session = await get<EbSession>(`/sessions/${sessionId}`, ctx.now);
       const validUntil = session.access?.valid_until;
       if (session.status !== "AUTHORIZED" || (validUntil !== undefined && validUntil < asOf)) {
         throw new Error(
-          `enablebanking ${opts.institution_id}: the bank consent has expired or was revoked (status ${session.status}) -- reconnect from the Institutions page`,
+          `enablebanking ${opts.institution_id}: the bank consent has expired or was revoked (status ${session.status}) -- reconnect from the Assets page`,
         );
       }
 
