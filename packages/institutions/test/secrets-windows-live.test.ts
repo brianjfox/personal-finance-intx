@@ -34,7 +34,7 @@ describe.skipIf(!win)("credential manager store (real PowerShell)", () => {
     expect(fresh.delete!(SERVICE, "probe")).toBe(true);
     expect(credentialManagerSecretStore().get(SERVICE, "probe")).toBeNull();
     expect(credentialManagerSecretStore().delete!(SERVICE, "probe")).toBe(false);
-  });
+  }, 60_000);
 
   test("a re-set replaces the credential (CRED_PRESERVE not needed)", () => {
     const store = credentialManagerSecretStore();
@@ -42,7 +42,7 @@ describe.skipIf(!win)("credential manager store (real PowerShell)", () => {
     store.set!(SERVICE, "rotate", "v2");
     expect(credentialManagerSecretStore().get(SERVICE, "rotate")).toBe("v2");
     store.delete!(SERVICE, "rotate");
-  });
+  }, 60_000);
 
   test("a value over CRED_MAX_CREDENTIAL_BLOB_SIZE (2560) chunks, round-trips, and deletes cleanly", () => {
     // The bug this pins: a 4096-bit RSA private key PEM (~3.2 KB) used to
@@ -57,7 +57,10 @@ describe.skipIf(!win)("credential manager store (real PowerShell)", () => {
     expect(credentialManagerSecretStore().enumerate!(`${SERVICE}*`)).toEqual([`${SERVICE}/big_key`]);
     expect(store.delete!(SERVICE, "big_key")).toBe(true);
     expect(credentialManagerSecretStore().get(SERVICE, "big_key")).toBeNull();
-  });
+    // Every step above spawns a fresh PowerShell (~1s each on a CI
+    // runner: Add-Type recompiles per spawn), and a 3-chunk value takes
+    // ~16 spawns end to end -- far past bun's 5s default timeout.
+  }, 120_000);
 });
 
 describe.skipIf(!win)("dpapi blob file store (real PowerShell)", () => {
@@ -84,5 +87,5 @@ describe.skipIf(!win)("windowsSecretStore (real PowerShell)", () => {
     expect(notices).toEqual([]);
     expect(store.enumerate!(`${SERVICE}*`)).toContain(`${SERVICE}/pick`);
     store.delete!(SERVICE, "pick");
-  });
+  }, 60_000);
 });

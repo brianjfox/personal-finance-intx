@@ -74,7 +74,11 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      # The generous ceiling matters when workflow_dispatch rebuilds an
+      # existing tag: the tagged tree may predate a per-test timeout the
+      # win32 live secret-store suite needs (each PowerShell spawn costs
+      # ~1s on a runner, and a chunked credential takes ~16 of them).
+      - run: bun test --timeout 60000
 
   macos:
     needs: [verify, test]
