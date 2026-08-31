@@ -33,6 +33,8 @@ export interface AccountView {
   closed_at: string | null;
   /** Set when this subject was folded into another account (a relink alias): render the survivor, not this. */
   merged_into: string | null;
+  /** The operator hid this account: closed, and no data recorded while set. */
+  ignored: boolean;
   provisional: boolean;
   observed_at: string;
 }
@@ -110,6 +112,7 @@ export function accounts(ledger: Ledger, opts: AsOfOpts = {}): AccountView[] {
       masked_number: p.masked_number ?? null,
       closed_at: p.closed_at ?? null,
       merged_into: p.merged_into ?? null,
+      ignored: p.ignored === true,
       provisional: f.provisional,
       observed_at: f.observed_at,
     };

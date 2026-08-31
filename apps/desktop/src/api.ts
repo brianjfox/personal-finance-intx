@@ -102,7 +102,7 @@ export interface ConsolidatedPosition {
 
 export interface InstitutionAccountRow {
   account_id: string; name: string; type: string; currency: string;
-  value: string | null; observed_at: string | null; closed: boolean;
+  value: string | null; observed_at: string | null; closed: boolean; ignored: boolean;
 }
 export interface InstitutionOverview {
   institution_id: string; name: string; adapter: string; enabled: boolean; managed: boolean;
@@ -280,6 +280,7 @@ export const api = {
     post<{ account: ManagedAccount; runId: string; status: string }>(`/api/institution/${id}/account`, input),
   removeManagedAccount: (id: string, accountId: string) =>
     post<{ runId: string; status: string }>(`/api/institution/${id}/remove-account`, { account_id: accountId }),
+  setAccountIgnored: (accountId: string, ignored: boolean) => post<{ ok: boolean }>("/api/account/ignore", { account_id: accountId, ignored }),
   seedDemo: () => post<{ institutions: number; runId: string; status: string }>("/api/demo"),
   openExternal: (url: string) => post<{ opened: boolean }>("/api/open", { url }),
   plaidStart: (input?: { name?: string; institution_id?: string }) =>
