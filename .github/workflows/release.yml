@@ -1,0 +1,245 @@
+# Release (docs/RELEASING.md): a vX.Y.Z tag (pushed by scripts/release.sh)
+# runs the full suite on both desktop platforms, builds every artifact,
+# and opens a DRAFT GitHub release carrying docs/releases/X.Y.Z.md as its
+# notes. Publishing the draft is a deliberate click after review.
+#
+# Artifacts:
+#   Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg   arm64 + x86_64 app
+#   Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe NSIS installer
+#   fin-host-X.Y.Z-macOS-universal.tar.gz                the CLI, standalone
+#   fin-host-X.Y.Z-Windows-x64.zip                       the CLI, standalone
+#   SHA256SUMS.txt
+#
+# macOS signing is opt-in through repository secrets (APPLE_CERTIFICATE,
+# APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID,
+# APPLE_PASSWORD, APPLE_TEAM_ID); without them the .dmg is ad-hoc signed
+# and the draft says so. The Windows installer is unsigned (D-038).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to (re)build and (re)attach"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - id: v
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          CONF="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' apps/desktop/src-tauri/tauri.conf.json)"
+          [ "$CONF" = "$VERSION" ] || { echo "tauri.conf.json is $CONF but the tag is $TAG"; exit 1; }
+          grep -q "^version = \"$VERSION\"" apps/desktop/src-tauri/Cargo.toml || { echo "Cargo.toml version does not match $TAG"; exit 1; }
+          [ -f "docs/releases/$VERSION.md" ] || { echo "docs/releases/$VERSION.md is missing"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "$VERSION" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
+
+  test:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  macos:
+    needs: [verify, test]
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: bun install --frozen-lockfile
+      # Only export the Apple variables that are actually configured: an
+      # empty APPLE_CERTIFICATE would make the Tauri CLI try to import it.
+      - name: Configure signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${!v}" ] && echo "$v=${!v}" >> "$GITHUB_ENV"
+            done
+            echo "KEYCHAIN_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+            echo "SIGNING=developer-id" >> "$GITHUB_ENV"
+            [ -n "$APPLE_ID" ] && echo "notarization: on" || echo "notarization: off (no APPLE_ID)"
+          else
+            echo "SIGNING=ad-hoc" >> "$GITHUB_ENV"
+            echo "signing: ad-hoc (APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY secrets not set)"
+          fi
+      - name: Build the universal app + dmg
+        run: TRIPLE=universal-apple-darwin ./scripts/build-app.sh
+      # The arm64 runner has Rosetta: prove the Intel slice of the fat
+      # sidecar actually executes (bun's "CPU lacks AVX" line is only a
+      # warning there; --help exits 2 by design).
+      - name: Smoke-test both sidecar slices
+        run: |
+          APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Corbits Personal Finance.app"
+          lipo -info "$APP/Contents/MacOS/financial-interchange" "$APP/Contents/MacOS/fin-host"
+          "$APP/Contents/MacOS/fin-host" --help 2>&1 | grep -q 'fin-host <init' && echo "arm64 slice: ok"
+          /usr/bin/arch -x86_64 "$APP/Contents/MacOS/fin-host" --help 2>&1 | grep -q 'fin-host <init' && echo "x86_64 slice (Rosetta): ok"
+          codesign --verify --strict --deep "$APP" && echo "signature: ok"
+      - name: Collect artifacts
+        run: |
+          set -x
+          OUT=release; mkdir -p "$OUT"
+          DMG=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -1)
+          cp "$DMG" "$OUT/Corbits-Personal-Finance-$VERSION-macOS-universal.dmg"
+          lipo -info apps/desktop/src-tauri/binaries/fin-host-universal-apple-darwin
+          cp apps/desktop/src-tauri/binaries/fin-host-universal-apple-darwin "$OUT/fin-host"
+          tar -C "$OUT" -czf "$OUT/fin-host-$VERSION-macOS-universal.tar.gz" fin-host && rm "$OUT/fin-host"
+          echo "$SIGNING" > "$OUT/macos-signing.txt"
+          ls -la "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: release/*
+          if-no-files-found: error
+
+  windows:
+    needs: [verify, test]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: bun install --frozen-lockfile
+      - name: Compile fin-host sidecar (bun-windows-x64)
+        run: ./scripts/build-host.sh bun-windows-x64 apps/desktop/src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe
+      # NSIS only: the config's ["app", "dmg"] targets are the macOS
+      # build. Unsigned per DECISIONS.md D-038 (SmartScreen will warn).
+      - name: Tauri build (NSIS)
+        working-directory: apps/desktop
+        run: bunx @tauri-apps/cli@^2 build --bundles nsis
+      - name: Collect artifacts
+        run: |
+          set -x
+          OUT=release; mkdir -p "$OUT"
+          EXE=$(ls apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          cp "$EXE" "$OUT/Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe"
+          cp apps/desktop/src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe "$OUT/fin-host.exe"
+          (cd "$OUT" && 7z a -tzip "fin-host-$VERSION-Windows-x64.zip" fin-host.exe >/dev/null && rm fin-host.exe)
+          ls -la "$OUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, macos, windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Assemble the release directory
+        shell: bash
+        run: |
+          set -x
+          mkdir -p release
+          cp artifacts/*.dmg artifacts/*.exe artifacts/*.tar.gz artifacts/*.zip release/
+          SIGNING="$(cat artifacts/macos-signing.txt)"
+          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          {
+            cat "docs/releases/$VERSION.md"
+            echo
+            echo "## Downloads"
+            echo
+            echo "- **macOS** (Apple silicon and Intel, one universal app): \`Corbits-Personal-Finance-$VERSION-macOS-universal.dmg\`"
+            if [ "$SIGNING" = "ad-hoc" ]; then
+              echo "  - *This build is ad-hoc signed (no Developer ID configured in CI). macOS will refuse to open it until you right-click → Open, or it is replaced by a notarized build.*"
+            else
+              echo "  - Developer ID signed and notarized."
+            fi
+            echo "- **Windows 10/11 x64**: \`Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe\` — unsigned; SmartScreen will warn (More info → Run anyway)."
+            echo "- **fin-host CLI** (standalone, same data directory as the app): \`fin-host-$VERSION-macOS-universal.tar.gz\`, \`fin-host-$VERSION-Windows-x64.zip\`"
+            echo "- \`SHA256SUMS.txt\` — verify with \`shasum -a 256 -c SHA256SUMS.txt\` (macOS) or \`certutil -hashfile <file> SHA256\` (Windows)."
+          } > release-notes.md
+      - name: Create or update the draft release
+        shell: bash
+        run: |
+          set -x
+          PRE=""; [ "${{ needs.verify.outputs.prerelease }}" = "true" ] && PRE="--prerelease"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Corbits Personal Finance $VERSION" --notes-file release-notes.md $PRE
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" --draft $PRE --verify-tag \
+              --title "Corbits Personal Finance $VERSION" --notes-file release-notes.md release/*
+          fi
+          gh release view "$TAG" --json url,isDraft,assets --jq '{url, isDraft, assets: [.assets[].name]}'
