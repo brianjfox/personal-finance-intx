@@ -157,7 +157,10 @@ describe("multi-user IPC with login", () => {
       // Without a session, data is unreachable; the public surface is only users+health.
       expect((await call("/api/institutions")).status).toBe(401);
       expect((await call("/api/net-worth")).status).toBe(401);
-      expect((await call("/api/health")).status).toBe(200);
+      const health = await call("/api/health");
+      expect(health.status).toBe(200);
+      // Pre-auth health names the platform so the GUI can word its copy truthfully.
+      expect(((await health.json()) as { platform: string }).platform).toBe(process.platform);
       expect((await call("/api/users")).status).toBe(200);
 
       // Wrong password: refused. Right password: a session.

@@ -9,5 +9,6 @@ export * from "./fixture";
 export * from "./plaid";
 export * from "./registry";
 export * from "./secrets";
+export * from "./secrets-windows";
 export * from "./wallet";
 export * from "./wallet-detect";

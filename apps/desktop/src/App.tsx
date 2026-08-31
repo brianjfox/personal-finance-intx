@@ -16,6 +16,21 @@ import tauriConf from "../src-tauri/tauri.conf.json";
 /** The product version: tauri.conf.json is the single source of truth (it stamps the bundle too). */
 const APP_VERSION: string = tauriConf.version;
 
+/**
+ * Which OS the host runs on ("darwin", "win32", ...), from the pre-auth
+ * /api/health. Fixed before anything renders (useUserGate waits for it),
+ * so the security copy below states what is true on THIS machine — never
+ * a Mac promise on a Windows disk.
+ */
+let hostPlatform: string | null = null;
+const isWindows = (): boolean => hostPlatform === "win32";
+const isMac = (): boolean => hostPlatform === "darwin";
+// Unknown platform (health unreachable) claims neither Mac nor Windows.
+const thisMachine = (): string => (isWindows() ? "this PC" : isMac() ? "this Mac" : "this computer");
+/** Where pasted keys live, with the article the sentence needs. */
+const theKeychain = (): string => (isWindows() ? "Windows Credential Manager" : isMac() ? "the Keychain" : "the system credential store");
+const yourKeychain = (): string => (isWindows() ? "Windows Credential Manager" : isMac() ? "your Mac's Keychain" : "the system credential store");
+
 type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents" | "settings";
 
 /**
@@ -39,6 +54,17 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
     api.users().then((r) => setState({ multi: r.multi_user, users: r.users })).catch(() => setState({ multi: false, users: [] }));
   }, []);
   useEffect(refresh, [refresh]);
+  // The platform settles before ready flips: every screen's copy can
+  // then read it synchronously. Unreachable health stays unknown, and
+  // the copy helpers above claim neither platform.
+  const [platformReady, setPlatformReady] = useState(hostPlatform !== null);
+  useEffect(() => {
+    if (hostPlatform !== null) return;
+    api.health()
+      .then((h) => { hostPlatform = h.platform; })
+      .catch(() => { hostPlatform = null; })
+      .finally(() => setPlatformReady(true));
+  }, []);
   // A 401 anywhere (host restart, session expiry) drops the session.
   useEffect(() => {
     const onUnauthorized = () => setSession(null);
@@ -61,7 +87,7 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
       /* private mode */
     }
   };
-  if (state === null) return { ready: false, multi: false, users: [], current: null, enter: () => {}, signOut: () => {}, refresh };
+  if (state === null || !platformReady) return { ready: false, multi: false, users: [], current: null, enter: () => {}, signOut: () => {}, refresh };
   if (!state.multi) {
     return { ready: true, multi: false, users: [], current: null, enter: () => {}, signOut: () => {}, refresh };
   }
@@ -92,6 +118,22 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
     },
     refresh,
   };
+}
+
+/**
+ * The at-rest sentence must match what the machine provides: the AES-256
+ * per-user store on macOS; on Windows, BitLocker's reported status
+ * verbatim — including a plain warning when the disk is unencrypted.
+ */
+function atRestCopy(users: UserInfo[]): string {
+  const volume = ", in a store encrypted with that password (AES-256). Signing out locks it. There is no recovery: a forgotten password means the data stays locked.";
+  if (!isWindows()) return volume;
+  const cap = users[0]?.encrypted;
+  if (cap === "volume") return volume;
+  if (cap === "os-disk") return ". At rest the files are protected by Windows disk encryption (BitLocker), which this PC reports as on.";
+  if (cap === "none") return ". This PC's disk reports no encryption, so the files are not encrypted at rest — turn on Device Encryption or BitLocker in Windows settings to protect them.";
+  // No users yet: the disk's status is per-user data we don't have — claim nothing.
+  return ". At-rest protection comes from Windows disk encryption (Device Encryption / BitLocker) when it is on.";
 }
 
 /** The login screen: pick who you are, prove it; or add a new person. */
@@ -146,8 +188,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
       <h2>Who's using Corbits Personal Finance?</h2>
       <p className="small muted">
         Each person signs in with their own password and sees only their own ledger, documents, agents, and keys — all
-        on this Mac, in a store encrypted with that password (AES-256). Signing out locks it. There is no recovery: a
-        forgotten password means the data stays locked.
+        on {thisMachine()}{atRestCopy(users)}
       </p>
       {!adding && users.map((u) => (
         <p key={u.id}>
@@ -159,7 +200,7 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
               setError(null);
             }}
           >
-            {u.encrypted ? "🔒" : "👤"} {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
+            {u.encrypted !== "none" ? "🔒" : "👤"} {u.name}{!u.password_set && <span className="small muted"> — first sign-in: choose a password</span>}
           </button>
         </p>
       ))}
@@ -244,7 +285,7 @@ function AboutModal({ onClose }: { onClose: () => void }) {
         <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--strong)", textTransform: "none", letterSpacing: 0 }}>Corbits Personal Finance</h3>
         <span className="pill info">Version {APP_VERSION}</span>
         <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
-          A local-first household finance console. Your ledger, documents, and keys live on this Mac — and every figure
+          A local-first household finance console. Your ledger, documents, and keys live on {thisMachine()} — and every figure
           links back to dated evidence.
         </p>
         <button className="secondary" onClick={onClose}>Close</button>
@@ -662,7 +703,7 @@ function ProfilePage({ tick, onChanged }: { tick: number; onChanged: () => void 
       <div style={{ marginBottom: 28 }}>
         <h2>Household &amp; Estate</h2>
         <p className="page-sub" style={{ maxWidth: 640 }}>
-          Manage the people your estate and tax planning must know about. Information is stored locally on this Mac. AI
+          Manage the people your estate and tax planning must know about. Information is stored locally on {thisMachine()}. AI
           models can read everything here <span style={{ color: "var(--red-ink)", fontWeight: 600, textDecoration: "underline" }}>except</span> your tax ID.
         </p>
       </div>
@@ -995,13 +1036,14 @@ function DeleteAllDataCard() {
       <div className="queue-item" style={{ marginTop: 18 }}>
         <div className="head"><b>Everything has been deleted</b></div>
         <p>
-          The ledger, documents, profile, settings, and every stored key are gone. Quit the app (⌘Q) and relaunch
+          The ledger, documents, profile, settings, and every stored key are gone. Quit the app{isMac() ? " (⌘Q)" : ""} and relaunch
           to start fresh.
         </p>
         <p className="small muted">
           One thing this cannot do: revoke access on the other side. If you had connected banks or exchanges, also
           remove this app's access in their own settings (Plaid-connected banks, Enable Banking consents, Coinbase and
-          Kraken API keys).
+          Kraken API keys).{isWindows() &&
+            " The WebView2 runtime also keeps this window's browsing data under %LOCALAPPDATA%\\com.corbitsdev.macos.personal-finance — delete that folder after quitting."}
         </p>
       </div>
     );
@@ -1014,7 +1056,7 @@ function DeleteAllDataCard() {
       </div>
       <div className="small muted">
         The factory reset: removes the entire ledger and its history, all documents, your profile, every setting, and
-        every key from the Keychain. This cannot be undone.
+        every key from {theKeychain()}. This cannot be undone.
       </div>
       {open && (
         <>
@@ -1067,12 +1109,12 @@ function AccountCard({ user, onRenamed }: { user: { id: string; name: string }; 
       setOldPw("");
       setNewPw("");
       setConfirmPw("");
-      return "Password changed — your encrypted store now opens with the new one.";
+      return isMac() ? "Password changed — your encrypted store now opens with the new one." : "Password changed.";
     });
   return (
     <div className="queue-item">
       <div className="head"><b>Your account</b><span className="muted small">{user.id}</span></div>
-      <div className="small muted">Your name is also your username at sign-in. Changing the password re-keys your encrypted store.</div>
+      <div className="small muted">Your name is also your username at sign-in.{isMac() && " Changing the password re-keys your encrypted store."}</div>
       <div className="actions" style={{ marginTop: 8 }}>
         <input style={{ flex: 1, maxWidth: 280 }} placeholder="Your name" value={name} disabled={busy !== null} onChange={(e) => setName(e.target.value)} />
         <button disabled={busy !== null || name.trim() === "" || name.trim() === user.name} onClick={() => void rename()}>
@@ -1103,7 +1145,7 @@ function CredentialsPage({ tick, onChanged, user, onRenamed }: { tick: number; o
     <>
       <h2>Credentials</h2>
       <p className="small muted">
-        Every key is pasted once, stored in your Mac's Keychain by the app, and shown here only as set / not set — the
+        Every key is pasted once, stored in {yourKeychain()} by the app, and shown here only as set / not set — the
         values never leave this machine. None of these keys can move money.
       </p>
       {user !== null && <AccountCard user={user} onRenamed={onRenamed} />}
@@ -1210,8 +1252,8 @@ function InferenceCard({ tick }: { tick: number }) {
       </div>
       <div className="small muted">
         Configure as many providers as you like; each of Profile, Estate, Tax, and Strategy can use its own. Keys are
-        pasted once and stored in your Mac's Keychain — never shown again. A local server means nothing you discuss
-        leaves this Mac.
+        pasted once and stored in {yourKeychain()} — never shown again. A local server means nothing you discuss
+        leaves {thisMachine()}.
       </div>
       {state.providers.map((p, i) => (
         <div key={p.id} style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
@@ -1361,7 +1403,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
           ))}
           <div className="actions" style={{ marginTop: 6 }}>
             <button disabled={busy} onClick={() => void act(() => api.credentialSet(slot.id, values))}>
-              {busy ? "saving…" : "Save to Keychain"}
+              {busy ? "saving…" : isWindows() ? "Save to Credential Manager" : isMac() ? "Save to Keychain" : "Save key"}
             </button>
             <button className="secondary" disabled={busy} onClick={() => { setEditing(false); setValues({}); setError(null); }}>Cancel</button>
           </div>
@@ -1374,7 +1416,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
           {slot.configured &&
             (confirmDelete ? (
               <>
-                <span className="small">Remove this key from the Keychain?</span>
+                <span className="small">Remove this key from {theKeychain()}?</span>
                 <button disabled={busy} onClick={() => void act(() => api.credentialDelete(slot.id))}>Yes, remove</button>
                 <button className="secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
               </>
@@ -1458,7 +1500,7 @@ function holdingsTabOf(i: InstitutionOverview): HoldingsTab {
 /** The Setup Progress rail: where a new household is on the road to a live ledger. */
 function SetupProgress({ ob, profileOk }: { ob: InstitutionsOverview; profileOk: boolean }) {
   const steps: Array<{ title: string; desc: string; done: boolean }> = [
-    { title: "Create Account", desc: "Local store ready on this Mac.", done: true },
+    { title: "Create Account", desc: `Local store ready on ${thisMachine()}.`, done: true },
     {
       title: "Connect Institutions",
       desc: ob.institutions.length > 0 ? `${ob.institutions.length} connected.` : "Connect a bank, broker, or wallet.",
@@ -1579,7 +1621,7 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
           <div className="panel">
             <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t2)", marginBottom: 12 }}>Expert Mode</div>
             <div className="tipbox">"Click any figure to see its <span style={{ color: "var(--link)", fontWeight: 600 }}>provenance</span>. We never assert a number without evidence."</div>
-            <div className="tipbox">"Your data never leaves this Mac. Even AI analysis can be run entirely locally."</div>
+            <div className="tipbox">"Your data never leaves {thisMachine()}. Even AI analysis can be run entirely locally."</div>
           </div>
         </div>
       </div>
@@ -1717,8 +1759,8 @@ function AddInstitutionForm({ onDone, onCancel, modes, existing }: { onDone: () 
         {radio("files", "I'll upload files downloaded from the institution's website", "Each upload is kept unchanged as evidence, and the numbers in it flow into your dashboard.")}
         {radio("plaid", "Connect automatically — US & Canadian banks (via Plaid)", "You log in on your bank's own page; this app only ever receives read-only data. Needs your Plaid keys — set them up once on the Credentials page.")}
         {radio("eb", "Connect automatically — European banks (via Enable Banking)", "The bank's own consent page; read-only by regulation, renewed every few months. Needs your Enable Banking key — set it up once on the Credentials page.")}
-        {radio("coinbase", "Connect Coinbase (crypto holdings)", "Uses a view-only Coinbase API key you create — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
-        {radio("kraken", "Connect Kraken (crypto holdings)", "Uses a Kraken API key with only the Query Funds permission — it can look at balances, never trade or withdraw. Stored in your Mac's Keychain.")}
+        {radio("coinbase", "Connect Coinbase (crypto holdings)", `Uses a view-only Coinbase API key you create — it can look at balances, never trade or withdraw. Stored in ${yourKeychain()}.`)}
+        {radio("kraken", "Connect Kraken (crypto holdings)", `Uses a Kraken API key with only the Query Funds permission — it can look at balances, never trade or withdraw. Stored in ${yourKeychain()}.`)}
         {radio("wallet", "Watch a self-custody wallet (Ledger, Trezor, any address)", "Paste public addresses; balances are read from the blockchain. An address can never move funds. The addresses are disclosed to public chain-data services.")}
       </div>
       {mode === "plaid" && <PlaidConnect name={name} institutionId={null} onDone={onDone} />}
@@ -1880,7 +1922,7 @@ function CoinbaseConnect({ name, institutionId, onDone }: { name: string; instit
       <div className="small muted" style={{ marginBottom: 4 }}>
         In Coinbase: Settings → API → create a key with the <b>View</b> permission only, and download the key file.
         Easiest: paste the <b>whole downloaded file</b> (it's JSON) into the key box below — the name fills in by itself.
-        Everything goes into your Mac's Keychain; this app stores nothing else.
+        Everything goes into {yourKeychain()}; this app stores nothing else.
       </div>
       <div className="actions">
         <input style={{ flex: 1 }} placeholder="API key name — organizations/…/apiKeys/… (fills in automatically from a pasted key file)" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
@@ -1955,7 +1997,7 @@ function LedgerLiveImport({ name, onDone }: { name: string; onDone: () => void }
     <div style={{ marginTop: 10 }}>
       {data === null && (
         <button className="secondary" onClick={() => void load()}>
-          Import from Ledger Wallet (Ledger Live) on this Mac
+          Import from Ledger Wallet (Ledger Live) on {thisMachine()}
         </button>
       )}
       {data === "loading" && <span className="muted small">reading the Ledger app's account list…</span>}
@@ -2140,8 +2182,8 @@ function KrakenConnect({ name, institutionId, onDone }: { name: string; institut
   return (
     <div style={{ marginTop: 8 }}>
       <div className="small muted" style={{ marginBottom: 4 }}>
-        In Kraken: Settings → API → create a key with only the <b>Query Funds</b> permission. Both values go into your
-        Mac's Keychain; this app stores nothing else.
+        In Kraken: Settings → API → create a key with only the <b>Query Funds</b> permission. Both values go into{" "}
+        {yourKeychain()}; this app stores nothing else.
       </div>
       <div className="actions">
         <input style={{ flex: 1 }} type="password" placeholder="API key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
@@ -4403,7 +4445,7 @@ function SettingsPage() {
     <>
       <h2>Settings</h2>
       <p className="page-sub">
-        How the console looks on this Mac. These preferences live in the app's local storage — they never touch the
+        How the console looks on {thisMachine()}. These preferences live in the app's local storage — they never touch the
         ledger and never leave the machine.
       </p>
       <div className="panel">
@@ -4414,7 +4456,7 @@ function SettingsPage() {
         <div className="set-row">
           <div>
             <div className="set-name">Theme</div>
-            <div className="set-hint">Auto follows the macOS appearance.</div>
+            <div className="set-hint">Auto follows the {isWindows() ? "Windows" : isMac() ? "macOS" : "system"} appearance.</div>
           </div>
           <div className="seg">
             {(["light", "dark", "auto"] as const).map((t) => (

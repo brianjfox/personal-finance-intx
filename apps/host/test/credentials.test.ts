@@ -120,4 +120,50 @@ describe("delete all data", () => {
       try { app.close(); } catch { /* ledger already closed by the wipe */ }
     }
   });
+
+  // The win32 path: no `security` CLI, but the store can enumerate, so the
+  // stray-item sweep asks it for the app's whole fin-* footprint. The gate
+  // defaults off for injected stores (same semantics as the darwin sweep),
+  // so this test opts in the way multi-user mode wires it.
+  test("sweeps stray fin-* items via enumerate when the store supports it", () => {
+    const dataDir = tmp();
+    const base = memorySecretStore({
+      "fin-interchange/session:stale": "tok",
+      "fin-kraken/api_key": "k",
+      "other-app/item": "keep",
+    });
+    const patterns: string[] = [];
+    const secrets = {
+      ...base,
+      enumerate: (pattern: string) => {
+        patterns.push(pattern);
+        const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
+        return Object.keys(base.dump()).filter((k) => k.startsWith(prefix));
+      },
+    };
+    const app = createApp({ dataDir, connectors: { secrets }, keychainSweepOnWipe: () => true });
+    try {
+      app.deleteAllData();
+      expect(patterns).toEqual(["fin-*"]);
+      expect(Object.keys(base.dump())).toEqual(["other-app/item"]);
+      expect(fs.existsSync(dataDir)).toBe(false);
+    } finally {
+      try { app.close(); } catch { /* ledger already closed by the wipe */ }
+    }
+  });
+
+  // Multi-user mode passes keychainSweepOnWipe=false for scoped users: the
+  // shared store's enumerate would match every user's items, so no sweep.
+  test("keychainSweepOnWipe=false suppresses the enumerate sweep", () => {
+    const dataDir = tmp();
+    const base = memorySecretStore({ "fin-interchange/session:other-user": "tok" });
+    const secrets = { ...base, enumerate: (pattern: string) => Object.keys(base.dump()).filter((k) => k.startsWith(pattern.slice(0, -1))) };
+    const app = createApp({ dataDir, connectors: { secrets }, keychainSweepOnWipe: () => false });
+    try {
+      app.deleteAllData();
+      expect(Object.keys(base.dump())).toEqual(["fin-interchange/session:other-user"]);
+    } finally {
+      try { app.close(); } catch { /* ledger already closed by the wipe */ }
+    }
+  });
 });
