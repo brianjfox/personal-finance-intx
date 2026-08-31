@@ -42,6 +42,8 @@ export interface ReconcileOutput {
   clean: boolean;
   findings: FindingDraft[];
   provisional_subjects: string[];
+  /** Passed through from normalize: institutions whose open fetch_failed findings record_findings resolves. */
+  answered: string[];
   stats: Record<string, number>;
 }
 
@@ -77,6 +79,7 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
     clean: provisional.length === 0,
     findings: fresh,
     provisional_subjects: provisional,
+    answered: input.answered ?? [],
     stats,
   };
 }

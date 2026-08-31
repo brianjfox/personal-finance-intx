@@ -17,6 +17,8 @@ export interface RecordFindingsInput {
   clean: boolean;
   findings: FindingDraft[];
   provisional_subjects: string[];
+  /** Institutions that produced a snapshot tonight (reconcile passes it through from normalize). */
+  answered?: string[];
   [writer: string]: unknown;
 }
 
@@ -26,6 +28,8 @@ export interface RecordFindingsOutput {
   finding_ids: string[];
   queued: number;
   provisional_subjects: string[];
+  /** Stale "did not answer" findings this run closed because the institution answered. */
+  resolved_fetch_failures: number;
 }
 
 export function recordFindingsHandler(actx: ActionContext): ActionHandler {
@@ -59,12 +63,32 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
             payload: { run_key: input.run_key, finding_ids: ids, queued, provisional_subjects: input.provisional_subjects },
           });
         }
+        // A successful fetch is the definitive answer to "did not answer
+        // tonight": close the institution's open fetch_failed findings so
+        // the card's warning banner clears itself (issue #15). Idempotent
+        // across crash re-runs -- a resolved finding is no longer open.
+        let resolvedFetchFailures = 0;
+        for (const inst of input.answered ?? []) {
+          for (const f of actx.ledger.openFindings({ subject: inst })) {
+            if (f.code !== "fetch_failed") continue;
+            actx.ledger.appendResolution({
+              finding_id: f.id,
+              decision: "dismiss",
+              note: `the institution answered on ${input.run_key}`,
+              decided_by: "reconciliation",
+              decided_at: actx.clock().toISOString(),
+              resulting_facts: [],
+            });
+            resolvedFetchFailures += 1;
+          }
+        }
         return {
           run_key: input.run_key,
           clean: input.clean,
           finding_ids: ids,
           queued,
           provisional_subjects: input.provisional_subjects ?? [],
+          resolved_fetch_failures: resolvedFetchFailures,
         } satisfies RecordFindingsOutput;
       },
     })) as RecordFindingsOutput;

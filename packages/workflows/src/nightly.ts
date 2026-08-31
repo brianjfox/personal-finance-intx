@@ -55,7 +55,7 @@ export const nightlyWorkflow = defineWorkflow({
       handler: ACTION_REFS.recordFindings,
       input: {
         merge: [
-          { project: { from: "steps.reconcile.output" }, fields: ["run_key", "clean", "findings", "provisional_subjects"] },
+          { project: { from: "steps.reconcile.output" }, fields: ["run_key", "clean", "findings", "provisional_subjects", "answered"] },
           { from: "steps.commit_assets.output" },
           { from: "steps.commit_flows.output" },
           { from: "steps.commit_docs.output" },
