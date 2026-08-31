@@ -10,7 +10,7 @@ import path from "node:path";
 
 import { addInstitutionEntry, COINBASE_SERVICE, memorySecretStore, PLAID_SERVICE } from "@fin/institutions";
 
-import { createApp } from "../src/app";
+import { createApp, machineKeychainSweepAllowed } from "../src/app";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "fin-cred-"));
 
@@ -150,6 +150,25 @@ describe("delete all data", () => {
     } finally {
       try { app.close(); } catch { /* ledger already closed by the wipe */ }
     }
+  });
+
+  // Issue #9: the machine-Keychain sweep must be unreachable from any
+  // test. An injected store is a hard veto -- even the explicit opt-in
+  // above (which exercises the STORE-level enumerate sweep) must never
+  // unlock the `security delete-generic-password` loops -- and a test
+  // process (NODE_ENV=test) never qualifies regardless.
+  test("the machine-Keychain sweep is vetoed by an injected store and by test runs", () => {
+    // This very process: bun test sets NODE_ENV=test.
+    expect(process.env["NODE_ENV"]).toBe("test");
+    const optIn = { keychainSweepOnWipe: () => true };
+    expect(machineKeychainSweepAllowed({ injectedStore: true, nodeEnv: undefined, ...optIn })).toBe(false);
+    expect(machineKeychainSweepAllowed({ injectedStore: false, nodeEnv: "test", ...optIn })).toBe(false);
+    expect(machineKeychainSweepAllowed({ injectedStore: true, nodeEnv: "test" })).toBe(false);
+    // The real app: real store, real process, no override -> sweep.
+    expect(machineKeychainSweepAllowed({ injectedStore: false, nodeEnv: undefined })).toBe(true);
+    expect(machineKeychainSweepAllowed({ injectedStore: false, nodeEnv: "production", ...optIn })).toBe(true);
+    // Multi-user wiring can still veto for scoped users.
+    expect(machineKeychainSweepAllowed({ injectedStore: false, nodeEnv: undefined, keychainSweepOnWipe: () => false })).toBe(false);
   });
 
   // Multi-user mode passes keychainSweepOnWipe=false for scoped users: the

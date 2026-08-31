@@ -414,6 +414,24 @@ function isAspsp(v: unknown): v is { name: string; country: string } {
   return typeof v === "object" && v !== null && typeof (v as Record<string, unknown>)["name"] === "string" && typeof (v as Record<string, unknown>)["country"] === "string";
 }
 
+/**
+ * May delete-all-data run `security delete-generic-password` loops
+ * against the MACHINE's login Keychain? An injected secret store (a
+ * test, an embedding) is a hard veto that no keychainSweepOnWipe
+ * override can lift, and a test process (bun test sets NODE_ENV=test)
+ * never qualifies either -- issue #9: a test that opted in to exercise
+ * the store-level enumerate sweep wiped the developer's real
+ * credentials on every `bun test` run.
+ */
+export function machineKeychainSweepAllowed(o: {
+  injectedStore: boolean;
+  nodeEnv: string | undefined;
+  keychainSweepOnWipe?: () => boolean;
+}): boolean {
+  if (o.injectedStore || o.nodeEnv === "test") return false;
+  return o.keychainSweepOnWipe?.() ?? true;
+}
+
 export function createApp(opts: AppOptions): App {
   const dataDir = path.resolve(opts.dataDir);
   fs.mkdirSync(dataDir, { recursive: true });
@@ -1513,10 +1531,21 @@ export function createApp(opts: AppOptions): App {
         for (const id of providerIds) secrets.delete?.(INFERENCE_SERVICE, `key:${id}`);
       } catch { /* settings unreadable: the CLI sweep below still runs */ }
       // Sweep for strays (older layouts, session tokens): delete every
-      // item of the app's Keychain services until none remain. Only with
-      // the real store -- an injected one (tests) must never touch the
-      // machine's Keychain.
-      if (process.platform === "darwin" && (opts.keychainSweepOnWipe?.() ?? opts.connectors?.secrets === undefined)) {
+      // item of the app's Keychain services until none remain. ONLY with
+      // the real store -- an injected store means a test or an embedding,
+      // and this loop touches the MACHINE's login Keychain, so an
+      // injected store is a hard veto, not a default keychainSweepOnWipe
+      // can override (issue #9: a test that opted in to the enumerate
+      // sweep wiped the developer's real credentials on every run). The
+      // NODE_ENV backstop keeps any future not-injected test out too.
+      if (
+        process.platform === "darwin" &&
+        machineKeychainSweepAllowed({
+          injectedStore: opts.connectors?.secrets !== undefined,
+          nodeEnv: process.env["NODE_ENV"],
+          ...(opts.keychainSweepOnWipe !== undefined ? { keychainSweepOnWipe: opts.keychainSweepOnWipe } : {}),
+        })
+      ) {
         for (const service of ["fin-interchange", "fin-inference", "fin-plaid", "fin-enablebanking", "fin-coinbase", "fin-kraken"]) {
           for (let i = 0; i < 100; i++) {
             const r = spawnSync("security", ["delete-generic-password", "-s", service], { encoding: "utf8" });
