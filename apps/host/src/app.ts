@@ -65,7 +65,7 @@ import {
   type LoadedInstitutions,
   type WalletHolding,
 } from "@fin/institutions";
-import { approvalQueue, listInstructions, markInstruction, openLedger, verdictsFor, views, type Ledger, type QueuedApproval, type InstructionRow } from "@fin/ledger";
+import { approvalQueue, findMergeCandidates, listInstructions, markInstruction, mergeAccounts, openLedger, verdictsFor, views, type Ledger, type QueuedApproval, type InstructionRow } from "@fin/ledger";
 import { createPolicyAuthorize, type PolicyDecision } from "@fin/policy";
 import { createVault, type Vault } from "@fin/vault";
 import {
@@ -481,6 +481,41 @@ export function createApp(opts: AppOptions): App {
 
   let loaded: LoadedInstitutions =
     opts.adapters !== undefined ? { entries: [], adapters: opts.adapters } : reloadRegistry();
+
+  // Self-repair (issue #11): a ledger duplicated by pre-#2 reconnects --
+  // two provider-id generations of the same real account -- is folded
+  // back together on boot. Only for API-connector institutions, where
+  // provider-id churn is a property of the adapter; two identically
+  // named manual accounts at a managed institution can be genuinely
+  // distinct, so those stay for the operator and `fin-host
+  // merge-accounts`. Idempotent: merges carry deterministic batch ids
+  // and a healthy ledger detects nothing.
+  {
+    const API_ADAPTERS = new Set(["plaid", "enablebanking", "coinbase", "kraken"]);
+    const adapterOf = new Map(loaded.entries.map((e) => [e.institution_id, e.adapter]));
+    for (const c of findMergeCandidates(ledger)) {
+      if (!API_ADAPTERS.has(adapterOf.get(c.institution_id) ?? "")) continue;
+      for (const dup of c.duplicates) {
+        try {
+          const r = mergeAccounts(ledger, { survivor: c.survivor, duplicate: dup, now: clock() });
+          if (r.replayed) continue;
+          ledger.appendJournal({
+            at: clock().toISOString(),
+            kind: "system",
+            subject: c.survivor,
+            summary: `merged duplicate account ${dup} into ${c.survivor} (${c.name} at ${c.institution_id}): a relink had minted a second id for the same real account`,
+            detail: { ...r },
+            refs: [],
+            author: "assets_manager",
+          });
+        } catch {
+          // A half-damaged pair (e.g. survivor itself merged mid-crash)
+          // is left for the CLI rather than blocking boot.
+        }
+      }
+    }
+  }
+
   const taxProfilePath = path.join(dataDir, "tax-profile.json");
   const taxProfile = (): TaxProfile | null => {
     if (!fs.existsSync(taxProfilePath)) return null;
