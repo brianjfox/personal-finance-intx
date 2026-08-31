@@ -5,7 +5,8 @@
 #
 #   scripts/ci-apple-secrets.sh
 #
-# Run it yourself, interactively: it exports the signing private key from
+# Run it from Terminal.app (it prompts; the Claude Code `!` runner has no
+# TTY — there, export APPLE_ID and APPLE_PASSWORD first instead): it exports the signing private key from
 # the login keychain (macOS asks you to allow `security` to use the key),
 # prompts for the Apple ID and an app-specific password (never echoed),
 # sets the six secrets with `gh secret set`, and deletes the temp files.
@@ -25,8 +26,17 @@ TMP="$(mktemp -d)"; chmod 700 "$TMP"
 cleanup() { rm -P -f "$TMP"/* 2>/dev/null || rm -f "$TMP"/*; rmdir "$TMP" 2>/dev/null || true; }
 trap cleanup EXIT
 
-read -r -p "Apple ID (e-mail used for notarization): " APPLE_ID
-read -r -s -p "App-specific password for that Apple ID (appleid.apple.com → Sign-In and Security): " APPLE_PASSWORD; echo
+# Credentials come from the environment (APPLE_ID, APPLE_PASSWORD) or are
+# prompted for — which needs a real terminal: the Claude Code `!` runner
+# has no TTY, so run this from Terminal.app (or export the two variables).
+if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ]; then
+  if [ ! -t 0 ]; then
+    echo "stdin is not a terminal: run this from Terminal.app, or set APPLE_ID and APPLE_PASSWORD in the environment" >&2
+    exit 1
+  fi
+  read -r -p "Apple ID (e-mail used for notarization): " APPLE_ID
+  read -r -s -p "App-specific password for that Apple ID (appleid.apple.com → Sign-In and Security): " APPLE_PASSWORD; echo
+fi
 [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] || { echo "Apple ID and password are required" >&2; exit 1; }
 
 P12_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
