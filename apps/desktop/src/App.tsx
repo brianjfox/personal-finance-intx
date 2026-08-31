@@ -24,10 +24,12 @@ const APP_VERSION: string = tauriConf.version;
  */
 let hostPlatform: string | null = null;
 const isWindows = (): boolean => hostPlatform === "win32";
-const thisMachine = (): string => (isWindows() ? "this PC" : "this Mac");
+const isMac = (): boolean => hostPlatform === "darwin";
+// Unknown platform (health unreachable) claims neither Mac nor Windows.
+const thisMachine = (): string => (isWindows() ? "this PC" : isMac() ? "this Mac" : "this computer");
 /** Where pasted keys live, with the article the sentence needs. */
-const theKeychain = (): string => (isWindows() ? "Windows Credential Manager" : "the Keychain");
-const yourKeychain = (): string => (isWindows() ? "Windows Credential Manager" : "your Mac's Keychain");
+const theKeychain = (): string => (isWindows() ? "Windows Credential Manager" : isMac() ? "the Keychain" : "the system credential store");
+const yourKeychain = (): string => (isWindows() ? "Windows Credential Manager" : isMac() ? "your Mac's Keychain" : "the system credential store");
 
 type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" | "tax" | "strategy" | "estate" | "audit" | "documents" | "settings";
 
@@ -53,13 +55,14 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
   }, []);
   useEffect(refresh, [refresh]);
   // The platform settles before ready flips: every screen's copy can
-  // then read it synchronously. Unreachable health defaults to darwin.
+  // then read it synchronously. Unreachable health stays unknown, and
+  // the copy helpers above claim neither platform.
   const [platformReady, setPlatformReady] = useState(hostPlatform !== null);
   useEffect(() => {
     if (hostPlatform !== null) return;
     api.health()
       .then((h) => { hostPlatform = h.platform; })
-      .catch(() => { hostPlatform = "darwin"; })
+      .catch(() => { hostPlatform = null; })
       .finally(() => setPlatformReady(true));
   }, []);
   // A 401 anywhere (host restart, session expiry) drops the session.
@@ -1033,7 +1036,7 @@ function DeleteAllDataCard() {
       <div className="queue-item" style={{ marginTop: 18 }}>
         <div className="head"><b>Everything has been deleted</b></div>
         <p>
-          The ledger, documents, profile, settings, and every stored key are gone. Quit the app{isWindows() ? "" : " (⌘Q)"} and relaunch
+          The ledger, documents, profile, settings, and every stored key are gone. Quit the app{isMac() ? " (⌘Q)" : ""} and relaunch
           to start fresh.
         </p>
         <p className="small muted">
@@ -1106,12 +1109,12 @@ function AccountCard({ user, onRenamed }: { user: { id: string; name: string }; 
       setOldPw("");
       setNewPw("");
       setConfirmPw("");
-      return isWindows() ? "Password changed." : "Password changed — your encrypted store now opens with the new one.";
+      return isMac() ? "Password changed — your encrypted store now opens with the new one." : "Password changed.";
     });
   return (
     <div className="queue-item">
       <div className="head"><b>Your account</b><span className="muted small">{user.id}</span></div>
-      <div className="small muted">Your name is also your username at sign-in.{!isWindows() && " Changing the password re-keys your encrypted store."}</div>
+      <div className="small muted">Your name is also your username at sign-in.{isMac() && " Changing the password re-keys your encrypted store."}</div>
       <div className="actions" style={{ marginTop: 8 }}>
         <input style={{ flex: 1, maxWidth: 280 }} placeholder="Your name" value={name} disabled={busy !== null} onChange={(e) => setName(e.target.value)} />
         <button disabled={busy !== null || name.trim() === "" || name.trim() === user.name} onClick={() => void rename()}>
@@ -1400,7 +1403,7 @@ function CredentialCard({ slot, onChanged }: { slot: CredentialsData["slots"][nu
           ))}
           <div className="actions" style={{ marginTop: 6 }}>
             <button disabled={busy} onClick={() => void act(() => api.credentialSet(slot.id, values))}>
-              {busy ? "saving…" : isWindows() ? "Save to Credential Manager" : "Save to Keychain"}
+              {busy ? "saving…" : isWindows() ? "Save to Credential Manager" : isMac() ? "Save to Keychain" : "Save key"}
             </button>
             <button className="secondary" disabled={busy} onClick={() => { setEditing(false); setValues({}); setError(null); }}>Cancel</button>
           </div>
@@ -4453,7 +4456,7 @@ function SettingsPage() {
         <div className="set-row">
           <div>
             <div className="set-name">Theme</div>
-            <div className="set-hint">Auto follows the {isWindows() ? "Windows" : "macOS"} appearance.</div>
+            <div className="set-hint">Auto follows the {isWindows() ? "Windows" : isMac() ? "macOS" : "system"} appearance.</div>
           </div>
           <div className="seg">
             {(["light", "dark", "auto"] as const).map((t) => (
