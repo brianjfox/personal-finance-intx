@@ -3569,7 +3569,18 @@ function ApprovalsSection({ approvals, hasPlan = true, onChanged, openFact }: { 
     setBusy(true);
     setError(null);
     try {
-      await api.propose();
+      const r = await api.propose();
+      // A run that settles without queueing anything is an ANSWER, not
+      // silence: say what happened, on the page.
+      if (r.state === "terminal") {
+        setError(
+          r.reason !== undefined
+            ? `The Market Manager run ended without a proposal: ${r.reason}`
+            : r.status === "completed"
+              ? "The Market Manager finished without a proposal — every asset class is inside the plan's drift band."
+              : `The Market Manager run ended (${r.status}) without queueing a proposal.`,
+        );
+      }
       onChanged();
     } catch (e) {
       // On the page, in plain words -- never a popup.

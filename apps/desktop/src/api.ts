@@ -276,7 +276,7 @@ export const api = {
   savePlan: (plan: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string }) =>
     post<NonNullable<PlanStatus["plan"]>>("/api/plan", plan),
   instructions: () => get<InstructionRow[]>("/api/instructions"),
-  propose: () => post<{ runId: string; state: string; status: string }>("/api/proposal"),
+  propose: () => post<{ runId: string; state: "queued" | "terminal"; status: string; reason?: string }>("/api/proposal"),
   decide: (recId: string, decision: "approve" | "reject", bound: { max_quantity?: string | null; limit_price?: string | null }, note: string) =>
     post<{ runId: string; signalId: string }>(`/api/recommendation/${recId}/decide`, { decision, bound, note }),
   revoke: (insId: string, note: string) => post<{ replayed: boolean }>(`/api/instruction/${insId}/revoke`, { note }),

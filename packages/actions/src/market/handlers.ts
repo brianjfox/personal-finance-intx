@@ -143,12 +143,25 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
   };
 }
 
-/** Tolerate prose/code fences around the JSON: parse the outermost object. */
+/**
+ * Tolerate prose/code fences around the JSON: parse the outermost object.
+ * Some local models (gpt-oss via mlx_lm.server) leak "harmony" channel
+ * scaffolding into the text -- keep the final channel's content and strip
+ * the control tokens before hunting for the object, the same healing the
+ * chat path applies.
+ */
 export function parseDraft(reply: string): ProposalDraft {
-  const start = reply.indexOf("{");
-  const end = reply.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("audit.intake: the reply carries no JSON object to parse");
-  const raw: unknown = JSON.parse(reply.slice(start, end + 1));
+  let text = reply;
+  const final = /<\|channel\|>final<\|message\|>/.exec(text);
+  if (final !== null) text = text.slice(final.index + final[0].length);
+  text = text.replace(/<\|channel\|>analysis<\|message\|>[\s\S]*?(<\|end\|>|$)/g, "").replace(/<\|[a-z_]+\|>/g, "");
+  if (text.trim() === "") text = reply;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    throw new Error("audit.intake: the drafting model's reply carries no JSON object to parse -- a small local model may not manage the draft format; assign a stronger provider to Strategy on the Credentials page");
+  }
+  const raw: unknown = JSON.parse(text.slice(start, end + 1));
   return assertType(ProposalDraft, raw, "proposal draft");
 }
 
