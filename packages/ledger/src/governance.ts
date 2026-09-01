@@ -59,15 +59,15 @@ export function appendAuditVerdict(ledger: Ledger, verdict: AuditVerdict): { rep
     .get(v.recommendation_id, v.attempt);
   if (existing !== null) return { replayed: true };
   ledger.db
-    .query("INSERT INTO audit_verdict(recommendation_id, attempt, cleared, at, blocks, figures) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(v.recommendation_id, v.attempt, v.cleared ? 1 : 0, v.as_of, JSON.stringify(v.blocks), JSON.stringify(v.figures));
+    .query("INSERT INTO audit_verdict(recommendation_id, attempt, cleared, at, blocks, figures, caveats) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(v.recommendation_id, v.attempt, v.cleared ? 1 : 0, v.as_of, JSON.stringify(v.blocks), JSON.stringify(v.figures), JSON.stringify(v.caveats ?? []));
   return { replayed: false };
 }
 
 export function verdictsFor(ledger: Ledger, recommendationId: string): AuditVerdict[] {
   return ledger.db
-    .query<{ recommendation_id: string; attempt: number; cleared: number; at: string; blocks: string; figures: string }, [string]>(
-      "SELECT recommendation_id, attempt, cleared, at, blocks, figures FROM audit_verdict WHERE recommendation_id = ? ORDER BY attempt",
+    .query<{ recommendation_id: string; attempt: number; cleared: number; at: string; blocks: string; figures: string; caveats: string }, [string]>(
+      "SELECT recommendation_id, attempt, cleared, at, blocks, figures, caveats FROM audit_verdict WHERE recommendation_id = ? ORDER BY attempt",
     )
     .all(recommendationId)
     .map((r) => ({
@@ -75,6 +75,7 @@ export function verdictsFor(ledger: Ledger, recommendationId: string): AuditVerd
       attempt: r.attempt,
       cleared: r.cleared === 1,
       blocks: JSON.parse(r.blocks) as AuditVerdict["blocks"],
+      caveats: JSON.parse(r.caveats) as NonNullable<AuditVerdict["caveats"]>,
       as_of: r.at,
       figures: JSON.parse(r.figures) as Record<string, unknown>,
     }));

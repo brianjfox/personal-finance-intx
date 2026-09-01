@@ -12,6 +12,7 @@ import { type } from "arktype";
 import { Principal } from "./principals";
 import { Provenance } from "./provenance";
 import { Decimal, Id, IsoDateTime, Money, Subject } from "./scalars";
+import { Acknowledgement } from "./plan";
 
 export const ProposedAction = type({
   verb: "'BUY' | 'SELL' | 'HOLD' | 'REBALANCE' | 'TRANSFER' | 'PAY' | 'HARVEST' | 'REVIEW' | 'OTHER'",
@@ -38,6 +39,8 @@ export const Recommendation = type({
   evidence: Id.array().atLeastLength(1),
   as_of: IsoDateTime,
   "tax_lots?": TaxLotRef.array(),
+  /** Conditions the Market Manager accepted on the record (issue #51). */
+  "acknowledgements?": Acknowledgement.array(),
   confidence: "0 <= number <= 1",
   /** Gates this must pass: e.g. `auditor.review`, `human.approve`. */
   requires: "string[]",

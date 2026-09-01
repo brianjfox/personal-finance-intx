@@ -3575,7 +3575,7 @@ function ApprovalsSection({ approvals, hasPlan = true, onChanged, openFact }: { 
       if (r.state === "terminal") {
         setError(
           r.reason !== undefined
-            ? `No proposal this time — ${r.reason}.`
+            ? `No proposal this time — ${r.reason.replace(/[.\s]+$/, "")}.`
             : r.status === "completed"
               ? "The Market Manager finished without a proposal — every asset class is inside the plan's drift band."
               : `The Market Manager run ended (${r.status}) without queueing a proposal.`,
@@ -3648,6 +3648,16 @@ function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApp
           <div>
             <h2>{maskDigits(headline)}{rec.action.amount != null && <span className="muted" style={{ fontWeight: 400 }}> · ~{money(rec.action.amount.amount, rec.action.amount.currency)}</span>}</h2>
             <p style={{ fontSize: 14, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 16px" }}>{rec.thesis}</p>
+            {(q.verdict.caveats ?? []).length > 0 && (
+              <div className="banner" style={{ margin: "0 0 16px" }}>
+                <strong>Before you sign — the Auditor cleared this with {(q.verdict.caveats ?? []).length === 1 ? "a caveat" : "caveats"}:</strong>
+                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                  {(q.verdict.caveats ?? []).map((c, i) => (
+                    <li key={i}>{c.detail}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="evrow">
               <Icon name="link-simple" className="icon" />
               <span>Evidence:{" "}

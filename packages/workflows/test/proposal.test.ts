@@ -303,6 +303,34 @@ describe("the four slide-16 blocks, one by one (auditRecommendation direct)", ()
     expect(auditRecommendation(auditCtx(h, PLAN), dangling, "unit", 1).blocks.some((b) => b.condition === "unreproducible")).toBe(true);
   });
 
+  test("2b. lots (#51): an unknown lot is a caveat, not a block; a short-term lot blocks unless acknowledged, then becomes a caveat", async () => {
+    const h = seeded();
+    await h.run(NIGHTLY, {});
+    const rec = await clearedRec(h, PLAN, 1); // SELL 100 AAPL, a 2020 (long-term) lot
+    const base = auditRecommendation(auditCtx(h, PLAN), rec, "unit", 1);
+    expect(base.cleared).toBe(true);
+    expect(base.caveats ?? []).toEqual([]);
+    // Coinbase-style: no lot detail at all.
+    const unknown = auditRecommendation(auditCtx(h, PLAN), { ...rec, tax_lots: [{ lot_id: "unknown", treatment: "unknown" }] }, "unit", 1);
+    expect(unknown.cleared).toBe(true);
+    expect((unknown.caveats ?? []).map((c) => c.condition)).toEqual(["lot_basis_unknown"]);
+    expect(unknown.caveats![0]!.detail).toContain("cannot be verified");
+    // A known short-term lot: blocked, and the block says how to acknowledge.
+    const st = auditRecommendation(auditCtx(h, PLAN), { ...rec, tax_lots: [{ lot_id: "aapl-2026", treatment: "STCG" }] }, "unit", 1);
+    expect(st.cleared).toBe(false);
+    expect(st.blocks.map((b) => b.condition)).toEqual(["wash_sale"]);
+    expect(st.blocks[0]!.detail).toContain('acknowledgements: ["short_term_lots"]');
+    // Acknowledged on the record: cleared, with the caveat instead.
+    const acked = auditRecommendation(auditCtx(h, PLAN), { ...rec, tax_lots: [{ lot_id: "aapl-2026", treatment: "STCG" }], acknowledgements: ["short_term_lots"] }, "unit", 1);
+    expect(acked.cleared).toBe(true);
+    expect((acked.caveats ?? []).map((c) => c.condition)).toEqual(["short_term_lots"]);
+    // The draft builder carries acknowledgements through, de-duplicated.
+    const { computeDrift } = await import("@fin/actions");
+    const drift = computeDrift({ runKey: "unit", now: new Date(NOW), plan: PLAN, positions: h.ledger.asOf({ kind: "position" }), lots: h.ledger.asOf({ kind: "lot" }) });
+    const draft = buildProposalDraft(drift, 1, { thesis: "t", confidence: 0.5, now: new Date(NOW), acknowledgements: ["short_term_lots", "short_term_lots"] });
+    expect(draft.acknowledgements).toEqual(["short_term_lots"]);
+  });
+
   test("3. plan conflict: a do-not-sell symbol and an oversized order both block", async () => {
     const h = seeded();
     await h.run(NIGHTLY, {});

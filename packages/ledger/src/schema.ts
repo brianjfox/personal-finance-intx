@@ -238,6 +238,13 @@ CREATE TABLE instruction_event (
 ${["audit_verdict", "instruction_event"].map(appendOnlyTriggers).join("\n")}
 `,
   },
+  {
+    // Issue #51: the Auditor's caveats -- things the operator must know
+    // before signing that are not reasons to withhold the proposal.
+    version: 3,
+    name: "audit-verdict-caveats",
+    sql: `ALTER TABLE audit_verdict ADD COLUMN caveats TEXT NOT NULL DEFAULT '[]';`,
+  },
 ];
 
 export const APPEND_ONLY = APPEND_ONLY_TABLES;
