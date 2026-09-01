@@ -101,7 +101,7 @@ export interface PlanStatus {
 
 export interface QueuedApproval {
   recommendation: Recommendation;
-  verdict: { cleared: boolean; attempt: number; as_of: string; blocks: Array<{ condition: string; detail: string }>; figures: Record<string, unknown> };
+  verdict: { cleared: boolean; attempt: number; as_of: string; blocks: Array<{ condition: string; detail: string }>; caveats?: Array<{ condition: string; detail: string }>; figures: Record<string, unknown> };
   severity: string;
 }
 export interface InstructionRow {

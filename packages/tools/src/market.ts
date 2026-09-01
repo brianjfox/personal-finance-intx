@@ -4,7 +4,7 @@
 // a draft FROM a drift candidate so the model NEVER types a figure. No
 // credential tool, no execution tool, no ledger write of any kind.
 
-import { assertType, InvestmentPlan, type PositionPayload } from "@fin/contracts";
+import { ACKNOWLEDGEMENTS, assertType, InvestmentPlan, type Acknowledgement, type PositionPayload } from "@fin/contracts";
 import { buildProposalDraft, computeDrift } from "@fin/actions";
 import { views } from "@fin/ledger";
 import { defineTool, type BaseEnv } from "@intx/agent";
@@ -86,13 +86,14 @@ const emitProposal: FinTool = {
   definition: {
     name: "emit_proposal",
     description:
-      "Canonicalize ONE drift candidate into a proposal draft: pass the candidate_index from compute_rebalance plus your thesis and confidence. The returned draft carries the candidate's exact figures and the evidence fact ids -- reply with EXACTLY this JSON and nothing else. 'No evidence, no proposal.'",
+      "Canonicalize ONE drift candidate into a proposal draft: pass the candidate_index from compute_rebalance plus your thesis and confidence. The returned draft carries the candidate's exact figures and the evidence fact ids -- reply with EXACTLY this JSON and nothing else. 'No evidence, no proposal.' If the Auditor blocked a prior draft for consuming short-term lots and you judge the trade worth that treatment now, pass acknowledgements: [\"short_term_lots\"] and say why in the thesis; the Auditor then clears with a caveat the operator sees before signing.",
     inputSchema: OBJECT_SCHEMA(
       {
         run_key: { type: "string" },
         candidate_index: { type: "integer", minimum: 0 },
         thesis: { type: "string", minLength: 1 },
         confidence: { type: "number", minimum: 0, maximum: 1 },
+        acknowledgements: { type: "array", items: { type: "string", enum: [...ACKNOWLEDGEMENTS] } },
       },
       ["run_key", "candidate_index", "thesis", "confidence"],
     ),
@@ -100,10 +101,14 @@ const emitProposal: FinTool = {
   handler: async (args, fin) => {
     const runKey = String(args["run_key"] ?? "");
     const report = driftNow(fin, runKey);
+    const acks = Array.isArray(args["acknowledgements"]) ? (args["acknowledgements"] as unknown[]) : [];
+    const unknownAck = acks.find((a) => !(ACKNOWLEDGEMENTS as readonly unknown[]).includes(a));
+    if (unknownAck !== undefined) throw new Error(`emit_proposal: unknown acknowledgement ${JSON.stringify(unknownAck)}; allowed: ${ACKNOWLEDGEMENTS.join(", ")}`);
     const draft = buildProposalDraft(report, Number(args["candidate_index"]), {
       thesis: String(args["thesis"] ?? ""),
       confidence: Number(args["confidence"]),
       now: fin.clock(),
+      acknowledgements: acks as Acknowledgement[],
     });
     return { result: draft as unknown as Record<string, unknown>, fact_ids: draft.evidence };
   },

@@ -188,6 +188,41 @@ describe("phase 4 through fin-host: the approval queue", () => {
     }
   });
 
+  test("a sale from an account without lot detail reaches the queue with the Auditor's caveat, not a block (#51)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir); // no crypto target: crypto's whole weight is excess
+    const crypto: SnapshotAccount = {
+      account_id: "acct.broker.crypto",
+      name: "Exchange",
+      type: "brokerage",
+      currency: "USD",
+      as_of: new Date().toISOString(),
+      balances: [{ balance_type: "total", amount: "100000" }],
+      // No lots: exactly what Coinbase/Kraken/wallets deliver.
+      positions: [{ instrument: { symbol: "BTC", asset_class: "crypto" }, quantity: "1.6", price: "62500", market_value: "100000", cost_basis: "10000" }],
+      transactions: [],
+    };
+    const app = openApp(dataDir, [crypto]);
+    try {
+      expect(app.ledger.schemaVersion()).toBe(3);
+      expect((await app.runNightly({ runId: "nightly_lots" })).terminalStatus).toBe("completed");
+      const r = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r.state).toBe("queued");
+      const q = app.approvalQueue();
+      expect(q).toHaveLength(1);
+      expect(q[0]!.recommendation.subject).toBe("acct.broker.crypto");
+      expect(q[0]!.recommendation.action).toMatchObject({ verb: "SELL", instrument: "BTC", quantity: "1" });
+      expect(q[0]!.recommendation.tax_lots).toEqual([{ lot_id: "unknown", treatment: "unknown" }]);
+      expect(q[0]!.verdict.cleared).toBe(true);
+      expect(q[0]!.verdict.blocks).toEqual([]);
+      expect((q[0]!.verdict.caveats ?? []).map((c) => c.condition)).toEqual(["lot_basis_unknown"]);
+      const journal = app.ledger.listJournal(20).map((j) => j.summary);
+      expect(journal.some((s) => s.includes("auditor cleared") && s.includes("caveat(s): lot_basis_unknown"))).toBe(true);
+    } finally {
+      app.close();
+    }
+  });
+
   test("a drift with no candidates ends the run cleanly: no model call, no gate, a plain-words reason (#38)", async () => {
     const dataDir = tmp();
     // A plan that MATCHES the fixture positions (invested: etf .6, equity .3, bond .1): zero candidates.

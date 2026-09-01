@@ -7,6 +7,7 @@
 
 import {
   decimal,
+  type Acknowledgement,
   type AssetClass,
   type CandidateOrder,
   type DriftLine,
@@ -168,7 +169,7 @@ function formatPp(fraction: string): string {
 export function buildProposalDraft(
   drift: DriftReport,
   candidateIndex: number,
-  opts: { thesis: string; confidence: number; now: Date; expiryMs?: number },
+  opts: { thesis: string; confidence: number; now: Date; expiryMs?: number; acknowledgements?: Acknowledgement[] },
 ): ProposalDraft {
   const c = drift.candidates[candidateIndex];
   if (c === undefined) {
@@ -190,6 +191,7 @@ export function buildProposalDraft(
     thesis: opts.thesis,
     evidence: drift.evidence,
     ...(c.tax_lots !== undefined ? { tax_lots: c.tax_lots } : {}),
+    ...(opts.acknowledgements !== undefined && opts.acknowledgements.length > 0 ? { acknowledgements: [...new Set(opts.acknowledgements)] } : {}),
     confidence: Math.min(1, Math.max(0, opts.confidence)),
     requires: ["auditor.review", "human.approve"],
     expires,

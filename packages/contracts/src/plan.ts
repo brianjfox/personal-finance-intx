@@ -85,6 +85,11 @@ export type DriftReport = typeof DriftReport.infer;
 
 // --- the proposal draft and the audit verdict ---------------------------
 
+/** What a draft may acknowledge explicitly (issue #51). */
+export const ACKNOWLEDGEMENTS = ["short_term_lots"] as const;
+export type Acknowledgement = (typeof ACKNOWLEDGEMENTS)[number];
+export const Acknowledgement = type("'short_term_lots'");
+
 /**
  * What the Market Manager's reply must parse as (BUILD_PLAN §8.1 bridge):
  * a full Recommendation minus the ledger-assigned id and provenance,
@@ -105,6 +110,8 @@ export const ProposalDraft = type({
   thesis: "string > 0",
   evidence: Id.array().atLeastLength(1),
   "tax_lots?": type({ lot_id: "string", treatment: "'LTCG' | 'STCG' | 'none' | 'unknown'" }).array(),
+  /** Conditions the Market Manager accepts on the record (issue #51): e.g. `short_term_lots` turns the Auditor's short-term-lot block into a caveat. */
+  "acknowledgements?": Acknowledgement.array(),
   confidence: "0 <= number <= 1",
   requires: "string[]",
   expires: IsoDateTime,
@@ -122,12 +129,25 @@ export const AuditBlock = type({
 });
 export type AuditBlock = typeof AuditBlock.infer;
 
+/**
+ * Something the operator must know before signing that is NOT a reason to
+ * withhold the proposal (issue #51): an unverifiable lot, or a short-term
+ * treatment the Market Manager acknowledged on the record.
+ */
+export const AuditCaveat = type({
+  condition: "'lot_basis_unknown' | 'short_term_lots'",
+  detail: "string",
+});
+export type AuditCaveat = typeof AuditCaveat.infer;
+
 /** The Auditor's deterministic verdict on one recommendation attempt. */
 export const AuditVerdict = type({
   recommendation_id: Id,
   attempt: "number.integer >= 1",
   cleared: "boolean",
   blocks: AuditBlock.array(),
+  /** Shown on the approval card; optional only so verdicts stored before migration 3 still validate. */
+  "caveats?": AuditCaveat.array(),
   as_of: IsoDateTime,
   /** The re-run's figures, for the queue's "Auditor: cleared · LTCG $x" line. */
   figures: "Record<string, unknown>",

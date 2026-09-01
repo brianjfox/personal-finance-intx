@@ -25,6 +25,7 @@ import {
   ProposalDraft,
   type Approval,
   type AuditBlock,
+  type AuditCaveat,
   type AuditVerdict,
   type BalancePayload,
   type DriftReport,
@@ -158,6 +159,7 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
           evidence: draft.evidence,
           as_of: draft.as_of,
           ...(draft.tax_lots !== undefined ? { tax_lots: draft.tax_lots } : {}),
+          ...(draft.acknowledgements !== undefined ? { acknowledgements: draft.acknowledgements } : {}),
           confidence: draft.confidence,
           requires: draft.requires,
           expires: draft.expires,
@@ -271,9 +273,9 @@ export function auditReviewHandler(actx: ActionContext): ActionHandler {
           kind: "system",
           subject: rec.subject,
           summary: verdict.cleared
-            ? `auditor cleared ${rec.id}: ${rec.action.verb} ${rec.action.quantity ?? ""} ${rec.action.instrument ?? ""} (attempt ${String(attempt)})`
+            ? `auditor cleared ${rec.id}: ${rec.action.verb} ${rec.action.quantity ?? ""} ${rec.action.instrument ?? ""} (attempt ${String(attempt)})${(verdict.caveats ?? []).length > 0 ? ` with ${String((verdict.caveats ?? []).length)} caveat(s): ${(verdict.caveats ?? []).map((c) => c.condition).join(", ")}` : ""}`
             : `auditor blocked ${rec.id} (attempt ${String(attempt)}): ${verdict.blocks.map((b) => b.condition).join(", ")}`,
-          detail: { blocks: verdict.blocks, figures: verdict.figures },
+          detail: { blocks: verdict.blocks, caveats: verdict.caveats ?? [], figures: verdict.figures },
           refs: [],
           author: "auditor",
         });
@@ -293,6 +295,7 @@ export function auditReviewHandler(actx: ActionContext): ActionHandler {
 export function auditRecommendation(actx: ActionContext, rec: Recommendation, runKey: string, attempt: number): AuditVerdict {
   const now = actx.clock();
   const blocks: AuditBlock[] = [];
+  const caveats: AuditCaveat[] = [];
   const figures: Record<string, unknown> = {};
   const plan = planOf(actx);
 
@@ -353,12 +356,33 @@ export function auditRecommendation(actx: ActionContext, rec: Recommendation, ru
     if (washes.some((w) => w.symbol.toUpperCase() === symbol.toUpperCase() && w.account_id === rec.subject)) {
       blocks.push({ condition: "wash_sale", detail: `${symbol} already carries an open wash-sale window in ${rec.subject}` });
     }
-    const stLots = (rec.tax_lots ?? []).filter((l) => l.treatment === "STCG" || l.treatment === "unknown");
-    if (stLots.length > 0) {
-      blocks.push({
-        condition: "wash_sale",
-        detail: `the lot choice consumes ${String(stLots.length)} short-term/unknown lot(s) (${stLots.map((l) => l.lot_id).join(", ")}) -- a quiet cost; restructure or acknowledge explicitly`,
+    // Lot choice (issue #51). UNKNOWN lots are unverifiable, not a quiet
+    // cost: the operator may know the basis, or accept the sale anyway --
+    // a caveat on the approval card, never a reason to withhold the trade.
+    // SHORT-TERM lots on known data are the quiet cost: a block, unless
+    // the Market Manager acknowledged the treatment on the record.
+    const lots = rec.tax_lots ?? [];
+    const unknownLots = lots.filter((l) => l.treatment === "unknown");
+    if (unknownLots.length > 0) {
+      caveats.push({
+        condition: "lot_basis_unknown",
+        detail: `no tax-lot detail is recorded for ${symbol} in ${rec.subject}: the holding period and cost basis of this sale cannot be verified -- confirm them yourself before signing`,
       });
+    }
+    const stLots = lots.filter((l) => l.treatment === "STCG");
+    if (stLots.length > 0) {
+      const ids = stLots.map((l) => l.lot_id).join(", ");
+      if ((rec.acknowledgements ?? []).includes("short_term_lots")) {
+        caveats.push({
+          condition: "short_term_lots",
+          detail: `this sale consumes ${String(stLots.length)} short-term lot(s) (${ids}); the Market Manager acknowledged the short-term treatment -- its thesis says why now is worth it`,
+        });
+      } else {
+        blocks.push({
+          condition: "wash_sale",
+          detail: `the lot choice consumes ${String(stLots.length)} short-term lot(s) (${ids}) -- a quiet cost; restructure, or acknowledge it explicitly (emit_proposal acknowledgements: ["short_term_lots"]) with the thesis saying why now is worth the short-term treatment`,
+        });
+      }
     }
   }
 
@@ -415,6 +439,7 @@ export function auditRecommendation(actx: ActionContext, rec: Recommendation, ru
     recommendation_id: rec.id,
     attempt,
     cleared: blocks.length === 0,
+    caveats,
     blocks,
     as_of: now.toISOString(),
     figures,
