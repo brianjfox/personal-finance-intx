@@ -63,6 +63,42 @@ const openApp = (dataDir: string): App =>
   createApp({ dataDir, adapters: adapters(new Date()), pollMs: 20, agentFactory: scriptedAgentFactory(), inferenceSource: stubSource });
 
 describe("phase 4 through fin-host: the approval queue", () => {
+  test("a drift with no candidates ends the run cleanly: no model call, no gate, a plain-words reason (#38)", async () => {
+    const dataDir = tmp();
+    // A plan that MATCHES the fixture positions (invested: etf .6, equity .3, bond .1): zero candidates.
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dataDir, "plan.json"),
+      JSON.stringify({
+        as_of: "2026-08-01",
+        band: "0.05",
+        targets: [
+          { asset_class: "etf", weight: "0.6" },
+          { asset_class: "equity", weight: "0.3" },
+          { asset_class: "bond", weight: "0.1" },
+        ],
+        constraints: {},
+      }),
+    );
+    const app = openApp(dataDir);
+    try {
+      expect((await app.runNightly({ runId: "nightly_nc" })).terminalStatus).toBe("completed");
+      const r = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r.state).toBe("terminal");
+      expect(r.status).toBe("completed");
+      expect(r.reason).toMatch(/nothing to propose/);
+      expect(app.approvalQueue()).toHaveLength(0);
+      // The designed decline is journaled, and the model was never asked.
+      expect(app.ledger.listJournal(10).some((j) => j.summary.includes("declined to propose"))).toBe(true);
+      // The loop body (where the model call lives) never spawned: the
+      // skipped rework branch emits bookkeeping events but no child run.
+      const events = await app.runEvents(r.runId);
+      expect(events.some((e) => e.kind === "ChildSpawned")).toBe(false);
+    } finally {
+      app.close();
+    }
+  });
+
   test("propose -> queue -> decide through the durable inbox while no host runs -> prepared -> revoke", async () => {
     const dataDir = tmp();
     writePlan(dataDir);
