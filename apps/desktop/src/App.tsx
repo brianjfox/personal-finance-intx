@@ -4796,7 +4796,7 @@ function Documents({ tick }: { tick: number }) {
       <h2>Document vault</h2>
       <p>
         <button disabled={busy} onClick={() => void doExport()}>{busy ? "exporting…" : "Break-glass export"}</button>
-        <span className="small muted"> everything as CSV + PDF + originals, readable with no software from this project (deck slide 21)</span>
+        <span className="small muted"> Create a directory with all of your information in clear text</span>
       </p>
       {exported !== null && <div className="banner">{exported}</div>}
       <p>
