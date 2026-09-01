@@ -105,10 +105,27 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
     }
     const attempt = input.attempt ?? 1;
     // The DESIGNED decline (prompt rule 4): nothing to record, nothing to
-    // audit. Pure and deterministic, so no effect is performed; the
-    // workflow's gate routes it to a clean no-proposal ending.
-    if (isDeclinedReply(input.reply)) {
-      return { run_key: input.run_key, attempt, declined: true };
+    // audit -- but the Market Manager's one-sentence reason is the only
+    // account the operator will ever get of why, so it is journaled here
+    // (idempotently, under the intake effect) before the workflow's
+    // settle step routes the run to its declined ending (issue #45).
+    const reason = declinedReason(input.reply);
+    if (reason !== null) {
+      return ctx.perform({
+        effectId: `intake:${String(attempt)}`,
+        capability: CAP.recordRecommendation,
+        run: async () => {
+          actx.ledger.appendJournal({
+            at: actx.clock().toISOString(),
+            kind: "system",
+            summary: `market manager declined to propose (attempt ${String(attempt)})${reason === "" ? " -- no reason given" : `: ${reason}`}`,
+            detail: { run_key: input.run_key, attempt, reason },
+            refs: [],
+            author: "auditor",
+          });
+          return { run_key: input.run_key, attempt, declined: true, reason };
+        },
+      });
     }
     return ctx.perform({
       effectId: `intake:${String(attempt)}`,
@@ -169,9 +186,24 @@ function healModelReply(reply: string): string {
   return text.trim() === "" ? reply : text;
 }
 
-/** Prompt rule 4's designed decline: the Market Manager answers the single word NOTHING when it has nothing to propose. */
+/**
+ * Prompt rule 4's designed decline: `NOTHING`, optionally followed by
+ * one sentence saying why (`NOTHING: the only candidate sells ...`).
+ * Returns the reason ("" when the bare word was given) or null when the
+ * reply is not a decline. A reply that goes on to carry a JSON object is
+ * a draft with a preamble, never a decline.
+ */
+export function declinedReason(reply: string): string | null {
+  const m = /^NOTHING\b[\s:.,;!\u2013\u2014-]*([\s\S]*)$/i.exec(healModelReply(reply).trim());
+  if (m === null) return null;
+  const rest = (m[1] ?? "").replace(/\s+/g, " ").trim();
+  if (/[{}]/.test(rest)) return null;
+  return rest;
+}
+
+/** True when the reply is rule 4's decline, with or without a reason. */
 export function isDeclinedReply(reply: string): boolean {
-  return /^NOTHING[.!]?$/i.test(healModelReply(reply).trim());
+  return declinedReason(reply) !== null;
 }
 
 /** Tolerate prose/code fences around the JSON: heal harmony scaffolding, then parse the outermost object. */
@@ -193,6 +225,8 @@ export interface ReviewInput {
   attempt?: number;
   /** From a declined intake (the Market Manager answered NOTHING): no recommendation exists. */
   declined?: boolean;
+  /** The Market Manager's one-sentence reason for declining ("" when it gave none). */
+  reason?: string;
   recommendation_id?: string;
 }
 
@@ -202,10 +236,19 @@ export function auditReviewHandler(actx: ActionContext): ActionHandler {
     if (typeof input.run_key !== "string") throw new Error("audit.review: run_key is required");
     // A declined intake carries no recommendation: nothing to audit, and
     // NOT cleared -- clearing would send the run to an approval gate with
-    // nothing to approve. The loop redrafts (the model may pick a
-    // different candidate) or exhausts cleanly.
+    // nothing to approve. The loop's `while` stops on `declined` (the
+    // same report would only draw the same answer), and the settle step
+    // routes the run to its declined ending (issue #45).
     if (input.declined === true) {
-      return { run_key: input.run_key, attempt: input.attempt ?? 1, declined: true, cleared: false, blocks: ["market manager declined (NOTHING)"] };
+      const reason = typeof input.reason === "string" ? input.reason : "";
+      return {
+        run_key: input.run_key,
+        attempt: input.attempt ?? 1,
+        declined: true,
+        reason,
+        cleared: false,
+        blocks: [reason === "" ? "market manager declined (NOTHING)" : `market manager declined: ${reason}`],
+      };
     }
     const recommendationId_ = input.recommendation_id;
     if (typeof recommendationId_ !== "string") {
@@ -584,10 +627,34 @@ export function governRejectedHandler(actx: ActionContext): ActionHandler {
   return terminalHandler(actx, "proposal.rejected.closed", (rk) => `proposal ${rk}: closed after rejection`);
 }
 export function governExhaustedHandler(actx: ActionContext): ActionHandler {
-  return terminalHandler(actx, "proposal.exhausted", (rk) => `proposal ${rk}: every draft was blocked by the auditor or declined by the market manager; nothing reached the queue`);
+  return terminalHandler(actx, "proposal.exhausted", (rk) => `proposal ${rk}: every redraft was blocked by the auditor; nothing reached the queue`);
 }
 
-/** The Market Manager's designed decline (prompt rule 4, reply NOTHING): a clean no-proposal ending, journaled. */
+/** No candidates in the drift report: a clean no-proposal ending, journaled, the model never asked. */
 export function governNothingHandler(actx: ActionContext): ActionHandler {
-  return terminalHandler(actx, "proposal.declined", (rk) => `proposal ${rk}: the Market Manager reviewed the drift and declined to propose (NOTHING)`);
+  return terminalHandler(actx, "proposal.declined", (rk) => `proposal ${rk}: the drift report had no candidates, so there was nothing to propose (declined to propose without asking the market manager)`);
+}
+
+/** The Market Manager's designed decline (prompt rule 4, reply NOTHING): a clean no-proposal ending after ONE attempt; the reason sits in the intake's journal entry. */
+export function governDeclinedHandler(actx: ActionContext): ActionHandler {
+  return terminalHandler(actx, "proposal.declined", (rk) => `proposal ${rk}: the Market Manager reviewed the candidates and declined to propose; its reason is journaled with the attempt`);
+}
+
+/**
+ * After the rework loop: did any attempt clear? A pure ledger read the
+ * verdict gate routes on -- the pinned runtime's loop output carries
+ * only outcome/iterations/carry (the LAST iteration's input, never its
+ * verdict), so "cleared" vs "declined" must be re-derived from what the
+ * intake and review steps recorded (issue #45).
+ */
+export function governSettleHandler(actx: ActionContext): ActionHandler {
+  return async (rawInput) => {
+    const input = rawInput as { run_key?: string };
+    if (typeof input.run_key !== "string") throw new Error("govern.settle: run_key is required");
+    const runKey = input.run_key;
+    const cleared = listRecommendations(actx.ledger, 1000)
+      .filter((r) => r.id.startsWith(`rec_${runKey}.`))
+      .filter((r) => verdictsFor(actx.ledger, r.id).some((v) => v.cleared));
+    return { run_key: runKey, queued: cleared.length > 0, recommendation_id: cleared[0]?.id ?? null };
+  };
 }

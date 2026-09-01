@@ -3575,7 +3575,7 @@ function ApprovalsSection({ approvals, hasPlan = true, onChanged, openFact }: { 
       if (r.state === "terminal") {
         setError(
           r.reason !== undefined
-            ? `The Market Manager run ended without a proposal: ${r.reason}`
+            ? `No proposal this time — ${r.reason}.`
             : r.status === "completed"
               ? "The Market Manager finished without a proposal — every asset class is inside the plan's drift band."
               : `The Market Manager run ended (${r.status}) without queueing a proposal.`,

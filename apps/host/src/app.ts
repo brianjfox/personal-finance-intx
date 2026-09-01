@@ -1607,6 +1607,25 @@ export function createApp(opts: AppOptions): App {
       // skipped): only a genuinely-run completion counts.
       const genuinelyCompleted = (events: readonly { kind: string }[], stepId: string): boolean =>
         events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
+      // The rework loop's per-iteration outputs (`rework[i]` StepCompleted,
+      // the body's step-outputs record) are where the Market Manager's
+      // decline reason and the Auditor's last verdict live.
+      const iterations = (events: readonly { kind: string }[]): { intake?: { reason?: unknown }; audit?: { blocks?: unknown } }[] =>
+        events
+          .filter((e) => e.kind === "StepCompleted" && /^rework\[\d+\]$/.test(String((e as { stepId?: string }).stepId ?? "")))
+          .map((e) => {
+            const ref = String(((e as { output?: { ref?: unknown } }).output ?? {}).ref ?? "");
+            if (!ref.startsWith("inline:")) return {};
+            try {
+              return JSON.parse(ref.slice("inline:".length)) as { intake?: { reason?: unknown }; audit?: { blocks?: unknown } };
+            } catch {
+              return {};
+            }
+          });
+      const blockText = (blocks: unknown): string =>
+        Array.isArray(blocks)
+          ? blocks.map((b) => (typeof b === "string" ? b : typeof (b as { detail?: unknown }).detail === "string" ? String((b as { detail: string }).detail) : String((b as { condition?: unknown }).condition ?? ""))).filter((s) => s !== "").join("; ")
+          : "";
       const terminal = async (status: string): Promise<{ runId: string; state: "terminal"; status: string; reason?: string }> => {
         const events = await host.readLog(runId).catch(() => []);
         const completed = (stepId: string): boolean => genuinelyCompleted(events, stepId);
@@ -1614,9 +1633,18 @@ export function createApp(opts: AppOptions): App {
         if (completed("nothing")) {
           return { runId, state: "terminal", status, reason: "the drift report had no candidate orders — every asset class is inside the plan's band, or nothing held is actionable — so there was nothing to propose" };
         }
+        if (completed("declined")) {
+          const last = iterations(events).at(-1);
+          const why = typeof last?.intake?.reason === "string" ? last.intake.reason.trim() : "";
+          return { runId, state: "terminal", status, reason: `the Market Manager reviewed the drift and declined to propose${why === "" ? " (it gave no reason)" : `: ${why}`}` };
+        }
         if (completed("exhausted")) {
-          const reason = await deepestFailure(runId);
-          return { runId, state: "terminal", status, reason: reason ?? "every draft was blocked by the Auditor or declined by the Market Manager — the journal records each verdict" };
+          const its = iterations(events);
+          const last = blockText(its.at(-1)?.audit?.blocks);
+          const failure = await deepestFailure(runId);
+          const reason =
+            failure ?? (last !== "" ? `the Auditor blocked every draft (${String(its.length)} attempt${its.length === 1 ? "" : "s"}); the last verdict: ${last}` : "every draft was blocked by the Auditor — the journal records each verdict");
+          return { runId, state: "terminal", status, reason };
         }
         const reason = await deepestFailure(runId);
         return { runId, state: "terminal", status, ...(reason !== null ? { reason } : {}) };
@@ -1631,7 +1659,7 @@ export function createApp(opts: AppOptions): App {
         // Settled wins over parked: a failed loop can still arm the gate
         // (issue #41's race reported such runs as queued while the
         // approvals list stayed empty).
-        const settled = ["exhausted", "expired", "nothing"].some((step) => genuinelyCompleted(events, step));
+        const settled = ["exhausted", "expired", "nothing", "declined"].some((step) => genuinelyCompleted(events, step));
         if (settled) return terminal(s.status);
         const parked = events.some(
           (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,

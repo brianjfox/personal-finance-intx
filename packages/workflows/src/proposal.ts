@@ -3,15 +3,26 @@
 // execution disabled -- the path ends at a PREPARED instruction.
 //
 //   drift (action, market_manager)
+//     -> material: gate on has_candidates -> nothing (scheduler)
 //     -> rework: loop x3 {                         (BUILD_PLAN §8.6: the
 //          propose (step, market-manager model)     rework loop cannot
 //          -> intake (action, auditor)              contain the human
 //          -> audit  (action, auditor)              gate; approval sits
-//        } while blocked, carry prior blocks        OUTSIDE the loop)
-//     -> converged: approve (awaitSignal, timeout -> expired; NEVER auto)
-//          -> decide (action, operator)  -> gate -> prepare (execution)
-//                                                -> rejected (scheduler)
+//        } while blocked and not declined,          OUTSIDE the loop)
+//          carry prior blocks
+//     -> converged: settle (action, scheduler: did an attempt clear?)
+//          -> verdict: gate -> declined (scheduler)   [issue #45]
+//                          -> approve (awaitSignal, timeout -> expired; NEVER auto)
+//               -> decide (action, operator)  -> gate -> prepare (execution)
+//                                                     -> rejected (scheduler)
 //     -> exhausted (scheduler)
+//
+// A decline (the model's NOTHING, prompt rule 4) converges the loop after
+// ONE attempt: the same drift report would only draw the same answer.
+// The loop's output cannot say WHY it converged (the pinned runtime
+// exposes outcome/iterations/carry only, and carry is the last
+// iteration's INPUT), so `settle` re-derives cleared-vs-declined from
+// the ledger and `verdict` routes on it.
 //
 // This is the workflow the topology test was written for in Phase 1:
 // `propose` is a producer (a market-manager agent step), `prepare` is an
@@ -120,13 +131,33 @@ export function buildProposalWorkflow(opts: ProposalWorkflowOptions): { definiti
         onExhausted: "exhausted",
         after: ["material"],
       }),
-      // Normal (converged) successor of the loop: the human gate.
+      // Normal (converged) successor of the loop: a cleared draft OR a
+      // decline. The ledger says which; the gate routes.
+      settle: action({
+        handler: ACTION_REFS.governSettle,
+        input: runKey,
+        effect: { requires: [CAP.ledgerRead] },
+        after: ["rework"],
+      }),
+      verdict: gate({
+        when: { from: "steps.settle.output.queued" },
+        then: "approve",
+        else: "declined",
+        after: ["settle"],
+      }),
+      declined: action({
+        handler: ACTION_REFS.governDeclined,
+        input: runKey,
+        effect: { requires: [CAP.ledgerEmit] },
+        after: ["verdict"],
+      }),
+      // The human gate.
       approve: awaitSignal({
         name: APPROVAL_SIGNAL,
         timeout: expiryMs,
         onTimeout: "expired",
         drainBehavior: "wait",
-        after: ["rework"],
+        after: ["verdict"],
       }),
       decide: action({
         handler: ACTION_REFS.governDecision,
@@ -179,6 +210,9 @@ export const PROPOSAL_PRINCIPALS: Record<string, Principal> = {
   audit: "auditor",
   material: "scheduler",
   nothing: "scheduler",
+  settle: "scheduler",
+  verdict: "scheduler",
+  declined: "scheduler",
   approve: "scheduler",
   decide: "operator",
   route: "scheduler",
@@ -195,8 +229,13 @@ export const PROPOSAL_PRINCIPALS: Record<string, Principal> = {
  */
 export const proposalLoopFns: LoopFnRegistry = (ref: string): LoopFn => {
   if (ref === "mm.blocked") {
-    // Continue looping while the audit did NOT clear.
-    return (childOutput) => (childOutput as { audit?: { cleared?: boolean } } | null)?.audit?.cleared !== true;
+    // Continue looping while the audit did NOT clear -- unless the Market
+    // Manager declined: a redraft over the same report can only repeat
+    // the answer, so a decline converges after one attempt (issue #45).
+    return (childOutput) => {
+      const audit = (childOutput as { audit?: { cleared?: boolean; declined?: boolean } } | null)?.audit;
+      return audit?.declined !== true && audit?.cleared !== true;
+    };
   }
   if (ref === "mm.carry") {
     return (childOutput, carryState) => {

@@ -12,11 +12,13 @@ import {
   auditIntakeHandler,
   auditReviewHandler,
   executionPrepareHandler,
+  governDeclinedHandler,
   governDecisionHandler,
   governExhaustedHandler,
   governNothingHandler,
   governExpiredHandler,
   governRejectedHandler,
+  governSettleHandler,
   marketDriftHandler,
 } from "./market/handlers";
 import { estateAuditHandler, registrySyncHandler } from "./registry/registry";
@@ -52,6 +54,8 @@ export const ACTION_REFS = {
   governRejected: "govern.rejected",
   governExhausted: "govern.exhausted",
   governNothing: "govern.nothing",
+  governSettle: "govern.settle",
+  governDeclined: "govern.declined",
 } as const;
 
 export function buildActions(actx: ActionContext): Record<string, ActionHandler> {
@@ -79,6 +83,8 @@ export function buildActions(actx: ActionContext): Record<string, ActionHandler>
     [ACTION_REFS.governRejected]: governRejectedHandler(actx),
     [ACTION_REFS.governExhausted]: governExhaustedHandler(actx),
     [ACTION_REFS.governNothing]: governNothingHandler(actx),
+    [ACTION_REFS.governSettle]: governSettleHandler(actx),
+    [ACTION_REFS.governDeclined]: governDeclinedHandler(actx),
   };
 }
 
