@@ -452,11 +452,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
             contained(<Welcome onConnect={() => setPage("institutions")} onChanged={refresh} />)
           ) : (
             <>
-              {!nothingYet && !chatMode && (
-                <div className="page page-mid" style={{ paddingBottom: 0 }}>
-                  <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />
-                </div>
-              )}
+              {!nothingYet && <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />}
               {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
               {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
               {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
@@ -518,6 +514,9 @@ function Welcome({ onConnect, onChanged }: { onConnect: () => void; onChanged: (
 // Institutions exist but the first numbers haven't been fetched yet.
 function NoNumbersYet({ overview, onChanged, goInstitutions }: { overview: InstitutionsOverview | null; onChanged: () => void; goInstitutions: () => void }) {
   const [busy, setBusy] = useState(false);
+  // Renders NOTHING in the normal case -- the wrapper lives here so no
+  // empty spacer ever sits above a page (it used to push every non-chat
+  // page down ~24px, making headers jump between pages).
   if (overview === null || overview.hasFacts || overview.institutions.length === 0) return null;
   const fetchNow = async () => {
     setBusy(true);
@@ -529,16 +528,18 @@ function NoNumbersYet({ overview, onChanged, goInstitutions }: { overview: Insti
     }
   };
   return (
-    <div className="banner">
-      <b>Almost there.</b> Your institutions are set up, but no numbers have come in yet.{" "}
-      {busy ? (
-        <span className="muted">Fetching your numbers…</span>
-      ) : (
-        <>
-          <button onClick={() => void fetchNow()}>Fetch the numbers now</button>{" "}
-          <button className="secondary" onClick={goInstitutions}>Manage institutions</button>
-        </>
-      )}
+    <div className="page page-mid" style={{ paddingBottom: 0, flex: "none", width: "100%" }}>
+      <div className="banner">
+        <b>Almost there.</b> Your institutions are set up, but no numbers have come in yet.{" "}
+        {busy ? (
+          <span className="muted">Fetching your numbers…</span>
+        ) : (
+          <>
+            <button onClick={() => void fetchNow()}>Fetch the numbers now</button>{" "}
+            <button className="secondary" onClick={goInstitutions}>Manage institutions</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
