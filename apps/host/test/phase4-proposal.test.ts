@@ -38,9 +38,10 @@ function writePlan(dataDir: string, notes?: string): void {
   );
 }
 
-function adapters(now: Date): InstitutionAdapter[] {
+function adapters(now: Date, extra: SnapshotAccount[] = []): InstitutionAdapter[] {
   const asOf = now.toISOString();
   const broker: SnapshotAccount[] = [
+    ...extra,
     {
       account_id: "acct.broker.taxable",
       name: "Taxable",
@@ -60,8 +61,22 @@ function adapters(now: Date): InstitutionAdapter[] {
   return [fixtureAdapter("inst.broker", { accounts: broker })];
 }
 
-const openApp = (dataDir: string): App =>
-  createApp({ dataDir, adapters: adapters(new Date()), pollMs: 20, agentFactory: scriptedAgentFactory(), inferenceSource: stubSource });
+const openApp = (dataDir: string, extra: SnapshotAccount[] = []): App =>
+  createApp({ dataDir, adapters: adapters(new Date(), extra), pollMs: 20, agentFactory: scriptedAgentFactory(), inferenceSource: stubSource });
+
+/** A brokerage account holding a crypto position that would dominate the drift report if it counted. */
+function deadAccount(now: Date): SnapshotAccount {
+  return {
+    account_id: "acct.broker.dead",
+    name: "Old account",
+    type: "brokerage",
+    currency: "USD",
+    as_of: now.toISOString(),
+    balances: [{ balance_type: "total", amount: "1000000" }],
+    positions: [{ instrument: { symbol: "BTC", asset_class: "crypto" }, quantity: "16", price: "62500", market_value: "1000000", cost_basis: "100000" }],
+    transactions: [],
+  };
+}
 
 describe("phase 4 through fin-host: the approval queue", () => {
   test("a second proposal in the same data dir runs its OWN loop child, not a replay of the first (#41)", async () => {
@@ -138,6 +153,36 @@ describe("phase 4 through fin-host: the approval queue", () => {
       expect(events.some((e) => e.kind === "StepCompleted" && e.stepId === "declined")).toBe(true);
       const journal = app.ledger.listJournal(20).map((j) => j.summary);
       expect(journal.some((s) => s.includes("declined to propose (attempt 1): the only candidate sells the whole equity sleeve in one order"))).toBe(true);
+    } finally {
+      app.close();
+    }
+  });
+
+  test("a hidden account's positions are invisible to drift, the Market Manager, and the Auditor (#47)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir);
+    const app = openApp(dataDir, [deadAccount(new Date())]);
+    try {
+      expect((await app.runNightly({ runId: "nightly_dead" })).terminalStatus).toBe("completed");
+      // Before hiding: the dead account's 1M of BTC swamps the 100k portfolio.
+      const before = app.planStatus().drift!;
+      expect(before.by_class.find((l) => l.asset_class === "crypto")?.value).toBe("1000000.00");
+      app.setAccountIgnored("acct.broker.dead", true);
+      // After: the closed account's facts are still current facts...
+      expect(app.ledger.asOf({ kind: "position" }).some((f) => f.subject === "acct.broker.dead")).toBe(true);
+      // ...but no longer holdings: the drift report matches the dashboard.
+      const after = app.planStatus().drift!;
+      expect(after.by_class.find((l) => l.asset_class === "crypto")).toBeUndefined();
+      expect(after.portfolio_value).toBe("108000.00");
+      expect(after.candidates.map((c) => c.account)).not.toContain("acct.broker.dead");
+      // The proposal run (scripted Market Manager through the REAL compute_rebalance /
+      // ledger_read_positions tools, real Auditor) queues the live portfolio's candidate.
+      const r = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r.state).toBe("queued");
+      const q = app.approvalQueue();
+      expect(q).toHaveLength(1);
+      expect(q[0]!.recommendation.subject).toBe("acct.broker.taxable");
+      expect(q[0]!.recommendation.action).toMatchObject({ verb: "BUY", instrument: "BND", quantity: "300" });
     } finally {
       app.close();
     }

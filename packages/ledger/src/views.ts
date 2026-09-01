@@ -137,13 +137,42 @@ export function balances(ledger: Ledger, opts: AsOfOpts & { subject?: string } =
   });
 }
 
-export function positions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): PositionView[] {
+/**
+ * Accounts known to be closed as of the query -- including operator-hidden
+ * ones (hiding closes the account and flags it `ignored`). A closed
+ * account's last position/lot facts stay CURRENT facts forever, so any
+ * reader describing what the household holds now must drop them
+ * (issue #47): drift, the agents' position and subject tools, the
+ * Auditor's checks. History readers (realized gains, the registry audit)
+ * keep seeing everything on purpose.
+ */
+export function closedSubjects(ledger: Ledger, opts: AsOfOpts = {}): Set<string> {
+  return new Set(accounts(ledger, opts).filter((a) => a.closed_at !== null).map((a) => a.account_id));
+}
+
+/** Current account facts of OPEN accounts only (not closed, not hidden). */
+export function liveAccountFacts(ledger: Ledger, opts: AsOfOpts = {}): StoredFact[] {
+  return ledger.asOf({ kind: "account", ...opts }).filter((f) => (f.payload as AccountPayload).closed_at == null);
+}
+
+/** Current position facts of open accounts, zero-quantity lines dropped: the StoredFact form of `positions()`. */
+export function livePositionFacts(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): StoredFact[] {
   const { subject: _subject, ...acctOpts } = opts;
-  const closed = new Set(accounts(ledger, acctOpts).filter((a) => a.closed_at !== null).map((a) => a.account_id));
+  const closed = closedSubjects(ledger, acctOpts);
   return ledger
     .asOf({ kind: "position", ...opts })
     .filter((f) => !decimal.isZero((f.payload as PositionPayload).quantity))
-    .filter((f) => !closed.has((f.payload as PositionPayload).account_id))
+    .filter((f) => !closed.has((f.payload as PositionPayload).account_id));
+}
+
+/** Current lot facts of open accounts (a SELL candidate's lot choice never reaches into a closed account). */
+export function liveLotFacts(ledger: Ledger, opts: AsOfOpts = {}): StoredFact[] {
+  const closed = closedSubjects(ledger, opts);
+  return ledger.asOf({ kind: "lot", ...opts }).filter((f) => !closed.has(f.subject));
+}
+
+export function positions(ledger: Ledger, opts: AsOfOpts & { subject?: string } = {}): PositionView[] {
+  return livePositionFacts(ledger, opts)
     .map((f) => {
       const p = f.payload as PositionPayload;
       return {

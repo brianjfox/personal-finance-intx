@@ -43,6 +43,7 @@ import {
   getRecommendation,
   listRecommendations,
   verdictsFor,
+  views,
 } from "@fin/ledger";
 
 import { CAP, type ActionContext, type ActionHandler } from "../context";
@@ -62,8 +63,10 @@ function driftInputs(actx: ActionContext, runKey: string): DriftInputs {
     runKey,
     now: actx.clock(),
     plan: planOf(actx),
-    positions: actx.ledger.asOf({ kind: "position" }),
-    lots: actx.ledger.asOf({ kind: "lot" }),
+    // Open accounts only: a closed account's last facts are still current
+    // facts, and they are not holdings (issue #47).
+    positions: views.livePositionFacts(actx.ledger),
+    lots: views.liveLotFacts(actx.ledger),
   };
 }
 
@@ -369,7 +372,7 @@ export function auditRecommendation(actx: ActionContext, rec: Recommendation, ru
   }
   if (rec.action.verb === "BUY" && orderValue !== null && plan.constraints.max_position_weight != null) {
     const held = drift.by_class.reduce((acc, l) => decimal.add(acc, l.value), "0");
-    const positions = actx.ledger.asOf({ kind: "position" });
+    const positions = views.livePositionFacts(actx.ledger);
     const mine = positions.find((f) => f.subject === rec.subject && (f.payload as { instrument?: { symbol?: string } }).instrument?.symbol === symbol);
     const mineValue = mine === null || mine === undefined ? "0" : ((mine.payload as { market_value?: string | null }).market_value ?? "0");
     const after = decimal.add(mineValue, orderValue);

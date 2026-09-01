@@ -73,11 +73,11 @@ const listSubjects: FinTool = {
   definition: {
     name: "list_subjects",
     description:
-      "List the household's account subjects (id, name, type) so a conversation can name a specific asset -- e.g. to run a scenario. No balances, no account numbers.",
+      "List the household's OPEN account subjects (id, name, type) so a conversation can name a specific asset -- e.g. to run a scenario. Closed and hidden accounts are omitted. No balances, no account numbers.",
     inputSchema: OBJECT_SCHEMA({}),
   },
   handler: async (_args, fin) => {
-    const accounts = fin.ledger.asOf({ kind: "account" });
+    const accounts = views.liveAccountFacts(fin.ledger);
     return {
       result: {
         subjects: accounts.map((f) => {
