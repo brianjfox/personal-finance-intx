@@ -312,6 +312,8 @@ const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
 function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
+  const [approvalsCount, setApprovalsCount] = useState(0);
+  const [strategyTab, setStrategyTab] = useState<StrategyTab>("chat");
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
   const [nw, setNw] = useState<NetWorth | null>(null);
   const [factId, setFactId] = useState<string | null>(null);
@@ -321,6 +323,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
   const [, setFxTick] = useState(0);
   useEffect(() => {
     api.queue().then(setQueue).catch(() => setQueue([]));
+    api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
     api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
     api.netWorth().then(setNw).catch(() => setNw(null));
     api.fx().then((fx) => {
@@ -370,7 +373,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     setMasked(!masked);
     setMaskedState(!masked);
   };
-  const chatMode = page === "strategy" && !takeover;
+  const chatMode = page === "strategy" && strategyTab === "chat" && !takeover;
   // Pages that still use the classic single-column layout get the standard container.
   const contained = (node: React.ReactNode) => <div className="page page-mid">{node}</div>;
   return (
@@ -399,11 +402,24 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
           <span className="tb-avatar" title={user?.name ?? "You"}>{initials}</span>
           <button
             className="iconbtn"
-            title={queue.length > 0 ? `${queue.length} item${queue.length === 1 ? "" : "s"} require${queue.length === 1 ? "s" : ""} your attention` : "Nothing requires your attention"}
-            onClick={() => setPage("queue")}
+            title={(() => {
+              const parts: string[] = [];
+              if (queue.length > 0) parts.push(`${queue.length} exception${queue.length === 1 ? "" : "s"}`);
+              if (approvalsCount > 0) parts.push(`${approvalsCount} proposal${approvalsCount === 1 ? "" : "s"} awaiting your signature`);
+              return parts.length > 0 ? parts.join(" · ") : "Nothing requires your attention";
+            })()}
+            onClick={() => {
+              // Exceptions first; with none, a pending proposal is what the bell is about.
+              if (queue.length === 0 && approvalsCount > 0) {
+                setStrategyTab("plan");
+                setPage("strategy");
+              } else {
+                setPage("queue");
+              }
+            }}
           >
             <Icon name="bell" />
-            {queue.length > 0 && <span className="dot" />}
+            {(queue.length > 0 || approvalsCount > 0) && <span className="dot" />}
           </button>
         </div>
       </header>
@@ -415,6 +431,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
               <span className="icon"><Icon name={icon} /></span>
               <span className="label">{label}</span>
               {id === "queue" && queue.length > 0 ? <span className="nav-badge">{queue.length}</span> : null}
+              {id === "strategy" && approvalsCount > 0 ? <span className="nav-badge">{approvalsCount}</span> : null}
             </a>
           ))}
           <div className="health-card">
@@ -446,7 +463,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
               {page === "credentials" && contained(<CredentialsPage tick={tick} onChanged={refresh} user={user} onRenamed={onRenamed} />)}
               {page === "profile" && <ProfilePage tick={tick} onChanged={refresh} />}
               {page === "tax" && <TaxPage tick={tick} onChanged={refresh} openFact={setFactId} />}
-              {page === "strategy" && <ChatPage openFact={setFactId} />}
+              {page === "strategy" && <StrategyPage tab={strategyTab} setTab={setStrategyTab} tick={tick} onChanged={refresh} openFact={setFactId} />}
               {page === "estate" && contained(<EstatePage tick={tick} onChanged={refresh} openFact={setFactId} />)}
               {page === "audit" && contained(<AuditPage tick={tick} onChanged={refresh} openFact={setFactId} />)}
               {page === "documents" && contained(<Documents tick={tick} />)}
@@ -3482,49 +3499,30 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
 // The home screen (deck slide 19): the Attention Queue. Approvals,
 // data exceptions, and prepared orders under one roof, tabbed.
 // Chat is a tool inside the product, not the product.
+// Pure reconciliation exceptions: what the feeds did that needs your
+// judgment. The Market Manager's proposals and prepared orders live on
+// Strategy -> Plan & Rebalancing.
 function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
   const [items, setItems] = useState<Finding[]>([]);
-  const [approvals, setApprovals] = useState<import("./api").QueuedApproval[]>([]);
-  const [orders, setOrders] = useState<import("./api").InstructionRow[]>([]);
-  const [tab, setTab] = useState<"approvals" | "exceptions" | "orders">("approvals");
   useEffect(() => {
     api.queue().then(setItems).catch(() => setItems([]));
-    api.approvals().then(setApprovals).catch(() => setApprovals([]));
-    api.instructions().then(setOrders).catch(() => setOrders([]));
   }, [tick]);
   return (
     <div className="page page-narrow">
       <h2>Attention Queue</h2>
-      <p className="page-sub">Decisions, data exceptions, and prepared orders that require your approval.</p>
-      <div className="tabs-underline">
-        <button className={tab === "approvals" ? "on" : ""} onClick={() => setTab("approvals")}>
-          Approval Queue{approvals.length > 0 && <span className="tab-count green">{approvals.length}</span>}
-        </button>
-        <button className={tab === "exceptions" ? "on" : ""} onClick={() => setTab("exceptions")}>
-          Data Exceptions{items.length > 0 && <span className="tab-count red">{items.length}</span>}
-        </button>
-        <button className={tab === "orders" ? "on" : ""} onClick={() => setTab("orders")}>
-          Prepared Orders{orders.length > 0 && <span className="tab-count">{orders.length}</span>}
-        </button>
-      </div>
-      {tab === "approvals" && <ApprovalsSection approvals={approvals} onChanged={onChanged} openFact={openFact} />}
-      {tab === "exceptions" && (
+      <p className="page-sub">Data exceptions that need your judgment before the books are trusted.</p>
+      {items.length === 0 ? (
+        <p className="muted">Nothing requires your attention. Every account reconciled clean.</p>
+      ) : (
         <>
-          {items.length === 0 ? (
-            <p className="muted">Nothing requires your attention. Every account reconciled clean.</p>
-          ) : (
-            <>
-              <div className="section-label" style={{ marginTop: 0 }}><Icon name="warning-circle" /> Conflict Resolution Required</div>
-              <div className="conflict-grid">
-                {items.map((f) => (
-                  <QueueItem key={f.id} f={f} onChanged={onChanged} openFact={openFact} />
-                ))}
-              </div>
-            </>
-          )}
+          <div className="section-label" style={{ marginTop: 0 }}><Icon name="warning-circle" /> Conflict Resolution Required</div>
+          <div className="conflict-grid">
+            {items.map((f) => (
+              <QueueItem key={f.id} f={f} onChanged={onChanged} openFact={openFact} />
+            ))}
+          </div>
         </>
       )}
-      {tab === "orders" && <InstructionsSection rows={orders} onChanged={onChanged} />}
     </div>
   );
 }
@@ -4297,6 +4295,116 @@ function ChatPanel({ agent, openFact, intro, layout = "inline" }: { agent: ChatA
         </button>
       </div>
     </div>
+  );
+}
+
+type StrategyTab = "chat" | "plan";
+
+/**
+ * Strategy is one destination with two distinct agents behind two tabs:
+ * the Strategist (conversation -- it advises and journals, never drafts
+ * trades) and the Market Manager's Plan & Rebalancing workflow (the
+ * written plan, drift, bounded proposals the Auditor re-verifies).
+ */
+function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: StrategyTab; setTab: (t: StrategyTab) => void; tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [approvalsCount, setApprovalsCount] = useState(0);
+  useEffect(() => {
+    api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
+  }, [tick]);
+  const tabs = (
+    <div className="tabs-underline" style={{ marginBottom: tab === "chat" ? 0 : 28 }}>
+      <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>The Strategist</button>
+      <button className={tab === "plan" ? "on" : ""} onClick={() => setTab("plan")}>
+        Plan &amp; Rebalancing{approvalsCount > 0 && <span className="tab-count green">{approvalsCount}</span>}
+      </button>
+    </div>
+  );
+  if (tab === "chat") {
+    return (
+      <>
+        <div className="page page-mid" style={{ paddingTop: 16, paddingBottom: 0, flex: "none", width: "100%" }}>{tabs}</div>
+        <ChatPage openFact={openFact} />
+      </>
+    );
+  }
+  return (
+    <div className="page page-narrow">
+      <h2>Strategy</h2>
+      <p className="page-sub">The written plan, where the portfolio has drifted from it, and the Market Manager's proposals. The Auditor re-runs every figure; execution stays disabled.</p>
+      {tabs}
+      <PlanSection tick={tick} onChanged={onChanged} openFact={openFact} />
+    </div>
+  );
+}
+
+/** The Market Manager's home: plan -> drift -> proposals -> prepared orders. */
+function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
+  const [status, setStatus] = useState<import("./api").PlanStatus | null>(null);
+  const [approvals, setApprovals] = useState<import("./api").QueuedApproval[]>([]);
+  const [orders, setOrders] = useState<import("./api").InstructionRow[]>([]);
+  useEffect(() => {
+    api.planStatus().then(setStatus).catch(() => setStatus(null));
+    api.approvals().then(setApprovals).catch(() => setApprovals([]));
+    api.instructions().then(setOrders).catch(() => setOrders([]));
+  }, [tick]);
+  const pct = (w: string): string => `${(Number(w) * 100).toFixed(1).replace(/\.0$/, "")}%`;
+  const plan = status?.plan ?? null;
+  const drift = status?.drift ?? null;
+  return (
+    <>
+      <div className="section-label" style={{ marginTop: 0 }}><Icon name="note" /> The written plan</div>
+      {plan === null ? (
+        <p className="muted small">
+          No written plan yet. The Market Manager only ever proposes against a plan you wrote down — target weights per
+          asset class and a drift band. Ask the Strategist to help you draft one; it lives as plan.json in the data folder.
+        </p>
+      ) : (
+        <>
+          <table>
+            <thead><tr><th>Asset class</th><th className="num">Target</th>{drift !== null && <><th className="num">Actual</th><th className="num">Drift</th></>}</tr></thead>
+            <tbody>
+              {plan.targets.map((t) => {
+                const line = drift?.by_class.find((l) => l.asset_class === t.asset_class);
+                const out = line !== undefined && Math.abs(Number(line.drift)) > Number(plan.band);
+                return (
+                  <tr key={t.asset_class}>
+                    <td style={{ fontWeight: 500, color: "var(--strong)" }}>{t.asset_class === "etf" ? "ETF" : t.asset_class.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</td>
+                    <td className="num">{pct(t.weight)}</td>
+                    {drift !== null && (
+                      <>
+                        <td className="num">{line !== undefined ? pct(line.weight) : "—"}</td>
+                        <td className="num" style={out ? { color: "var(--amber)", fontWeight: 600 } : undefined}>
+                          {line !== undefined ? `${Number(line.drift) > 0 ? "+" : ""}${pct(line.drift)}` : "—"}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="small muted" style={{ marginTop: 8 }}>
+            Band: ±{pct(plan.band)} per class · plan as of {plan.as_of}
+            {drift !== null && <> · portfolio {money(drift.portfolio_value, "USD")} + cash {money(drift.cash_value, "USD")}</>}
+            {plan.notes !== undefined && plan.notes !== "" && <> · {plan.notes}</>}
+          </p>
+          {drift !== null && drift.candidates.length > 0 && (
+            <p className="small muted">
+              {drift.candidates.length} class{drift.candidates.length === 1 ? " is" : "es are"} outside the band — the
+              Market Manager has material for a proposal.
+            </p>
+          )}
+        </>
+      )}
+      <div className="section-label"><Icon name="sparkle" /> Proposals</div>
+      <ApprovalsSection approvals={approvals} onChanged={onChanged} openFact={openFact} />
+      {orders.length > 0 && (
+        <>
+          <div className="section-label"><Icon name="note" /> Prepared orders</div>
+          <InstructionsSection rows={orders} onChanged={onChanged} />
+        </>
+      )}
+    </>
   );
 }
 
