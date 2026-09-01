@@ -107,6 +107,23 @@ else becomes a `crypto` position priced by the public `-USD` spot
 endpoint. Unpriced assets stay as positions with an unknown value —
 never a made-up one. Key rotation: the card's "Replace the API key".
 
+**Tax lots.** Coinbase reports no lots and exposes no cost-basis
+computation, but `/v2/accounts/:id/transactions` is the account's
+complete history, so each fetch walks it (oldest first, FIFO) into
+lots: a fill or a buy opens a lot with its basis (notional plus a
+dollar-denominated commission), a staking or earn payout opens one at
+fair value, and a sell, send, or transfer out consumes the oldest lots.
+Anything that **arrived** — `pro_deposit`, `exchange_deposit`,
+`receive` — opens a lot with `cost_basis: null, transferred_in: true`:
+Coinbase only knows its value on arrival, not what you paid, and the
+Auditor passes such a lot to you as its "basis unknown" caveat rather
+than pretending. Coinbase Pro's own fills are **not** available over
+the API (the fills endpoint begins at the November 2023 migration), so
+coins bought on Pro and moved over are transferred-in lots. The derived
+net must match the balance Coinbase reports (to 1e-8) or the lots are
+withheld and the raw snapshot says why; dollar stablecoins get no lots.
+A lot that did not change since the last fetch writes no new fact.
+
 ## Kraken (crypto holdings)
 
 Create an API key in Kraken (Settings → API) with only the **Query

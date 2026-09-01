@@ -339,6 +339,12 @@ function normalizeAccount(
       basis_known: p.cost_basis !== null,
     };
     positionRefs.push(push({ ...base, kind: "position", key, writer: "assets_manager", payload }));
+    // Lots re-derived from history arrive identical night after night (a
+    // thousand of them for an active account): only a CHANGED lot gets a
+    // new fact; an unchanged one keeps the fact it has (issue #53).
+    const heldLots = p.lots !== undefined ? new Map(ledger.asOf({ kind: "lot", subject: acct.account_id }).map((f) => [f.key, f.payload as LotPayload])) : new Map<string, LotPayload>();
+    const sameLot = (a: LotPayload, b: LotPayload): boolean =>
+      a.quantity === b.quantity && a.cost_basis === b.cost_basis && a.acquired_at === b.acquired_at && a.basis_known === b.basis_known && a.transferred_in === b.transferred_in && a.instrument.symbol === b.instrument.symbol;
     (p.lots ?? []).forEach((lot, i) => {
       const lotId = lot.lot_id ?? `${p.instrument.symbol}:${lot.acquired_at}:${i}`;
       const lp: LotPayload = {
@@ -352,8 +358,22 @@ function normalizeAccount(
         transferred_in: lot.transferred_in ?? false,
         currency: acct.currency,
       };
+      const held = heldLots.get(lotId);
+      if (held !== undefined && sameLot(held, lp)) return;
       lotRefs.push(push({ ...base, kind: "lot", key: lotId, writer: "assets_manager", payload: lp }));
     });
+    // An adapter that reports lots reports ALL of the symbol's open lots:
+    // a ledger lot it no longer lists was consumed (or re-derived under a
+    // new id) and is superseded at quantity 0 -- the same rule positions
+    // get below (issue #53).
+    if (p.lots !== undefined) {
+      const reported = new Set((p.lots ?? []).map((lot, i) => lot.lot_id ?? `${p.instrument.symbol}:${lot.acquired_at}:${i}`));
+      for (const held of ledger.asOf({ kind: "lot", subject: acct.account_id })) {
+        const hp = held.payload as LotPayload;
+        if (hp.instrument.symbol.toUpperCase() !== p.instrument.symbol.toUpperCase() || reported.has(held.key) || decimal.isZero(hp.quantity)) continue;
+        lotRefs.push(push({ ...base, kind: "lot", key: held.key, writer: "assets_manager", payload: { ...hp, quantity: "0" } }));
+      }
+    }
   }
   if (acct.positions !== undefined) {
     for (const held of ledger.asOf({ kind: "position", subject: acct.account_id })) {

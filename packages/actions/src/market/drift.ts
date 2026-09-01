@@ -147,6 +147,7 @@ function fifoLotTreatments(
   const mine = lots
     .filter((f) => f.subject === subject && (f.payload as LotPayload).instrument.symbol.toUpperCase() === symbol.toUpperCase())
     .map((f) => f.payload as LotPayload)
+    .filter((l) => !decimal.isZero(l.quantity)) // consumed lots are superseded at 0 (issue #53)
     .sort((a, b) => a.acquired_at.localeCompare(b.acquired_at));
   if (mine.length === 0) return [{ lot_id: "unknown", treatment: "unknown" }];
   const out: NonNullable<CandidateOrder["tax_lots"]> = [];
@@ -155,7 +156,10 @@ function fifoLotTreatments(
     if (remaining <= 0n) break;
     const take = decimal.parseDecimal(lot.quantity) < remaining ? decimal.parseDecimal(lot.quantity) : remaining;
     remaining -= take;
-    out.push({ lot_id: lot.lot_id, treatment: today > addYears(lot.acquired_at, 1) ? "LTCG" : "STCG" });
+    // A lot whose basis the institution could not know (a transfer in)
+    // has an acquisition date that is the ARRIVAL date, not the true one:
+    // its treatment is unknown, which the Auditor passes on as a caveat.
+    out.push({ lot_id: lot.lot_id, treatment: !lot.basis_known ? "unknown" : today > addYears(lot.acquired_at, 1) ? "LTCG" : "STCG" });
   }
   if (remaining > 0n) out.push({ lot_id: "unknown", treatment: "unknown" });
   return out;

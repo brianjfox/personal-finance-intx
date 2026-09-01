@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import type { InvestmentPlan, PositionPayload } from "@fin/contracts";
+import type { InvestmentPlan, LotPayload, PositionPayload } from "@fin/contracts";
 import type { StoredFact } from "@fin/ledger";
 
 import { computeDrift } from "../src/market/drift";
@@ -74,3 +74,49 @@ describe("computeDrift SELL sizing", () => {
     expect(sell.rationale).not.toContain("capped");
   });
 });
+
+function lot(subject: string, symbol: string, lot_id: string, quantity: string, acquired_at: string, cost_basis: string | null): StoredFact {
+  seq += 1;
+  return {
+    id: `fact_${String(seq).padStart(4, "0")}`,
+    batch_id: "b",
+    seq,
+    kind: "lot",
+    subject,
+    key: lot_id,
+    payload: { account_id: subject, lot_id, instrument: { symbol, asset_class: "crypto" }, quantity, acquired_at, cost_basis, basis_known: cost_basis !== null, transferred_in: cost_basis === null, currency: "USD" } satisfies LotPayload,
+    observed_at: "2026-09-01T00:00:00.000Z",
+    effective_at: "2026-09-01T00:00:00.000Z",
+    source_id: "test",
+    source_doc_id: null,
+    page: null,
+    supersedes: null,
+    writer: "assets_manager",
+    provisional: false,
+  };
+}
+
+describe("computeDrift SELL lot treatments (#53)", () => {
+  test("FIFO skips consumed (zero) lots; a known long-term lot is LTCG, a known recent lot STCG, a transferred-in lot unknown", () => {
+    const report = computeDrift({
+      runKey: "t",
+      now: new Date("2026-09-01T12:00:00.000Z"),
+      plan: { ...PLAN, targets: [{ asset_class: "crypto", weight: "0.1" }, { asset_class: "bond", weight: "0.9" }] },
+      positions: [position("acct.cb", "BTC", "crypto", "4", "100000"), position("acct.b", "BND", "bond", "100", "100")],
+      lots: [
+        lot("acct.cb", "BTC", "cb:sold", "0", "2023-01-01", "10000"),
+        lot("acct.cb", "BTC", "cb:old", "1", "2024-01-11", "40000"),
+        lot("acct.cb", "BTC", "cb:new", "1", "2026-06-01", "100000"),
+        lot("acct.cb", "BTC", "cb:moved", "2", "2023-11-03", null),
+      ],
+    });
+    const sell = report.candidates.find((c) => c.side === "SELL")!;
+    expect(sell).toMatchObject({ symbol: "BTC", quantity: "3" });
+    // Oldest first by acquisition date: moved (2023-11-03, unknown basis), old (LTCG), new (STCG).
+    expect(sell.tax_lots).toEqual([
+      { lot_id: "cb:moved", treatment: "unknown" },
+      { lot_id: "cb:old", treatment: "LTCG" },
+    ]);
+  });
+});
+

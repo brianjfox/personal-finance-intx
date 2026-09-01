@@ -13,6 +13,7 @@ import crypto from "node:crypto";
 import { decimal } from "@fin/contracts";
 
 import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
+import { deriveCoinbaseLots, type CoinbaseTxn, type DerivedLot } from "./coinbase-lots";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const COINBASE_VIA = "adapter.coinbase@1";
@@ -21,12 +22,29 @@ export const COINBASE_BASE_URL = "https://api.coinbase.com";
 
 /** Fiat currencies reported as cash instead of positions. */
 const FIAT = new Set(["USD", "EUR", "GBP", "CAD", "CHF", "JPY", "AUD"]);
+/** Dollar stablecoins: positions, but no tax lots are derived for them. */
+const STABLE = new Set(["USDC", "USDT", "DAI", "PYUSD", "USDP", "GUSD", "TUSD"]);
 
 export interface CoinbaseOptions {
   institution_id: string;
   base_url?: string;
   secrets?: SecretStore;
   fetchImpl?: typeof fetch;
+  /** Walk each currency's transaction history into tax lots (issue #53). Default on. */
+  lots?: boolean;
+  /** Safety bound on the history walk per currency (100 transactions a page). */
+  max_history_pages?: number;
+}
+
+/** The transactions a lot walk consumed, for the raw snapshot's audit trail. */
+export interface LotWalkNote {
+  pages: number;
+  transactions: number;
+  net: string;
+  balance: string;
+  counted: Record<string, number>;
+  /** Present when the lots were withheld, and why. */
+  withheld?: string;
 }
 
 /**
@@ -147,6 +165,41 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
         cursor = page.has_next === true && page.cursor != null && page.cursor !== "" ? page.cursor : null;
       } while (cursor !== null);
 
+      // Lots from the account's transaction history (issue #53): the v2
+      // account id equals the v3 uuid. Best effort -- a failed or
+      // non-reconciling walk leaves the position without lots and says
+      // so in the raw snapshot; it never fails the fetch or ships a lot
+      // set that does not add up to the balance.
+      const lotNotes: Record<string, LotWalkNote> = {};
+      const lotsFor = async (a: CbAccount, qty: string): Promise<DerivedLot[] | undefined> => {
+        if (opts.lots === false) return undefined;
+        const cap = opts.max_history_pages ?? 400;
+        const txns: CoinbaseTxn[] = [];
+        let pages = 0;
+        let next: string | null = `/v2/accounts/${encodeURIComponent(a.uuid)}/transactions?limit=100`;
+        try {
+          while (next !== null) {
+            if (pages >= cap) throw new Error(`history longer than ${String(cap)} pages`);
+            const page: { data?: CoinbaseTxn[]; pagination?: { next_uri?: string | null } } = await authed(next, ctx.now);
+            pages += 1;
+            txns.push(...(page.data ?? []));
+            next = page.pagination?.next_uri != null && page.pagination.next_uri !== "" ? page.pagination.next_uri : null;
+          }
+        } catch (e) {
+          lotNotes[a.currency] = { pages, transactions: txns.length, net: "?", balance: qty, counted: {}, withheld: `history walk failed: ${e instanceof Error ? e.message : String(e)}` };
+          return undefined;
+        }
+        const d = deriveCoinbaseLots(txns, "USD");
+        const note: LotWalkNote = { pages, transactions: txns.length, net: d.net, balance: qty, counted: d.counted };
+        // Coinbase rounds the balance it reports (9 places seen) while the
+        // history sums at full precision: agree to the satoshi (1e-8).
+        const gap = decimal.abs(decimal.sub(d.net, qty));
+        if (!decimal.isZero(d.shortfall)) note.withheld = `history is missing ${d.shortfall} ${a.currency} of earlier inflows (outflows exceeded what was recorded)`;
+        else if (decimal.cmp(gap, "0.00000001") > 0) note.withheld = `history nets ${d.net} ${a.currency} but the balance is ${qty}; lots withheld rather than guessed`;
+        lotNotes[a.currency] = note;
+        return note.withheld === undefined ? d.lots : undefined;
+      };
+
       let cash = "0";
       const positions = [];
       const prices: Record<string, string | null> = {};
@@ -172,12 +225,19 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
           price = null;
         }
         prices[a.currency] = price;
+        // No lots for fiat or dollar stablecoins: nothing to hold-period.
+        const lots = FIAT.has(a.currency) || STABLE.has(a.currency) ? undefined : await lotsFor(a, qty);
+        // The position's basis is the sum of its lots' -- only when every
+        // remaining lot's basis is known; one transferred-in lot makes the
+        // whole figure unknown rather than understated.
+        const costBasis = lots !== undefined && lots.length > 0 && lots.every((l) => l.cost_basis !== null) ? decimal.sum(lots.map((l) => l.cost_basis as string)) : null;
         positions.push({
           instrument: { symbol: a.currency, name: a.name ?? a.currency, asset_class: (FIAT.has(a.currency) ? "cash" : "crypto") as "cash" | "crypto" },
           quantity: qty,
           price,
           market_value: price !== null ? decimal.round(decimal.mul(qty, price), 2) : null,
-          cost_basis: null,
+          cost_basis: costBasis,
+          ...(lots !== undefined ? { lots } : {}),
         });
       }
 
@@ -198,7 +258,7 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
         { institution_id: opts.institution_id, fetched_at: asOf, via: COINBASE_VIA, accounts: [account] },
         `coinbase ${opts.institution_id}`,
       );
-      const raw = JSON.stringify({ accounts, prices }, null, 2);
+      const raw = JSON.stringify({ accounts, prices, lots: lotNotes }, null, 2);
       return {
         raw: [{ bytes: new TextEncoder().encode(raw), filename: `coinbase-${asOf.slice(0, 10)}.json`, mime: "application/json", kind: "snapshot" }],
         snapshot: draft,

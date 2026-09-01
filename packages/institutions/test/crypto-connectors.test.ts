@@ -105,6 +105,25 @@ describe("coinbase adapter (mock API)", () => {
       if (url.pathname === "/api/v3/brokerage/accounts") {
         return Response.json(url.searchParams.get("cursor") === "c2" ? PAGE2 : PAGE1);
       }
+      // v2 history (issue #53): BTC has two pages -- newest first, as Coinbase serves them.
+      if (url.pathname === "/v2/accounts/u-btc/transactions") {
+        if (url.searchParams.get("starting_after") === "s1") {
+          return Response.json({
+            pagination: { next_uri: null },
+            data: [
+              { id: "d1", type: "exchange_deposit", status: "completed", created_at: "2023-11-03T00:00:00Z", amount: { amount: "0.5", currency: "BTC" }, native_amount: { amount: "17000", currency: "USD" } },
+            ],
+          });
+        }
+        return Response.json({
+          pagination: { next_uri: "/v2/accounts/u-btc/transactions?limit=100&starting_after=s1" },
+          data: [
+            { id: "s1", type: "advanced_trade_fill", status: "completed", created_at: "2025-06-01T00:00:00Z", amount: { amount: "-0.75", currency: "BTC" }, native_amount: { amount: "-75000", currency: "USD" }, advanced_trade_fill: { commission: "75", product_id: "BTC-USD", order_side: "sell" } },
+            { id: "b1", type: "advanced_trade_fill", status: "completed", created_at: "2024-01-11T00:00:00Z", amount: { amount: "1", currency: "BTC" }, native_amount: { amount: "40000", currency: "USD" }, advanced_trade_fill: { commission: "40", product_id: "BTC-USD", order_side: "buy" } },
+          ],
+        });
+      }
+      if (url.pathname.startsWith("/v2/accounts/")) return Response.json({ pagination: { next_uri: null }, data: [] });
       return new Response("not found", { status: 404 });
     });
     return { base, jwts };
@@ -120,13 +139,22 @@ describe("coinbase adapter (mock API)", () => {
     const { base, jwts } = mock();
     const adapter = coinbaseAdapter({ institution_id: "inst.coinbase", base_url: base, secrets: secrets() });
     const out = await adapter.fetch({ now: NOW });
-    expect(jwts.length).toBe(2); // one per page, each signature verified by the mock
+    expect(jwts.length).toBe(4); // two account pages + BTC's two history pages (USDC is a stablecoin: no walk), each signature verified by the mock
+    // Lots (issue #53): oldest first, the Pro-migration deposit (unknown basis) is consumed by the sell
+    // before the bought lot; 0.75 of the bought lot remains at its unit cost (40,040) -> 30,030.
+    const btc = out.snapshot.accounts[0]!.positions!.find((p) => p.instrument.symbol === "BTC")!;
+    expect(btc.lots).toEqual([{ lot_id: "cb:b1", quantity: "0.75", acquired_at: "2024-01-11", cost_basis: "30030.00", transferred_in: false }]);
+    expect(btc.cost_basis).toBe("30030");
+    const rawNotes = (JSON.parse(new TextDecoder().decode(out.raw[0]!.bytes)) as { lots: Record<string, { pages: number; net: string; withheld?: string }> }).lots;
+    expect(rawNotes["BTC"]).toMatchObject({ pages: 2, net: "0.75" });
+    expect(rawNotes["BTC"]!.withheld).toBeUndefined();
+    expect(rawNotes["USDC"]).toBeUndefined();
     const acct = out.snapshot.accounts[0]!;
     expect(acct.account_id).toBe("acct.coinbase.coinbase");
     expect(acct.type).toBe("crypto");
     const pos = new Map((acct.positions ?? []).map((p) => [p.instrument.symbol, p]));
     expect([...pos.keys()].sort()).toEqual(["BTC", "USDC"]); // DOGE zero dropped, USD is cash
-    expect(pos.get("BTC")).toMatchObject({ quantity: "0.75", price: "60000.10", market_value: "45000.08", cost_basis: null });
+    expect(pos.get("BTC")).toMatchObject({ quantity: "0.75", price: "60000.10", market_value: "45000.08", cost_basis: "30030" }); // the sum of the remaining lots' bases
     expect(pos.get("BTC")?.instrument.asset_class).toBe("crypto");
     expect(pos.get("USDC")?.instrument.asset_class).toBe("crypto");
     const bal = new Map(acct.balances.map((b) => [b.balance_type, b.amount]));
