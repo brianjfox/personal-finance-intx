@@ -3543,15 +3543,18 @@ function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () 
 
 // Phase 4: the approval queue. Scoped to one proposal id, bounded,
 // expiring; auditor-cleared before it ever reaches you.
-function ApprovalsSection({ approvals, onChanged, openFact }: { approvals: import("./api").QueuedApproval[]; onChanged: () => void; openFact: (id: string) => void }) {
+function ApprovalsSection({ approvals, hasPlan = true, onChanged, openFact }: { approvals: import("./api").QueuedApproval[]; hasPlan?: boolean; onChanged: () => void; openFact: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const propose = async () => {
     setBusy(true);
+    setError(null);
     try {
       await api.propose();
       onChanged();
     } catch (e) {
-      alert(String(e));
+      // On the page, in plain words -- never a popup.
+      setError(String(e));
     } finally {
       setBusy(false);
     }
@@ -3559,8 +3562,17 @@ function ApprovalsSection({ approvals, onChanged, openFact }: { approvals: impor
   return (
     <>
       <div className="actions" style={{ marginBottom: 24 }}>
-        <button className="secondary" disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
+        <button
+          className="secondary"
+          disabled={busy || !hasPlan}
+          title={hasPlan ? undefined : "Write the investment plan above first — the Market Manager only proposes against a written plan"}
+          onClick={() => void propose()}
+        >
+          {busy ? "proposing…" : "Ask the Market Manager for a proposal"}
+        </button>
+        {!hasPlan && <span className="small muted">Needs a written plan first.</span>}
       </div>
+      {error !== null && <div className="banner" style={{ marginBottom: 16 }}>{error}</div>}
       {busy && <Thinking label="The Market Manager is drafting and the Auditor is re-running its figures" />}
       {approvals.length === 0 && !busy && <p className="muted">No proposals await your signature.</p>}
       {approvals.map((q) => (
@@ -4362,11 +4374,113 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
   );
 }
 
+const ASSET_CLASS_OPTIONS: ReadonlyArray<readonly [string, string]> = [
+  ["equity", "Stocks (individual equities)"],
+  ["etf", "ETFs"],
+  ["mutual_fund", "Mutual funds"],
+  ["bond", "Bonds"],
+  ["crypto", "Crypto"],
+  ["cash", "Cash"],
+  ["option", "Options"],
+  ["other", "Other"],
+];
+
+/**
+ * Write the investment plan in the GUI: target weights per asset class,
+ * the drift band, optional notes and constraints. Percentages in, the
+ * host stores fractions and refuses weights that do not add to 100%.
+ */
+function PlanEditor({ plan, onSaved }: { plan: import("./api").PlanStatus["plan"]; onSaved: () => void }) {
+  const asPct = (frac: string): string => `${Number((Number(frac) * 100).toFixed(2))}`;
+  const [rows, setRows] = useState<Array<{ asset_class: string; pct: string }>>(() =>
+    plan !== null && plan.targets.length > 0
+      ? plan.targets.map((t) => ({ asset_class: t.asset_class, pct: asPct(t.weight) }))
+      : [
+          { asset_class: "etf", pct: "60" },
+          { asset_class: "bond", pct: "40" },
+        ],
+  );
+  const [band, setBand] = useState(() => (plan !== null ? asPct(plan.band) : "5"));
+  const [notes, setNotes] = useState(plan?.notes ?? "");
+  const [noSell, setNoSell] = useState((plan?.constraints.do_not_sell ?? []).join(", "));
+  const [maxPos, setMaxPos] = useState(plan?.constraints.max_position_weight != null ? asPct(plan.constraints.max_position_weight) : "");
+  const [maxOrder, setMaxOrder] = useState(plan?.constraints.max_order_value ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const total = rows.reduce((s, r) => s + (Number(r.pct) || 0), 0);
+  const toFrac = (pct: string): string => String(Number((Number(pct) / 100).toFixed(4)));
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.savePlan({
+        band: toFrac(band),
+        targets: rows.filter((r) => r.pct.trim() !== "").map((r) => ({ asset_class: r.asset_class, weight: toFrac(r.pct) })),
+        constraints: {
+          ...(noSell.trim() !== "" ? { do_not_sell: noSell.split(",").map((s) => s.trim().toUpperCase()).filter((s) => s !== "") } : {}),
+          ...(maxPos.trim() !== "" ? { max_position_weight: toFrac(maxPos) } : {}),
+          ...(maxOrder.trim() !== "" ? { max_order_value: String(maxOrder).replace(/[$,\s]/g, "") } : {}),
+        },
+        ...(notes.trim() !== "" ? { notes: notes.trim() } : {}),
+      });
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel" style={{ marginBottom: 20 }}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Target weights for the invested portfolio. The Market Manager proposes only when a class drifts outside the band.
+      </p>
+      {rows.map((r, i) => (
+        <div key={i} className="actions" style={{ marginBottom: 8 }}>
+          <select value={r.asset_class} onChange={(e) => setRows((x) => x.map((row, j) => (j === i ? { ...row, asset_class: e.target.value } : row)))}>
+            {ASSET_CLASS_OPTIONS.map(([v, label]) => (
+              <option key={v} value={v}>{label}</option>
+            ))}
+          </select>
+          <input style={{ width: 90 }} value={r.pct} placeholder="60" onChange={(e) => setRows((x) => x.map((row, j) => (j === i ? { ...row, pct: e.target.value } : row)))} />
+          <span className="small muted">%</span>
+          <button className="ghost danger" title="Remove this target" disabled={rows.length === 1} onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon name="trash" /></button>
+        </div>
+      ))}
+      <div className="actions" style={{ marginBottom: 12 }}>
+        <button className="linklike" onClick={() => setRows((x) => [...x, { asset_class: "equity", pct: "" }])}><Icon name="plus" /> Add an asset class</button>
+        <span className={`small ${Math.abs(total - 100) < 0.5 ? "muted" : ""}`} style={Math.abs(total - 100) < 0.5 ? undefined : { color: "var(--amber)", fontWeight: 600 }}>
+          Total: {Number(total.toFixed(2))}% {Math.abs(total - 100) < 0.5 ? "" : "— must reach 100%"}
+        </span>
+      </div>
+      <div className="actions" style={{ marginBottom: 8 }}>
+        <span className="small">Drift band ±</span>
+        <input style={{ width: 70 }} value={band} onChange={(e) => setBand(e.target.value)} />
+        <span className="small muted">% before a class is out of band</span>
+      </div>
+      <div className="actions" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+        <span className="small">Never sell</span>
+        <input style={{ width: 180 }} placeholder="AAPL, BTC (optional)" value={noSell} onChange={(e) => setNoSell(e.target.value)} />
+        <span className="small">Max single position</span>
+        <input style={{ width: 70 }} placeholder="%" value={maxPos} onChange={(e) => setMaxPos(e.target.value)} />
+        <span className="small">Max order value</span>
+        <input style={{ width: 110 }} placeholder="$ (optional)" value={maxOrder} onChange={(e) => setMaxOrder(e.target.value)} />
+      </div>
+      <textarea rows={2} style={{ width: "100%" }} placeholder="Notes to your future self about why these targets (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
+      <div className="actions" style={{ marginTop: 12 }}>
+        <button disabled={busy} onClick={() => void save()}>{busy ? "saving…" : plan === null ? "Write the plan" : "Save the plan"}</button>
+      </div>
+    </div>
+  );
+}
+
 /** The Market Manager's home: plan -> drift -> proposals -> prepared orders. */
 function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
   const [status, setStatus] = useState<import("./api").PlanStatus | null>(null);
   const [approvals, setApprovals] = useState<import("./api").QueuedApproval[]>([]);
   const [orders, setOrders] = useState<import("./api").InstructionRow[]>([]);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     api.planStatus().then(setStatus).catch(() => setStatus(null));
     api.approvals().then(setApprovals).catch(() => setApprovals([]));
@@ -4377,11 +4491,25 @@ function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: (
   const drift = status?.drift ?? null;
   return (
     <>
-      <div className="section-label" style={{ marginTop: 0 }}><Icon name="note" /> The written plan</div>
+      <div className="section-label" style={{ marginTop: 0, display: "flex", alignItems: "center", gap: 12 }}>
+        <Icon name="note" /> The written plan
+        {plan !== null && (
+          <button className="linklike" onClick={() => setEditing((e) => !e)}><Icon name="pencil" /> {editing ? "Close the editor" : "Edit the plan"}</button>
+        )}
+      </div>
+      {(plan === null || editing) && (
+        <PlanEditor
+          plan={plan}
+          onSaved={() => {
+            setEditing(false);
+            onChanged();
+          }}
+        />
+      )}
       {plan === null ? (
-        <p className="muted small">
-          No written plan yet. The Market Manager only ever proposes against a plan you wrote down — target weights per
-          asset class and a drift band. Ask the Strategist to help you draft one; it lives as plan.json in the data folder.
+        <p className="muted small" style={{ marginTop: 12 }}>
+          The Market Manager only ever proposes against a plan you wrote down — target weights per asset class and a
+          drift band. Not sure what to target? Ask the Strategist on the other tab.
         </p>
       ) : (
         <>
@@ -4422,7 +4550,7 @@ function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: (
         </>
       )}
       <div className="section-label"><Icon name="sparkle" /> Proposals</div>
-      <ApprovalsSection approvals={approvals} onChanged={onChanged} openFact={openFact} />
+      <ApprovalsSection approvals={approvals} hasPlan={plan !== null} onChanged={onChanged} openFact={openFact} />
       {orders.length > 0 && (
         <>
           <div className="section-label"><Icon name="note" /> Prepared orders</div>

@@ -48,6 +48,12 @@ export function openCommand(platform: string, url: string): string[] {
 const LanBody = type({ enabled: "boolean" });
 const AccountIgnoreBody = type({ account_id: "string > 0", ignored: "boolean" });
 const ReorderBody = type({ order: "string[]" });
+const PlanBody = type({
+  band: "string > 0",
+  targets: type({ asset_class: "string > 0", weight: "string > 0" }).array(),
+  "constraints?": "Record<string, unknown>",
+  "notes?": "string",
+});
 
 const ResolveBody = type({
   decision: ResolutionDecision,
@@ -275,6 +281,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/institutions" && req.method === "GET") return json(app.institutions().entries);
         if (p === "/api/institutions-overview") return json(app.institutionsOverview());
         if (p === "/api/plan" && req.method === "GET") return json(app.planStatus());
+        if (p === "/api/plan" && req.method === "POST") {
+          const body = PlanBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.savePlan(body));
+        }
         if (p === "/api/institutions/reorder" && req.method === "POST") {
           const body = ReorderBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
