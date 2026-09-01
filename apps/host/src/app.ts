@@ -341,6 +341,8 @@ export interface App {
   plan(): InvestmentPlan | null;
   /** The plan plus the deterministic drift report against current positions (drift null when no plan, or when it cannot compute). */
   planStatus(): { plan: InvestmentPlan | null; drift: DriftReport | null };
+  /** Write the investment plan (GUI editor): validates the contract plus plain-words checks, stamps as_of today, persists plan.json. */
+  savePlan(input: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string }): InvestmentPlan;
   /**
    * Start a rebalance-proposal run: drift -> Market Manager draft ->
    * Auditor -> (cleared) the approval queue. Resolves once the run is
@@ -1519,6 +1521,29 @@ export function createApp(opts: AppOptions): App {
         .map((e) => e.payload as ChatTurn);
     },
     plan,
+    savePlan(input) {
+      if (input.targets.length === 0) throw new Error("give the plan at least one target asset class");
+      const sum = input.targets.reduce((s, t) => s + Number(t.weight), 0);
+      if (!(sum > 0.995 && sum < 1.005)) {
+        throw new Error(`target weights must add up to 100% — they add up to ${(sum * 100).toFixed(1)}%`);
+      }
+      const seen = new Set<string>();
+      for (const t of input.targets) {
+        if (seen.has(t.asset_class)) throw new Error(`${t.asset_class} is listed twice — one target per asset class`);
+        seen.add(t.asset_class);
+      }
+      if (!(Number(input.band) > 0)) throw new Error("the drift band must be above 0% — it is how far a class may wander before a proposal");
+      const candidate = {
+        as_of: clock().toISOString().slice(0, 10),
+        band: input.band,
+        targets: input.targets,
+        constraints: input.constraints ?? {},
+        ...(input.notes !== undefined && input.notes.trim() !== "" ? { notes: input.notes.trim() } : {}),
+      };
+      const plan = assertType(InvestmentPlan, candidate, "investment plan");
+      fs.writeFileSync(planPath, JSON.stringify(plan, null, 2));
+      return plan;
+    },
     planStatus() {
       const p = plan();
       if (p === null) return { plan: null, drift: null };

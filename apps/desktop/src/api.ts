@@ -273,6 +273,8 @@ export const api = {
   journalFull: () => get<JournalEntry[]>("/api/journal"),
   approvals: () => get<QueuedApproval[]>("/api/approvals"),
   planStatus: () => get<PlanStatus>("/api/plan"),
+  savePlan: (plan: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string }) =>
+    post<NonNullable<PlanStatus["plan"]>>("/api/plan", plan),
   instructions: () => get<InstructionRow[]>("/api/instructions"),
   propose: () => post<{ runId: string; state: string; status: string }>("/api/proposal"),
   decide: (recId: string, decision: "approve" | "reject", bound: { max_quantity?: string | null; limit_price?: string | null }, note: string) =>
