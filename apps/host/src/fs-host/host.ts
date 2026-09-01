@@ -158,7 +158,18 @@ export function createFsHost(opts: FsHostOptions): FsHost {
         newId,
         drain: createNoopDrainController(definition),
       };
-      env.runLoopIteration = createLoopIteration(env);
+      // The pinned runtime derives a loop child's run id as
+      // `<loopId>__<index>` with NO parent namespace, and treats an
+      // already-persisted child log as an idempotent replay ("skip
+      // re-running and adopt its outputs"). Our repoStore is one flat
+      // runs/ directory, so without a namespace every run's `rework__0`
+      // is the SAME store entry -- the second proposal run would adopt
+      // the first one's dead child forever (issue #41). Prefix the STORE
+      // id with the parent run id: the state machine keys children by
+      // the original id (this wrapper only renames what touches disk),
+      // and crash-resume still adopts this run's own children.
+      const iterate = createLoopIteration(env);
+      env.runLoopIteration = async (args) => iterate({ ...args, childRunId: `${runOpts.runId}.${args.childRunId}` });
       if (opts.loopFns !== undefined) env.loopFns = opts.loopFns;
 
       // The channel must be live (inbox replayed, poller running) before

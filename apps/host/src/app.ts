@@ -1586,7 +1586,10 @@ export function createApp(opts: AppOptions): App {
             if (e.kind === "ChildSpawned") {
               const child = (e as { childRunId?: unknown }).childRunId;
               if (typeof child === "string") {
-                const cm = await deepestFailure(child, depth + 1);
+                // The event carries the runtime's bare child id; the store
+                // key is namespaced by the parent run (issue #41). Try the
+                // namespaced id first, the bare one for pre-fix runs.
+                const cm = (await deepestFailure(`${id}.${child}`, depth + 1)) ?? (await deepestFailure(child, depth + 1));
                 if (cm !== null) msg = cm;
               }
             }
@@ -1596,10 +1599,13 @@ export function createApp(opts: AppOptions): App {
         }
         return msg;
       };
+      // A gate's skipped branch ALSO emits StepCompleted (its output says
+      // skipped): only a genuinely-run completion counts.
+      const genuinelyCompleted = (events: readonly { kind: string }[], stepId: string): boolean =>
+        events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
       const terminal = async (status: string): Promise<{ runId: string; state: "terminal"; status: string; reason?: string }> => {
         const events = await host.readLog(runId).catch(() => []);
-        const completed = (stepId: string): boolean =>
-          events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
+        const completed = (stepId: string): boolean => genuinelyCompleted(events, stepId);
         // The designed no-proposal endings read as answers, not failures.
         if (completed("nothing")) {
           return { runId, state: "terminal", status, reason: "the drift report had no candidate orders — every asset class is inside the plan's band, or nothing held is actionable — so there was nothing to propose" };
@@ -1618,12 +1624,15 @@ export function createApp(opts: AppOptions): App {
         const s = await summarize(runId);
         if (s.status !== "running") return terminal(s.status);
         const events = await host.readLog(runId);
+        // Settled wins over parked: a failed loop can still arm the gate
+        // (issue #41's race reported such runs as queued while the
+        // approvals list stayed empty).
+        const settled = ["exhausted", "expired", "nothing"].some((step) => genuinelyCompleted(events, step));
+        if (settled) return terminal(s.status);
         const parked = events.some(
           (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
         );
         if (parked) return { runId, state: "queued", status: "running" };
-        const settled = events.some((e) => e.kind === "StepCompleted" && ["exhausted", "expired", "nothing"].includes((e as { stepId?: string }).stepId ?? ""));
-        if (settled) return terminal(s.status);
         if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
         await new Promise((r) => setTimeout(r, 250));
       }

@@ -63,6 +63,32 @@ const openApp = (dataDir: string): App =>
   createApp({ dataDir, adapters: adapters(new Date()), pollMs: 20, agentFactory: scriptedAgentFactory(), inferenceSource: stubSource });
 
 describe("phase 4 through fin-host: the approval queue", () => {
+  test("a second proposal in the same data dir runs its OWN loop child, not a replay of the first (#41)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir);
+    const app = openApp(dataDir);
+    try {
+      expect((await app.runNightly({ runId: "nightly_c" })).terminalStatus).toBe("completed");
+      const r1 = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r1.state).toBe("queued");
+      const rec1 = app.approvalQueue()[0]!.recommendation;
+      await app.decideRecommendation({ recommendationId: rec1.id, decision: "reject", note: "not now", signedBy: "brian" });
+      // The pinned runtime names every loop child `<loopId>__<index>` and
+      // adopts an already-persisted child log verbatim -- without the
+      // per-run namespace, this second run would replay run 1's child
+      // (same recommendation id, or its old failure) instead of drafting.
+      const r2 = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r2.state).toBe("queued");
+      const queue = app.approvalQueue();
+      expect(queue).toHaveLength(1);
+      expect(queue[0]!.recommendation.id).toBe(`rec_${r2.runId}.1`);
+      expect(fs.existsSync(path.join(dataDir, "runs", `${r1.runId}.rework__0`))).toBe(true);
+      expect(fs.existsSync(path.join(dataDir, "runs", `${r2.runId}.rework__0`))).toBe(true);
+    } finally {
+      app.close();
+    }
+  });
+
   test("a drift with no candidates ends the run cleanly: no model call, no gate, a plain-words reason (#38)", async () => {
     const dataDir = tmp();
     // A plan that MATCHES the fixture positions (invested: etf .6, equity .3, bond .1): zero candidates.
