@@ -20,6 +20,7 @@ import {
 import type { StoredFact } from "@fin/ledger";
 
 import { addYears } from "../tax/math";
+import type { CashOnHand } from "./cash";
 
 export interface DriftInputs {
   runKey: string;
@@ -29,6 +30,8 @@ export interface DriftInputs {
   positions: StoredFact[];
   /** Current lot facts, for the SELL candidates' lot choice. */
   lots: StoredFact[];
+  /** Cash held as account balances (issue #55); cash-class positions are counted regardless. */
+  cash?: CashOnHand;
 }
 
 /**
@@ -41,7 +44,8 @@ export function computeDrift(inputs: DriftInputs): DriftReport {
   const evidence: string[] = [];
   const byClass = new Map<AssetClass, { value: string; positions: { fact: StoredFact; p: PositionPayload }[] }>();
   let invested = "0";
-  let cash = "0";
+  let cash = inputs.cash?.amount ?? "0";
+  evidence.push(...(inputs.cash?.evidence ?? []));
   for (const f of inputs.positions) {
     const p = f.payload as PositionPayload;
     const mv = p.market_value ?? null;
@@ -129,6 +133,7 @@ export function computeDrift(inputs: DriftInputs): DriftReport {
     as_of: inputs.now.toISOString(),
     portfolio_value: decimal.round(decimal.add(invested, cash), 2),
     cash_value: decimal.round(cash, 2),
+    ...(inputs.cash !== undefined && inputs.cash.excluded.length > 0 ? { cash_excluded: inputs.cash.excluded } : {}),
     by_class: lines,
     candidates,
     evidence: [...new Set(evidence)],

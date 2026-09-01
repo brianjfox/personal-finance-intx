@@ -100,5 +100,6 @@ export * from "./tax/handlers";
 export * from "./registry/registry";
 export * from "./projections/montecarlo";
 export * from "./projections/scenario";
+export * from "./market/cash";
 export * from "./market/drift";
 export * from "./market/handlers";

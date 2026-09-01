@@ -223,6 +223,26 @@ describe("phase 4 through fin-host: the approval queue", () => {
     }
   });
 
+  test("bank and sweep balances are cash on hand; a foreign-currency balance is listed, not summed (#55)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir);
+    const now = new Date().toISOString();
+    const bank = (account_id: string, currency: string, total: string): SnapshotAccount => ({ account_id, name: account_id, type: "checking", currency, as_of: now, balances: [{ balance_type: "total", amount: total }], positions: [], transactions: [] });
+    const app = openApp(dataDir, [bank("acct.broker.checking", "USD", "5000"), bank("acct.broker.euro", "EUR", "100")]);
+    try {
+      expect((await app.runNightly({ runId: "nightly_cash" })).terminalStatus).toBe("completed");
+      const drift = app.planStatus().drift!;
+      // 8,000 CASH sweep position + 5,000 checking; the euro account is excluded by name.
+      expect(drift.cash_value).toBe("13000.00");
+      expect(drift.cash_excluded).toEqual([{ currency: "EUR", amount: "100.00" }]);
+      expect(drift.portfolio_value).toBe("113000.00");
+      app.setAccountIgnored("acct.broker.checking", true);
+      expect(app.planStatus().drift!.cash_value).toBe("8000.00");
+    } finally {
+      app.close();
+    }
+  });
+
   test("a drift with no candidates ends the run cleanly: no model call, no gate, a plain-words reason (#38)", async () => {
     const dataDir = tmp();
     // A plan that MATCHES the fixture positions (invested: etf .6, equity .3, bond .1): zero candidates.

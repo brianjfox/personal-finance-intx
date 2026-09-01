@@ -5,7 +5,7 @@
 // credential tool, no execution tool, no ledger write of any kind.
 
 import { ACKNOWLEDGEMENTS, assertType, InvestmentPlan, type Acknowledgement, type PositionPayload } from "@fin/contracts";
-import { buildProposalDraft, computeDrift } from "@fin/actions";
+import { buildProposalDraft, cashOnHand, computeDrift } from "@fin/actions";
 import { views } from "@fin/ledger";
 import { defineTool, type BaseEnv } from "@intx/agent";
 
@@ -28,6 +28,7 @@ function driftNow(fin: FinToolEnv, runKey: string) {
     // Open accounts only (issue #47): the same inputs the Auditor's re-run uses.
     positions: views.livePositionFacts(fin.ledger),
     lots: views.liveLotFacts(fin.ledger),
+    cash: cashOnHand(fin.ledger),
   });
 }
 

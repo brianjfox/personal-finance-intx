@@ -74,7 +74,10 @@ export const DriftReport = type({
   run_key: "string",
   as_of: IsoDateTime,
   portfolio_value: Decimal,
+  /** Cash in the plan's currency: cash-class positions plus open cash-account and sweep balances (issue #55). */
   cash_value: Decimal,
+  /** Cash held in other currencies, left out of cash_value rather than face-value-summed. */
+  "cash_excluded?": type({ currency: "string", amount: Decimal }).array(),
   by_class: DriftLine.array(),
   /** Deterministic candidate orders, largest drift first. Empty = in band. */
   candidates: CandidateOrder.array(),

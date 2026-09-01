@@ -95,6 +95,7 @@ export interface PlanStatus {
     portfolio_value: string;
     cash_value: string;
     by_class: Array<{ asset_class: string; value: string; weight: string; target: string; drift: string }>;
+    cash_excluded?: Array<{ currency: string; amount: string }>;
     candidates: Array<{ side: "BUY" | "SELL"; account: string; symbol: string; quantity: string; est_value: string; rationale: string }>;
   } | null;
 }
