@@ -21,8 +21,7 @@ import {
   runScenario,
   computeDrift,
   type ActionContext,
-  type FetchLogRecord,
-} from "@fin/actions";
+  type FetchLogRecord, cashOnHand } from "@fin/actions";
 import {
   assertType,
   EstateFile,
@@ -1557,6 +1556,7 @@ export function createApp(opts: AppOptions): App {
             plan: p,
             positions: views.livePositionFacts(ledger),
             lots: views.liveLotFacts(ledger),
+            cash: cashOnHand(ledger),
           }),
         };
       } catch {

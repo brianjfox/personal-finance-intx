@@ -120,3 +120,21 @@ describe("computeDrift SELL lot treatments (#53)", () => {
   });
 });
 
+describe("computeDrift cash (#55)", () => {
+  test("cash on hand adds to cash_value and the portfolio, never to the class weights; excluded currencies ride along", () => {
+    const report = computeDrift({
+      runKey: "t",
+      now: new Date("2026-09-01T12:00:00.000Z"),
+      plan: PLAN,
+      positions: [position("acct.cb", "BTC", "crypto", "1", "100000"), position("acct.b", "CASH", "cash", "5000", "1")],
+      lots: [],
+      cash: { amount: "243169.70", excluded: [{ currency: "EUR", amount: "62565.41" }], evidence: ["fact_bal1", "fact_bal2"] },
+    });
+    expect(report.cash_value).toBe("248169.70");
+    expect(report.portfolio_value).toBe("348169.70");
+    expect(report.cash_excluded).toEqual([{ currency: "EUR", amount: "62565.41" }]);
+    expect(report.by_class.find((l) => l.asset_class === "crypto")?.weight).toBe("1.0000");
+    expect(report.evidence).toContain("fact_bal1");
+  });
+});
+

@@ -49,6 +49,7 @@ import {
 
 import { CAP, type ActionContext, type ActionHandler } from "../context";
 import { washSales, realizedGains, type DatedLot, type DatedTransaction } from "../tax/math";
+import { cashOnHand } from "./cash";
 import { computeDrift, type DriftInputs } from "./drift";
 
 const DEFAULT_TAX_CASH_HORIZON_DAYS = 60;
@@ -68,6 +69,7 @@ function driftInputs(actx: ActionContext, runKey: string): DriftInputs {
     // facts, and they are not holdings (issue #47).
     positions: views.livePositionFacts(actx.ledger),
     lots: views.liveLotFacts(actx.ledger),
+    cash: cashOnHand(actx.ledger),
   };
 }
 

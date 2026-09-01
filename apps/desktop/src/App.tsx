@@ -4578,7 +4578,12 @@ function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: (
           </table>
           <p className="small muted" style={{ marginTop: 8 }}>
             Band: ±{pct(plan.band)} per class · plan as of {plan.as_of}
-            {drift !== null && <> · portfolio {money(drift.portfolio_value, "USD")} + cash {money(drift.cash_value, "USD")}</>}
+            {drift !== null && (
+              <>
+                {" "}· portfolio {money(drift.portfolio_value, "USD")} + cash {money(drift.cash_value, "USD")}
+                {(drift.cash_excluded ?? []).length > 0 && <> (+ {(drift.cash_excluded ?? []).map((c) => money(c.amount, c.currency)).join(", ")} not converted)</>}
+              </>
+            )}
             {plan.notes !== undefined && plan.notes !== "" && <> · {plan.notes}</>}
           </p>
           {drift !== null && drift.candidates.length > 0 && (
