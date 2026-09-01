@@ -121,6 +121,28 @@ describe("phase 4 through fin-host: the approval queue", () => {
     }
   });
 
+  test("a decline ends the run after one attempt and puts the Market Manager's reason on the page (#45)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir, "decline: the only candidate sells the whole equity sleeve in one order");
+    const app = openApp(dataDir);
+    try {
+      expect((await app.runNightly({ runId: "nightly_decl" })).terminalStatus).toBe("completed");
+      const r = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r.state).toBe("terminal");
+      expect(r.status).toBe("completed");
+      expect(r.reason).toBe("the Market Manager reviewed the drift and declined to propose: the only candidate sells the whole equity sleeve in one order");
+      expect(app.approvalQueue()).toHaveLength(0);
+      // Exactly one model call: the loop converged on the decline instead of redrafting to exhaustion.
+      const events = await app.runEvents(r.runId);
+      expect(events.filter((e) => e.kind === "ChildSpawned")).toHaveLength(1);
+      expect(events.some((e) => e.kind === "StepCompleted" && e.stepId === "declined")).toBe(true);
+      const journal = app.ledger.listJournal(20).map((j) => j.summary);
+      expect(journal.some((s) => s.includes("declined to propose (attempt 1): the only candidate sells the whole equity sleeve in one order"))).toBe(true);
+    } finally {
+      app.close();
+    }
+  });
+
   test("a drift with no candidates ends the run cleanly: no model call, no gate, a plain-words reason (#38)", async () => {
     const dataDir = tmp();
     // A plan that MATCHES the fixture positions (invested: etf .6, equity .3, bond .1): zero candidates.

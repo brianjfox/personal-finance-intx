@@ -80,11 +80,14 @@ function seeded(plan: InvestmentPlan = PLAN): Harness {
   return h;
 }
 
-/** Scripted Market Manager: canonical draft via the shared canonicalizer; tamper on demand. */
-function scriptedMM(behavior: (attempt: number) => "canonical" | "tampered" | "second-candidate"): StepInvoker {
+/** Scripted Market Manager: canonical draft via the shared canonicalizer; tamper or decline on demand. */
+function scriptedMM(behavior: (attempt: number) => "canonical" | "tampered" | "second-candidate" | "decline"): StepInvoker {
   return async (req) => {
     const input = req.input as DriftReport & { attempt?: number };
     const attempt = input.attempt ?? 1;
+    if (behavior(attempt) === "decline") {
+      return { output: { reply: `NOTHING: attempt ${String(attempt)} -- the only sensible candidate sells the whole equity sleeve at once.`, turn: { role: "assistant" } } };
+    }
     const idx = behavior(attempt) === "second-candidate" ? 1 : 0;
     const draft = buildProposalDraft(input, idx, {
       thesis: `attempt ${String(attempt)}: rebalance toward the written plan`,
@@ -221,6 +224,28 @@ describe("phase 4: proposal -> audit -> approval -> prepared instruction", () =>
     expect(listInstructions(h.ledger)).toHaveLength(1);
   });
 
+  test("declined: the Market Manager's NOTHING ends the run after ONE attempt at the declined terminal, reason journaled, gate never armed (#45)", async () => {
+    const h = seeded();
+    await h.run(NIGHTLY, {});
+    const wf = buildProposalWorkflow({ model: "scripted" });
+    const r = await h.run({ definition: wf.definition, stepPrincipals: wf.stepPrincipals }, {}, { runId: "prop-decline", invokeStep: scriptedMM(() => "decline") });
+    expect(r.terminalStatus).toBe("completed");
+    const outcomes = stepOutcomes(r.events);
+    // One attempt, converged (not exhausted): the same report would only draw the same answer.
+    expect(r.outputs["rework"]).toMatchObject({ outcome: "converged", iterations: 1 });
+    expect(outcomes["settle"]).toEqual({ status: "completed" });
+    expect(r.outputs["settle"]).toMatchObject({ queued: false, recommendation_id: null });
+    expect(outcomes["declined"]).toEqual({ status: "completed" });
+    expect(outcomes["approve"]?.status).toBe("skipped");
+    expect(outcomes["exhausted"]?.status).toBe("skipped");
+    // Nothing recorded, nothing queued; the decline and its reason are journaled.
+    expect(listRecommendations(h.ledger).filter((x) => x.id.startsWith("rec_prop-decline"))).toHaveLength(0);
+    expect(approvalQueue(h.ledger, new Date(NOW))).toHaveLength(0);
+    expect(h.ledger.eventsSince(0).some((e) => e.kind === "proposal.declined")).toBe(true);
+    const journal = h.ledger.listJournal(20).map((j) => j.summary);
+    expect(journal.some((s) => s.includes("declined to propose (attempt 1): attempt 1 -- the only sensible candidate sells the whole equity sleeve at once."))).toBe(true);
+  });
+
   test("exhausted: every redraft blocked -> nothing reaches the queue, the gate never arms", async () => {
     const h = seeded();
     await h.run(NIGHTLY, {});
@@ -230,6 +255,8 @@ describe("phase 4: proposal -> audit -> approval -> prepared instruction", () =>
     const outcomes = stepOutcomes(r.events);
     expect(outcomes["exhausted"]).toEqual({ status: "completed" });
     expect(outcomes["approve"]?.status).toBe("skipped");
+    expect(outcomes["settle"]?.status).toBe("skipped");
+    expect(outcomes["declined"]?.status).toBe("skipped");
     expect((r.outputs["rework"] as { outcome: string }).outcome).toBe("exhausted");
     expect(approvalQueue(h.ledger, new Date(NOW))).toHaveLength(0);
     expect(h.ledger.eventsSince(0).some((e) => e.kind === "proposal.exhausted")).toBe(true);
