@@ -74,7 +74,14 @@ export function marketDriftHandler(actx: ActionContext): ActionHandler {
     return ctx.perform({
       effectId: "drift",
       capability: CAP.ledgerReadPositions,
-      run: async () => computeDrift(driftInputs(actx, input.run_key as string)),
+      run: async () => {
+        const report = computeDrift(driftInputs(actx, input.run_key as string));
+        // The workflow's material gate routes on this BEFORE the model is
+        // ever asked: no candidates means there is deterministically
+        // nothing to propose -- the model call would only be rule 4's
+        // scripted NOTHING.
+        return { ...report, has_candidates: report.candidates.length > 0 };
+      },
     });
   };
 }
@@ -97,6 +104,12 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
       throw new Error("audit.intake: run_key and reply are required");
     }
     const attempt = input.attempt ?? 1;
+    // The DESIGNED decline (prompt rule 4): nothing to record, nothing to
+    // audit. Pure and deterministic, so no effect is performed; the
+    // workflow's gate routes it to a clean no-proposal ending.
+    if (isDeclinedReply(input.reply)) {
+      return { run_key: input.run_key, attempt, declined: true };
+    }
     return ctx.perform({
       effectId: `intake:${String(attempt)}`,
       capability: CAP.recordRecommendation,
@@ -137,25 +150,33 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
           subject: rec.subject,
           payload: { recommendation_id: rec.id, attempt, run_key: input.run_key },
         });
-        return { run_key: input.run_key, attempt, recommendation_id: rec.id, candidate_index: draft.candidate_index, replayed: r.replayed };
+        return { run_key: input.run_key, attempt, declined: false, recommendation_id: rec.id, candidate_index: draft.candidate_index, replayed: r.replayed };
       },
     });
   };
 }
 
 /**
- * Tolerate prose/code fences around the JSON: parse the outermost object.
  * Some local models (gpt-oss via mlx_lm.server) leak "harmony" channel
  * scaffolding into the text -- keep the final channel's content and strip
- * the control tokens before hunting for the object, the same healing the
- * chat path applies.
+ * the control tokens, the same healing the chat path applies.
  */
-export function parseDraft(reply: string): ProposalDraft {
+function healModelReply(reply: string): string {
   let text = reply;
   const final = /<\|channel\|>final<\|message\|>/.exec(text);
   if (final !== null) text = text.slice(final.index + final[0].length);
   text = text.replace(/<\|channel\|>analysis<\|message\|>[\s\S]*?(<\|end\|>|$)/g, "").replace(/<\|[a-z_]+\|>/g, "");
-  if (text.trim() === "") text = reply;
+  return text.trim() === "" ? reply : text;
+}
+
+/** Prompt rule 4's designed decline: the Market Manager answers the single word NOTHING when it has nothing to propose. */
+export function isDeclinedReply(reply: string): boolean {
+  return /^NOTHING[.!]?$/i.test(healModelReply(reply).trim());
+}
+
+/** Tolerate prose/code fences around the JSON: heal harmony scaffolding, then parse the outermost object. */
+export function parseDraft(reply: string): ProposalDraft {
+  const text = healModelReply(reply);
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) {
@@ -170,13 +191,24 @@ export function parseDraft(reply: string): ProposalDraft {
 export interface ReviewInput {
   run_key: string;
   attempt?: number;
-  recommendation_id: string;
+  /** From a declined intake (the Market Manager answered NOTHING): no recommendation exists. */
+  declined?: boolean;
+  recommendation_id?: string;
 }
 
 export function auditReviewHandler(actx: ActionContext): ActionHandler {
   return async (rawInput, ctx) => {
     const input = rawInput as ReviewInput;
-    if (typeof input.run_key !== "string" || typeof input.recommendation_id !== "string") {
+    if (typeof input.run_key !== "string") throw new Error("audit.review: run_key is required");
+    // A declined intake carries no recommendation: nothing to audit, and
+    // NOT cleared -- clearing would send the run to an approval gate with
+    // nothing to approve. The loop redrafts (the model may pick a
+    // different candidate) or exhausts cleanly.
+    if (input.declined === true) {
+      return { run_key: input.run_key, attempt: input.attempt ?? 1, declined: true, cleared: false, blocks: ["market manager declined (NOTHING)"] };
+    }
+    const recommendationId_ = input.recommendation_id;
+    if (typeof recommendationId_ !== "string") {
       throw new Error("audit.review: run_key and recommendation_id are required");
     }
     const attempt = input.attempt ?? 1;
@@ -184,8 +216,8 @@ export function auditReviewHandler(actx: ActionContext): ActionHandler {
       effectId: `review:${String(attempt)}`,
       capability: CAP.recordVerdict,
       run: async () => {
-        const rec = getRecommendation(actx.ledger, input.recommendation_id);
-        if (rec === null) throw new Error(`audit.review: no recommendation ${input.recommendation_id}`);
+        const rec = getRecommendation(actx.ledger, recommendationId_);
+        if (rec === null) throw new Error(`audit.review: no recommendation ${recommendationId_}`);
         const verdict = auditRecommendation(actx, rec, input.run_key, attempt);
         appendAuditVerdict(actx.ledger, verdict);
         actx.ledger.appendJournal({
@@ -205,7 +237,7 @@ export function auditReviewHandler(actx: ActionContext): ActionHandler {
           subject: rec.subject,
           payload: { recommendation_id: rec.id, attempt, blocks: verdict.blocks, run_key: input.run_key },
         });
-        return { run_key: input.run_key, attempt, recommendation_id: rec.id, cleared: verdict.cleared, blocks: verdict.blocks };
+        return { run_key: input.run_key, attempt, declined: false, recommendation_id: rec.id, cleared: verdict.cleared, blocks: verdict.blocks };
       },
     });
   };
@@ -487,7 +519,7 @@ export function executionPrepareHandler(actx: ActionContext): ActionHandler {
 }
 
 /** Terminal branches: journal + one idempotent event each. */
-function terminalHandler(actx: ActionContext, kind: "proposal.expired" | "proposal.rejected.closed" | "proposal.exhausted", summary: (runKey: string) => string): ActionHandler {
+function terminalHandler(actx: ActionContext, kind: "proposal.expired" | "proposal.rejected.closed" | "proposal.exhausted" | "proposal.declined", summary: (runKey: string) => string): ActionHandler {
   return async (rawInput, ctx) => {
     const input = rawInput as { run_key?: string; recommendation_id?: string };
     if (typeof input.run_key !== "string") throw new Error(`${kind}: run_key is required`);
@@ -552,5 +584,10 @@ export function governRejectedHandler(actx: ActionContext): ActionHandler {
   return terminalHandler(actx, "proposal.rejected.closed", (rk) => `proposal ${rk}: closed after rejection`);
 }
 export function governExhaustedHandler(actx: ActionContext): ActionHandler {
-  return terminalHandler(actx, "proposal.exhausted", (rk) => `proposal ${rk}: the auditor blocked every redraft; nothing reached the queue`);
+  return terminalHandler(actx, "proposal.exhausted", (rk) => `proposal ${rk}: every draft was blocked by the auditor or declined by the market manager; nothing reached the queue`);
+}
+
+/** The Market Manager's designed decline (prompt rule 4, reply NOTHING): a clean no-proposal ending, journaled. */
+export function governNothingHandler(actx: ActionContext): ActionHandler {
+  return terminalHandler(actx, "proposal.declined", (rk) => `proposal ${rk}: the Market Manager reviewed the drift and declined to propose (NOTHING)`);
 }

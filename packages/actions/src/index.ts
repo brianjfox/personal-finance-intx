@@ -14,6 +14,7 @@ import {
   executionPrepareHandler,
   governDecisionHandler,
   governExhaustedHandler,
+  governNothingHandler,
   governExpiredHandler,
   governRejectedHandler,
   marketDriftHandler,
@@ -50,6 +51,7 @@ export const ACTION_REFS = {
   governExpired: "govern.expired",
   governRejected: "govern.rejected",
   governExhausted: "govern.exhausted",
+  governNothing: "govern.nothing",
 } as const;
 
 export function buildActions(actx: ActionContext): Record<string, ActionHandler> {
@@ -76,6 +78,7 @@ export function buildActions(actx: ActionContext): Record<string, ActionHandler>
     [ACTION_REFS.governExpired]: governExpiredHandler(actx),
     [ACTION_REFS.governRejected]: governRejectedHandler(actx),
     [ACTION_REFS.governExhausted]: governExhaustedHandler(actx),
+    [ACTION_REFS.governNothing]: governNothingHandler(actx),
   };
 }
 

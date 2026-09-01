@@ -1596,25 +1596,34 @@ export function createApp(opts: AppOptions): App {
         }
         return msg;
       };
+      const terminal = async (status: string): Promise<{ runId: string; state: "terminal"; status: string; reason?: string }> => {
+        const events = await host.readLog(runId).catch(() => []);
+        const completed = (stepId: string): boolean =>
+          events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
+        // The designed no-proposal endings read as answers, not failures.
+        if (completed("nothing")) {
+          return { runId, state: "terminal", status, reason: "the drift report had no candidate orders — every asset class is inside the plan's band, or nothing held is actionable — so there was nothing to propose" };
+        }
+        if (completed("exhausted")) {
+          const reason = await deepestFailure(runId);
+          return { runId, state: "terminal", status, reason: reason ?? "every draft was blocked by the Auditor or declined by the Market Manager — the journal records each verdict" };
+        }
+        const reason = await deepestFailure(runId);
+        return { runId, state: "terminal", status, ...(reason !== null ? { reason } : {}) };
+      };
       // Resolve once the run either parks at the approval gate (queued)
-      // or settles (blocked/exhausted/failed).
+      // or settles (declined/blocked/exhausted/failed).
       const deadline = Date.now() + (o.timeoutMs ?? 600_000);
       for (;;) {
         const s = await summarize(runId);
-        if (s.status !== "running") {
-          const reason = await deepestFailure(runId);
-          return { runId, state: "terminal", status: s.status, ...(reason !== null ? { reason } : {}) };
-        }
+        if (s.status !== "running") return terminal(s.status);
         const events = await host.readLog(runId);
         const parked = events.some(
           (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
         );
         if (parked) return { runId, state: "queued", status: "running" };
-        const settled = events.some((e) => e.kind === "StepCompleted" && ["exhausted", "expired"].includes((e as { stepId?: string }).stepId ?? ""));
-        if (settled) {
-          const reason = await deepestFailure(runId);
-          return { runId, state: "terminal", status: s.status, ...(reason !== null ? { reason } : {}) };
-        }
+        const settled = events.some((e) => e.kind === "StepCompleted" && ["exhausted", "expired", "nothing"].includes((e as { stepId?: string }).stepId ?? ""));
+        if (settled) return terminal(s.status);
         if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
         await new Promise((r) => setTimeout(r, 250));
       }

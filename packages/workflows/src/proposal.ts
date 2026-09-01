@@ -95,6 +95,22 @@ export function buildProposalWorkflow(opts: ProposalWorkflowOptions): { definiti
         input: runKey,
         effect: { requires: [CAP.ledgerReadPositions] },
       }),
+      // No candidates = deterministically nothing to propose: route to
+      // the clean no-proposal ending WITHOUT asking the model (its only
+      // possible answer is rule 4's NOTHING) or arming the approval
+      // gate on a recommendation that will never exist.
+      material: gate({
+        when: { from: "steps.drift.output.has_candidates" },
+        then: "rework",
+        else: "nothing",
+        after: ["drift"],
+      }),
+      nothing: action({
+        handler: ACTION_REFS.governNothing,
+        input: runKey,
+        effect: { requires: [CAP.ledgerEmit] },
+        after: ["material"],
+      }),
       rework: loop({
         body,
         while: "mm.blocked",
@@ -102,7 +118,7 @@ export function buildProposalWorkflow(opts: ProposalWorkflowOptions): { definiti
         input: { merge: [runKey, { literal: { attempt: 1 } }, { from: "steps.drift.output" }] },
         maxIterations: opts.maxRedrafts ?? 3,
         onExhausted: "exhausted",
-        after: ["drift"],
+        after: ["material"],
       }),
       // Normal (converged) successor of the loop: the human gate.
       approve: awaitSignal({
@@ -161,6 +177,8 @@ export const PROPOSAL_PRINCIPALS: Record<string, Principal> = {
   propose: "market_manager",
   intake: "auditor",
   audit: "auditor",
+  material: "scheduler",
+  nothing: "scheduler",
   approve: "scheduler",
   decide: "operator",
   route: "scheduler",
