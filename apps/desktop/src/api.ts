@@ -82,6 +82,23 @@ export interface Recommendation {
   thesis: string; evidence: string[]; as_of: string; confidence: number; requires: string[]; expires: string;
   tax_lots?: Array<{ lot_id: string; treatment: string }>;
 }
+export interface PlanStatus {
+  plan: {
+    as_of: string;
+    band: string;
+    targets: Array<{ asset_class: string; weight: string }>;
+    constraints: { max_position_weight?: string | null; do_not_sell?: string[]; max_order_value?: string | null; tax_cash_horizon_days?: number };
+    notes?: string;
+  } | null;
+  drift: {
+    as_of: string;
+    portfolio_value: string;
+    cash_value: string;
+    by_class: Array<{ asset_class: string; value: string; weight: string; target: string; drift: string }>;
+    candidates: Array<{ side: "BUY" | "SELL"; account: string; symbol: string; quantity: string; est_value: string; rationale: string }>;
+  } | null;
+}
+
 export interface QueuedApproval {
   recommendation: Recommendation;
   verdict: { cleared: boolean; attempt: number; as_of: string; blocks: Array<{ condition: string; detail: string }>; figures: Record<string, unknown> };
@@ -255,6 +272,7 @@ export const api = {
   estateAudit: () => post<{ runId: string; status: string }>("/api/estate/audit"),
   journalFull: () => get<JournalEntry[]>("/api/journal"),
   approvals: () => get<QueuedApproval[]>("/api/approvals"),
+  planStatus: () => get<PlanStatus>("/api/plan"),
   instructions: () => get<InstructionRow[]>("/api/instructions"),
   propose: () => post<{ runId: string; state: string; status: string }>("/api/proposal"),
   decide: (recId: string, decision: "approve" | "reject", bound: { max_quantity?: string | null; limit_price?: string | null }, note: string) =>

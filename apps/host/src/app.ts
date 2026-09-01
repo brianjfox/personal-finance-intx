@@ -19,6 +19,7 @@ import {
   quarterSpec,
   resolveProjectionInputs,
   runScenario,
+  computeDrift,
   type ActionContext,
   type FetchLogRecord,
 } from "@fin/actions";
@@ -28,6 +29,7 @@ import {
   HouseholdProfile,
   type HouseholdProfileInput,
   InvestmentPlan,
+  type DriftReport,
   parseDateInput,
   parseMoneyInput,
   redactProfile,
@@ -337,6 +339,8 @@ export interface App {
   activeChatRun(agent: ChatAgent): Promise<{ runId: string } | null>;
   /** The written investment plan from `<dataDir>/plan.json`, or null. */
   plan(): InvestmentPlan | null;
+  /** The plan plus the deterministic drift report against current positions (drift null when no plan, or when it cannot compute). */
+  planStatus(): { plan: InvestmentPlan | null; drift: DriftReport | null };
   /**
    * Start a rebalance-proposal run: drift -> Market Manager draft ->
    * Auditor -> (cleared) the approval queue. Resolves once the run is
@@ -1515,6 +1519,26 @@ export function createApp(opts: AppOptions): App {
         .map((e) => e.payload as ChatTurn);
     },
     plan,
+    planStatus() {
+      const p = plan();
+      if (p === null) return { plan: null, drift: null };
+      try {
+        const now = clock();
+        return {
+          plan: p,
+          drift: computeDrift({
+            runKey: `plan-view:${now.toISOString()}`,
+            now,
+            plan: p,
+            positions: ledger.asOf({ kind: "position" }),
+            lots: ledger.asOf({ kind: "lot" }),
+          }),
+        };
+      } catch {
+        // A plan whose drift cannot compute (no positions yet, say) still shows.
+        return { plan: p, drift: null };
+      }
+    },
     async startProposal(o = {}) {
       if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
       const runId = `proposal_${newId("r").slice(2)}`;
