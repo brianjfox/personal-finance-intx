@@ -1587,9 +1587,13 @@ export function createApp(opts: AppOptions): App {
               const child = (e as { childRunId?: unknown }).childRunId;
               if (typeof child === "string") {
                 // The event carries the runtime's bare child id; the store
-                // key is namespaced by the parent run (issue #41). Try the
-                // namespaced id first, the bare one for pre-fix runs.
-                const cm = (await deepestFailure(`${id}.${child}`, depth + 1)) ?? (await deepestFailure(child, depth + 1));
+                // key is namespaced by the parent run (issue #41). The bare
+                // id is ONLY for pre-fix runs whose namespaced log does not
+                // exist -- a clean namespaced child must never fall through
+                // to the stale flat `rework__0` an older install left behind
+                // (issue #43).
+                const scoped = `${id}.${child}`;
+                const cm = await deepestFailure(host.repoStore.hasRun(scoped) ? scoped : child, depth + 1);
                 if (cm !== null) msg = cm;
               }
             }
