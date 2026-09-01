@@ -128,8 +128,12 @@ nav.side .collapse-toggle {
 nav.side .collapse-toggle:hover { color: var(--strong); border-color: var(--t3); filter: none; transform: none; }
 
 /* ---------- Main & page containers ---------- */
-main { flex: 1; min-width: 0; overflow-y: auto; background: var(--n950); }
-main.chatmode { overflow: hidden; display: flex; flex-direction: column; }
+/* scrollbar-gutter keeps centered page content at the same x whether or
+   not the page scrolls; chatmode keeps overflow-y auto (its flex children
+   exactly fill the height, so nothing scrolls) instead of hidden so the
+   stable gutter applies there too and headers never shift between pages. */
+main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--n950); }
+main.chatmode { display: flex; flex-direction: column; }
 .page { max-width: 1400px; margin: 0 auto; padding: 24px 32px 48px; }
 .page-narrow { max-width: 1024px; }
 .page-mid { max-width: 1200px; }
