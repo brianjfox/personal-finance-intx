@@ -1555,8 +1555,8 @@ export function createApp(opts: AppOptions): App {
             runKey: `plan-view:${now.toISOString()}`,
             now,
             plan: p,
-            positions: ledger.asOf({ kind: "position" }),
-            lots: ledger.asOf({ kind: "lot" }),
+            positions: views.livePositionFacts(ledger),
+            lots: views.liveLotFacts(ledger),
           }),
         };
       } catch {

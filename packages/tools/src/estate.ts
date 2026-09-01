@@ -12,6 +12,7 @@ import { finBundle, OBJECT_SCHEMA, type FinTool } from "./bundle";
 import { saveDraftTool } from "./draft";
 import { householdProfileTool } from "./profile";
 import type { FinAgentEnvExtras } from "./env";
+import { views } from "@fin/ledger";
 
 export const ESTATE_TOOL_NAMES = ["registry_read", "document_read", "emit_finding", "household_profile", "save_draft"] as const;
 
@@ -25,7 +26,7 @@ const registryRead: FinTool = {
   handler: async (_args, fin) => {
     const entities = fin.ledger.asOf({ kind: "entity" });
     const titling = fin.ledger.asOf({ kind: "titling" });
-    const accounts = fin.ledger.asOf({ kind: "account" });
+    const accounts = views.liveAccountFacts(fin.ledger); // open accounts only (issue #47)
     const estate = fin.estateFile();
     return {
       result: {

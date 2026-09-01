@@ -6,6 +6,7 @@
 
 import { assertType, InvestmentPlan, type PositionPayload } from "@fin/contracts";
 import { buildProposalDraft, computeDrift } from "@fin/actions";
+import { views } from "@fin/ledger";
 import { defineTool, type BaseEnv } from "@intx/agent";
 
 import { finBundle, OBJECT_SCHEMA, type FinTool } from "./bundle";
@@ -24,19 +25,20 @@ function driftNow(fin: FinToolEnv, runKey: string) {
     runKey,
     now: fin.clock(),
     plan: planOf(fin),
-    positions: fin.ledger.asOf({ kind: "position" }),
-    lots: fin.ledger.asOf({ kind: "lot" }),
+    // Open accounts only (issue #47): the same inputs the Auditor's re-run uses.
+    positions: views.livePositionFacts(fin.ledger),
+    lots: views.liveLotFacts(fin.ledger),
   });
 }
 
 const readPositions: FinTool = {
   definition: {
     name: "ledger_read_positions",
-    description: "Read current positions: account subject, symbol, asset class, quantity, price, market value. No account numbers, no non-position balances.",
+    description: "Read current positions in open accounts: account subject, symbol, asset class, quantity, price, market value. No account numbers, no non-position balances, no closed or hidden accounts.",
     inputSchema: OBJECT_SCHEMA({}),
   },
   handler: async (_args, fin) => {
-    const facts = fin.ledger.asOf({ kind: "position" });
+    const facts = views.livePositionFacts(fin.ledger);
     return {
       result: {
         positions: facts.map((f) => {
