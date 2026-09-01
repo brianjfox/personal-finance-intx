@@ -4331,11 +4331,7 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
     <div className="page-head">
       <div>
         <h2>Strategy</h2>
-        <p className="page-sub">
-          {tab === "chat"
-            ? "Advisory conversation. Figures come from tools, never invented; nothing here can move money."
-            : "The written plan, where the portfolio drifted, and the Market Manager's proposals. The Auditor re-runs every figure; execution stays disabled."}
-        </p>
+        <p className="page-sub">Advisory only — figures are deterministic, the Auditor re-verifies every proposal, and execution stays disabled.</p>
       </div>
       <SegTabs
         value={tab}
@@ -4347,16 +4343,19 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
       />
     </div>
   );
+  // Both tabs wrap the header in the SAME container -- same max-width,
+  // same padding -- so the title and tabs render at identical pixels and
+  // nothing jumps when switching.
   if (tab === "chat") {
     return (
       <>
-        <div className="page page-mid" style={{ paddingTop: 16, paddingBottom: 0, flex: "none", width: "100%" }}>{head}</div>
+        <div className="page page-mid" style={{ paddingBottom: 0, flex: "none", width: "100%" }}>{head}</div>
         <ChatPage openFact={openFact} />
       </>
     );
   }
   return (
-    <div className="page page-narrow">
+    <div className="page page-mid" style={{ width: "100%" }}>
       {head}
       <PlanSection tick={tick} onChanged={onChanged} openFact={openFact} />
     </div>
