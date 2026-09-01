@@ -191,6 +191,12 @@ fn main() {
                     let _ = WebviewWindowBuilder::new(&handle2, "main", WebviewUrl::External(url.parse().expect("bad url")))
                         .title(title)
                         .inner_size(1240.0, 860.0)
+                        // Tauri's drag-drop handler intercepts native drags
+                        // for file-drop delivery, which prevents in-page
+                        // HTML5 drag-and-drop (the institution-card
+                        // reorder) from ever receiving the drop. Uploads
+                        // use a file input, so nothing needs the handler.
+                        .disable_drag_drop_handler()
                         .build();
                 });
             });

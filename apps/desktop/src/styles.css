@@ -329,10 +329,11 @@ pre { margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--t2); }
 .inst-card { background: var(--n800); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; margin-bottom: 24px; }
 /* Drag-to-reorder: the wrapper hosts a grip on the card's left edge; only the grip arms dragging. */
 .drag-wrap { position: relative; }
-.drag-wrap .drag-grip { position: absolute; left: 0; top: 26px; z-index: 2; display: flex; flex-direction: column; gap: 0; padding: 6px 1px; background: transparent; border: 0; box-shadow: none; color: var(--t3); cursor: grab; opacity: 0; transition: opacity 0.15s; }
+.drag-wrap .drag-grip { position: absolute; left: 5px; top: 10px; bottom: 10px; width: 18px; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 9px; padding: 0; background: transparent; border: 0; box-shadow: none; color: var(--t3); cursor: grab; opacity: 0; transition: opacity 0.15s, background 0.15s; }
 .drag-wrap:hover .drag-grip { opacity: 1; }
+.drag-wrap .drag-grip:hover { background: var(--inset); }
 .drag-wrap .drag-grip:active { cursor: grabbing; }
-.drag-wrap .drag-grip svg { display: block; margin: -4px 0; }
+.drag-wrap .drag-grip svg { display: block; margin: -4px 0; transform: rotate(90deg); }
 .inst-card .inst-head { padding: 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--hairline); }
 .inst-card .inst-id { display: flex; gap: 16px; min-width: 0; }
 .inst-card h3.name { margin: 0; font-size: 17px; font-weight: 700; color: var(--strong); text-transform: none; letter-spacing: 0; line-height: 1.2; }
