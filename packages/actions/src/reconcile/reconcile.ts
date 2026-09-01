@@ -440,11 +440,28 @@ function detectMissingCostBasis(ctx: DetectorContext): void {
       holds: false,
     });
   }
+  // Lots carry the detail -- whether proposed tonight or already in the
+  // ledger (an unchanged lot writes no new fact, issue #53).
   const lotSymbols = new Set(proposed(ctx, "lot").map((pf) => `${pf.fact.subject}|${(pf.fact.payload as LotPayload).instrument.symbol.toUpperCase()}`));
+  const heldLotSymbols = new Map<string, Set<string>>();
+  const hasLots = (subject: string, symbolKey: string): boolean => {
+    if (lotSymbols.has(`${subject}|${symbolKey}`)) return true;
+    let held = heldLotSymbols.get(subject);
+    if (held === undefined) {
+      held = new Set(
+        ctx.ledger
+          .asOf({ kind: "lot", subject })
+          .filter((f) => !decimal.isZero((f.payload as LotPayload).quantity))
+          .map((f) => (f.payload as LotPayload).instrument.symbol.toUpperCase()),
+      );
+      heldLotSymbols.set(subject, held);
+    }
+    return held.has(symbolKey);
+  };
   for (const pf of proposed(ctx, "position")) {
     const p = pf.fact.payload as PositionPayload;
     if (decimal.isZero(p.quantity) || p.instrument.asset_class === "cash") continue;
-    if (lotSymbols.has(`${pf.fact.subject}|${pf.fact.key}`)) continue; // lots carry the detail
+    if (hasLots(pf.fact.subject, pf.fact.key)) continue;
     if (p.cost_basis === null) {
       emit(ctx, {
         kind: "gap",

@@ -281,7 +281,10 @@ describe("the queue you stop reading", () => {
     n1.commit();
     const n2 = runNight(ledger, "n2", { snapshots: [snap("inst.broker", NIGHT2, [brokerage("acct.broker.taxable", ASOF2, { positions: [lot(null)] })])], failures: [] }, NIGHT2);
     expect(n2.rec.findings.filter((f) => f.code === "missing_cost_basis")).toHaveLength(0);
-    expect(n2.rec.stats["suppressed_known"]).toBe(1);
+    // An unchanged lot writes no new fact (issue #53), so there is nothing
+    // to draft, let alone suppress; the night-1 finding stays open alone.
+    expect(n2.norm.facts.some((f) => f.fact.kind === "lot")).toBe(false);
+    expect(n2.rec.stats["suppressed_known"]).toBeUndefined();
     expect(ledger.openFindings({ requiresHuman: true })).toHaveLength(1);
     // Basis arrives: no gap at all.
     const n3 = runNight(ledger, "n3", { snapshots: [snap("inst.broker", NIGHT2, [brokerage("acct.broker.taxable", ASOF2, { positions: [lot("9000")] })])], failures: [] }, NIGHT2);
