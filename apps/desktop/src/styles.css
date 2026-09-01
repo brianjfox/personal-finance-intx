@@ -137,6 +137,7 @@ main.chatmode { overflow: hidden; display: flex; flex-direction: column; }
 h2 { font-weight: 700; font-size: 24px; color: var(--strong); margin: 0 0 4px; }
 h3 { font-weight: 600; font-size: 13px; margin: 18px 0 8px; color: var(--t2); text-transform: uppercase; letter-spacing: 0.08em; }
 .page-sub { font-size: 14px; color: var(--t3); margin: 0 0 24px; }
+.page-header { margin-bottom: 28px; }
 .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
 .page-head .page-sub { margin-bottom: 0; }
 

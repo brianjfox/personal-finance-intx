@@ -1530,10 +1530,30 @@ const ACCOUNT_TYPE_OPTIONS: ReadonlyArray<readonly [string, string]> = [
 const typeLabel = (t: string): string => ACCOUNT_TYPE_OPTIONS.find(([v]) => v === t)?.[1] ?? t;
 
 /**
- * THE page-tab control: a segmented button group (the Assets pattern),
- * rendered in the page-head row beside the title so it sits in the same
- * place on every page and never moves between tabs. Counts render as
- * chips inside the buttons.
+ * THE page header, one structure everywhere: a title row (page-level
+ * actions on its right), a short description of what the area is for,
+ * and the tab navigation on its own row below. Each container renders
+ * at the same place on the page regardless of which tab is active.
+ */
+function PageHeader({ title, sub, tabs, actions }: { title: React.ReactNode; sub: string; tabs?: React.ReactNode; actions?: React.ReactNode }) {
+  return (
+    <div className="page-header">
+      <div className="page-head" style={{ marginBottom: 0 }}>
+        <div>
+          <h2>{title}</h2>
+          <p className="page-sub">{sub}</p>
+        </div>
+        {actions !== undefined && <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>{actions}</div>}
+      </div>
+      {tabs !== undefined && <div style={{ marginTop: 16 }}>{tabs}</div>}
+    </div>
+  );
+}
+
+/**
+ * THE page-tab control: a segmented button group, one row below the
+ * page title and description (see PageHeader). Counts render as chips
+ * inside the buttons.
  */
 function SegTabs<T extends string>({ value, onChange, options }: {
   value: T;
@@ -1666,12 +1686,11 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
     );
   return (
     <div className="page">
-      <div className="page-head">
-        <div>
-          <h2>Assets, Cash &amp; Holdings</h2>
-          <p className="page-sub">Connections are read-only. We can observe your holdings, but we never move money.</p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <PageHeader
+        title={<>Assets, Cash &amp; Holdings</>}
+        sub="Connections are read-only. We can observe your holdings, but we never move money."
+        actions={<button onClick={() => setAdding(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" /> Add Asset</button>}
+        tabs={
           <SegTabs
             value={tab}
             onChange={(id) => {
@@ -1684,9 +1703,8 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
               { id: "crypto", label: "Crypto", count: counts.get("crypto") ?? 0 },
             ]}
           />
-          <button onClick={() => setAdding(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" /> Add Asset</button>
-        </div>
-      </div>
+        }
+      />
       <div className="split">
         <div>
           {none && (
@@ -4337,23 +4355,23 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
   useEffect(() => {
     api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
   }, [tick]);
-  // The SAME header on both tabs -- title left, tabs right, exactly where
-  // every other tabbed page puts them -- so nothing moves when switching.
+  // The SAME header on both tabs -- title, description, tab row -- so
+  // nothing moves when switching.
   const head = (
-    <div className="page-head">
-      <div>
-        <h2>Strategy</h2>
-        <p className="page-sub">Advisory only — figures are deterministic, the Auditor re-verifies every proposal, and execution stays disabled.</p>
-      </div>
-      <SegTabs
-        value={tab}
-        onChange={setTab}
-        options={[
-          { id: "chat", label: "The Strategist" },
-          { id: "plan", label: "Plan & Rebalancing", count: approvalsCount, tone: "green" },
-        ]}
-      />
-    </div>
+    <PageHeader
+      title="Strategy"
+      sub="Advisory only — figures are deterministic, the Auditor re-verifies every proposal, and execution stays disabled."
+      tabs={
+        <SegTabs
+          value={tab}
+          onChange={setTab}
+          options={[
+            { id: "chat", label: "The Strategist" },
+            { id: "plan", label: "Plan & Rebalancing", count: approvalsCount, tone: "green" },
+          ]}
+        />
+      }
+    />
   );
   // Both tabs wrap the header in the SAME container -- same max-width,
   // same padding -- so the title and tabs render at identical pixels and
@@ -4730,17 +4748,20 @@ function AuditPage({ tick, onChanged, openFact }: { tick: number; onChanged: () 
   const [tab, setTab] = useState<"runs" | "journal">("runs");
   return (
     <>
-      <div className="page-head">
-        <div><h2>Audit Logs</h2></div>
-        <SegTabs
-          value={tab}
-          onChange={setTab}
-          options={[
-            { id: "runs", label: "Nightly runs" },
-            { id: "journal", label: "Decision journal" },
-          ]}
-        />
-      </div>
+      <PageHeader
+        title="Audit Logs"
+        sub="What ran, what it found, and what was decided — kept because financial feedback loops are years long."
+        tabs={
+          <SegTabs
+            value={tab}
+            onChange={setTab}
+            options={[
+              { id: "runs", label: "Nightly runs" },
+              { id: "journal", label: "Decision journal" },
+            ]}
+          />
+        }
+      />
       {tab === "runs" && <Runs tick={tick} onChanged={onChanged} />}
       {tab === "journal" && <JournalPage tick={tick} openFact={openFact} />}
     </>
@@ -5059,19 +5080,22 @@ function Documents({ tick }: { tick: number }) {
     });
   return (
     <>
-      <div className="page-head">
-        <div><h2>Document vault</h2></div>
-        <SegTabs
-          value={tab}
-          onChange={setTab}
-          options={[
-            { id: "all", label: "All" },
-            { id: "drafts", label: "Drafts", count: counts.get("drafts") ?? 0 },
-            { id: "data", label: "Statements & data", count: counts.get("data") ?? 0 },
-            { id: "records", label: "Records", count: counts.get("records") ?? 0 },
-          ]}
-        />
-      </div>
+      <PageHeader
+        title="Document vault"
+        sub="Every raw statement and draft the app has ingested or written — the evidence behind each number."
+        tabs={
+          <SegTabs
+            value={tab}
+            onChange={setTab}
+            options={[
+              { id: "all", label: "All" },
+              { id: "drafts", label: "Drafts", count: counts.get("drafts") ?? 0 },
+              { id: "data", label: "Statements & data", count: counts.get("data") ?? 0 },
+              { id: "records", label: "Records", count: counts.get("records") ?? 0 },
+            ]}
+          />
+        }
+      />
       <p>
         <button disabled={busy} onClick={() => void doExport()}>{busy ? "exporting…" : "Break-glass export"}</button>
         <span className="small muted"> Create a directory with all of your information in clear text</span>
