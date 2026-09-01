@@ -348,7 +348,7 @@ export interface App {
    * Auditor -> (cleared) the approval queue. Resolves once the run is
    * parked at the approval gate or terminal (blocked/exhausted).
    */
-  startProposal(opts?: { timeoutMs?: number }): Promise<{ runId: string; state: "queued" | "terminal"; status: string }>;
+  startProposal(opts?: { timeoutMs?: number }): Promise<{ runId: string; state: "queued" | "terminal"; status: string; reason?: string }>;
   /** The home screen's top half: cleared, unexpired, undecided recommendations. */
   approvalQueue(): QueuedApproval[];
   /**
@@ -1568,19 +1568,53 @@ export function createApp(opts: AppOptions): App {
       if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
       const runId = `proposal_${newId("r").slice(2)}`;
       drive(buildProposalWorkflow({ model: model_() }).definition, runId, { run_key: runId });
+      // The deepest step failure in the run, child runs included (the
+      // rework loop's body is a child run): what the GUI shows when a
+      // proposal run settles without queueing anything.
+      const deepestFailure = async (id: string, depth = 0): Promise<string | null> => {
+        if (depth > 4) return null;
+        let msg: string | null = null;
+        try {
+          for (const e of await host.readLog(id)) {
+            if (e.kind === "StepFailed") {
+              const err = (e as { error?: { message?: unknown } }).error;
+              const m = typeof err?.message === "string" ? err.message : "";
+              // Prefer the most specific message: loop wrappers restate
+              // the child's failure, so only take one when nothing better.
+              if (m !== "" && (msg === null || !/loop .* iteration .* ended/.test(m))) msg = m;
+            }
+            if (e.kind === "ChildSpawned") {
+              const child = (e as { childRunId?: unknown }).childRunId;
+              if (typeof child === "string") {
+                const cm = await deepestFailure(child, depth + 1);
+                if (cm !== null) msg = cm;
+              }
+            }
+          }
+        } catch {
+          /* a child log we cannot read: keep what we have */
+        }
+        return msg;
+      };
       // Resolve once the run either parks at the approval gate (queued)
       // or settles (blocked/exhausted/failed).
       const deadline = Date.now() + (o.timeoutMs ?? 600_000);
       for (;;) {
         const s = await summarize(runId);
-        if (s.status !== "running") return { runId, state: "terminal", status: s.status };
+        if (s.status !== "running") {
+          const reason = await deepestFailure(runId);
+          return { runId, state: "terminal", status: s.status, ...(reason !== null ? { reason } : {}) };
+        }
         const events = await host.readLog(runId);
         const parked = events.some(
           (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
         );
         if (parked) return { runId, state: "queued", status: "running" };
         const settled = events.some((e) => e.kind === "StepCompleted" && ["exhausted", "expired"].includes((e as { stepId?: string }).stepId ?? ""));
-        if (settled) return { runId, state: "terminal", status: s.status };
+        if (settled) {
+          const reason = await deepestFailure(runId);
+          return { runId, state: "terminal", status: s.status, ...(reason !== null ? { reason } : {}) };
+        }
         if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
         await new Promise((r) => setTimeout(r, 250));
       }
