@@ -3548,7 +3548,6 @@ function ApprovalsSection({ approvals, onChanged, openFact }: { approvals: impor
     <>
       <div className="actions" style={{ marginBottom: 24 }}>
         <button className="secondary" disabled={busy} onClick={() => void propose()}>{busy ? "proposing…" : "Ask the Market Manager for a proposal"}</button>
-        <span className="small muted">drift vs the written plan · auditor re-runs every figure · execution stays disabled</span>
       </div>
       {busy && <Thinking label="The Market Manager is drafting and the Auditor is re-running its figures" />}
       {approvals.length === 0 && !busy && <p className="muted">No proposals await your signature.</p>}
