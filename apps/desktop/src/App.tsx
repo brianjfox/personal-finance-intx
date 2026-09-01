@@ -1540,6 +1540,9 @@ function SetupProgress({ ob, profileOk }: { ob: InstitutionsOverview; profileOk:
   ];
   const doneCount = steps.filter((s) => s.done).length;
   const current = steps.findIndex((s) => !s.done);
+  // Setup is a checklist, not a trophy: once everything is done, the card
+  // has nothing left to say and gets out of the way.
+  if (doneCount === steps.length) return null;
   return (
     <div className="panel">
       <div className="panel-title" style={{ marginBottom: 16 }}>Setup Progress</div>
@@ -1556,7 +1559,7 @@ function SetupProgress({ ob, profileOk }: { ob: InstitutionsOverview; profileOk:
       </div>
       <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--hairline)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-          <span className="uc" style={{ fontSize: 10, fontWeight: 700, color: "var(--t3)" }}>Profile Completion</span>
+          <span className="uc" style={{ fontSize: 10, fontWeight: 700, color: "var(--t3)" }}>Completion</span>
           <span className="uc green" style={{ fontSize: 10, fontWeight: 700 }}>{Math.round((doneCount / steps.length) * 100)}%</span>
         </div>
         <div className="progressbar" style={{ marginTop: 0 }}><div style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
@@ -1671,13 +1674,52 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
         </div>
         <div className="rail">
           <SetupProgress ob={ob} profileOk={profileOk} />
-          <div className="panel">
-            <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t2)", marginBottom: 12 }}>Expert Mode</div>
-            <div className="tipbox">"Click any figure to see its <span style={{ color: "var(--link)", fontWeight: 600 }}>provenance</span>. We never assert a number without evidence."</div>
-            <div className="tipbox">"Your data never leaves {thisMachine()}. Even AI analysis can be run entirely locally."</div>
-          </div>
+          <TipsCard />
         </div>
       </div>
+    </div>
+  );
+}
+
+// The Tricks & Tips pool: real behaviors of this app, one sentence each,
+// no marketing. Two show at a time and rotate on a timer.
+const TIPS: readonly string[] = [
+  "Click any figure to see its provenance — a number is never asserted without the evidence behind it.",
+  `Your data never leaves ${thisMachine()}. Even AI analysis can run entirely locally — pick providers on the Credentials page.`,
+  "Every connection is read-only: the app can observe your holdings, but it can never move money.",
+  "Hide a single account with the eye-slash button on its row; hidden accounts are listed under Manage with a Restore button.",
+  "Drag an institution card by the strip on its left edge to arrange cards in the order you like — the order is saved.",
+  "If a connection token goes missing, click “missing — reconnect” on the Credentials page to fix it on the spot.",
+  "Balances refresh nightly on their own; Update now on any card fetches that institution immediately.",
+  "Type money naturally: 1250000, $1,250,000 and €1.250.000 all work, and foreign currencies convert at ECB rates.",
+  "Dates are freeform too — “Jul 30 1959” works anywhere a date is asked for.",
+  "The Queue holds only what genuinely needs your judgment; everything else reconciles silently overnight.",
+  "Transfers between your own accounts are detected and paired, so they never count as income or spending.",
+  "Documents keeps every raw statement ever ingested — the original evidence behind each number.",
+  "The break-glass export writes plain CSVs, your original documents, and a printed guide that needs no software to read.",
+  "Pause updates on a card to stop fetching without losing anything; resume whenever you like.",
+  "Watch-only wallets need just a public address — pasting a Ledger Live account export works too.",
+  "The Positions tab's Consolidated view bundles the same holding across accounts into a single line.",
+  "Estate and Strategy chats file every draft they present under Documents → Drafts.",
+  "Deleting an institution removes its money from your totals but keeps the history of what was observed.",
+  "Assign a different AI provider per task — profile intake runs well on small local models.",
+  "Reconnecting an institution keeps account history continuous: new provider ids are matched to the accounts you already have.",
+  "Bank consents expire; the card warns two weeks ahead so you can reconnect before updates stop.",
+  "Add a property from the Real Estate tab — its value flows straight into net worth and can be edited in place.",
+];
+
+/** Two rotating tips from the pool; advances one slot on a timer, starting from a random spot so the card varies between visits. */
+function TipsCard() {
+  const [at, setAt] = useState(() => Math.floor(Math.random() * TIPS.length));
+  useEffect(() => {
+    const t = setInterval(() => setAt((x) => (x + 1) % TIPS.length), 12_000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="panel">
+      <div className="uc" style={{ fontSize: 11, fontWeight: 700, color: "var(--t2)", marginBottom: 12 }}>Tricks &amp; Tips</div>
+      <div className="tipbox">{TIPS[at]}</div>
+      <div className="tipbox">{TIPS[(at + 1) % TIPS.length]}</div>
     </div>
   );
 }
