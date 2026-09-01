@@ -20,7 +20,7 @@ import { scriptedAgentFactory } from "./fixtures/scripted-agent";
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "fin-p4-"));
 const stubSource = (): InferenceSource => ({ id: "stub", provider: "anthropic", baseURL: "http://localhost:1", apiKey: "stub", model: "stub" });
 
-function writePlan(dataDir: string): void {
+function writePlan(dataDir: string, notes?: string): void {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(
     path.join(dataDir, "plan.json"),
@@ -33,6 +33,7 @@ function writePlan(dataDir: string): void {
         { asset_class: "bond", weight: "0.4" },
       ],
       constraints: { do_not_sell: [], tax_cash_horizon_days: 60 },
+      ...(notes !== undefined ? { notes } : {}),
     }),
   );
 }
@@ -84,6 +85,37 @@ describe("phase 4 through fin-host: the approval queue", () => {
       expect(queue[0]!.recommendation.id).toBe(`rec_${r2.runId}.1`);
       expect(fs.existsSync(path.join(dataDir, "runs", `${r1.runId}.rework__0`))).toBe(true);
       expect(fs.existsSync(path.join(dataDir, "runs", `${r2.runId}.rework__0`))).toBe(true);
+    } finally {
+      app.close();
+    }
+  });
+
+  test("a clean run never inherits a failure from the stale flat rework__0 log an older install left behind (#43)", async () => {
+    const dataDir = tmp();
+    writePlan(dataDir, "decline");
+    // The pre-#41 layout: one flat `runs/rework__0` shared by every
+    // proposal, holding a dead child's failure. Left in place by upgrades.
+    const legacy = path.join(dataDir, "runs", "rework__0");
+    fs.mkdirSync(legacy, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacy, "events.jsonl"),
+      [
+        JSON.stringify({ kind: "RunStarted", seq: 1, at: "2026-09-01T08:53:31.000Z", definitionHash: "00" }),
+        JSON.stringify({ kind: "StepFailed", seq: 2, at: "2026-09-01T08:53:41.009Z", stepId: "intake", attempt: 1, error: { message: "missing key intake in path steps.intake.output" }, retriesExhausted: true }),
+        JSON.stringify({ kind: "RunFailed", seq: 3, at: "2026-09-01T08:53:41.010Z", error: { message: "one or more steps failed" } }),
+      ].join("\n") + "\n",
+    );
+    const app = openApp(dataDir);
+    try {
+      expect((await app.runNightly({ runId: "nightly_stale" })).terminalStatus).toBe("completed");
+      // The Market Manager declines on every attempt: the run settles with
+      // child runs that COMPLETED -- no failure anywhere in this run.
+      const r = await app.startProposal({ timeoutMs: 60_000 });
+      expect(r.state).toBe("terminal");
+      expect(r.status).toBe("completed");
+      expect(r.reason).not.toMatch(/missing key/);
+      expect(r.reason).toMatch(/declined/);
+      expect(app.approvalQueue()).toHaveLength(0);
     } finally {
       app.close();
     }

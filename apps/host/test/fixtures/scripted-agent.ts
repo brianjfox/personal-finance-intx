@@ -96,6 +96,11 @@ async function runMarketScript(
   const report = await call("compute_rebalance", { run_key: runKey });
   const candidates = (report["candidates"] as unknown[] | undefined) ?? [];
   if (candidates.length === 0) return "NOTHING";
+  // Test hook: a plan whose notes read `decline[: <reason>]` scripts the
+  // prompt's rule-4 decline on judgement, reason and all.
+  const plan = await call("read_plan_targets", {});
+  const decline = /^decline(?::\s*(.*))?$/i.exec(String(plan["notes"] ?? "").trim());
+  if (decline !== null) return decline[1] !== undefined && decline[1] !== "" ? `NOTHING: ${decline[1]}` : "NOTHING";
   const draft = await call("emit_proposal", {
     run_key: runKey,
     candidate_index: 0,
