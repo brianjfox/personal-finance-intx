@@ -203,13 +203,6 @@ button.ghost.danger:hover:not(:disabled) { color: var(--red); }
 .seg button { background: transparent; color: var(--t2); border: 1px solid transparent; border-radius: 7px; padding: 6px 14px; font-size: 12px; font-weight: 500; box-shadow: none; }
 .seg button:hover:not(:disabled) { color: var(--strong); transform: none; box-shadow: none; filter: none; }
 .seg button.on { background: var(--n800); border-color: var(--hairline); color: var(--strong); }
-.tabs-underline { display: flex; align-items: center; gap: 24px; border-bottom: 1px solid var(--hairline); margin-bottom: 28px; }
-.tabs-underline button {
-  background: transparent; color: var(--t3); border: 0; border-bottom: 2px solid transparent; border-radius: 0;
-  padding: 0 0 14px; font-size: 14px; font-weight: 500; box-shadow: none;
-}
-.tabs-underline button:hover:not(:disabled) { color: var(--strong); transform: none; box-shadow: none; filter: none; }
-.tabs-underline button.on { color: var(--strong); font-weight: 700; border-bottom-color: var(--green); }
 .tab-count { margin-left: 8px; padding: 2px 6px; border-radius: 5px; font-size: 10px; font-weight: 600; background: var(--n700); color: var(--t2); }
 .tab-count.green { background: rgba(16, 185, 129, 0.2); color: var(--green); }
 .tab-count.red { background: rgba(239, 68, 68, 0.2); color: var(--red); }

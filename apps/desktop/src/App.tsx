@@ -1528,6 +1528,29 @@ const ACCOUNT_TYPE_OPTIONS: ReadonlyArray<readonly [string, string]> = [
   ["other", "Property or other"],
 ];
 const typeLabel = (t: string): string => ACCOUNT_TYPE_OPTIONS.find(([v]) => v === t)?.[1] ?? t;
+
+/**
+ * THE page-tab control: a segmented button group (the Assets pattern),
+ * rendered in the page-head row beside the title so it sits in the same
+ * place on every page and never moves between tabs. Counts render as
+ * chips inside the buttons.
+ */
+function SegTabs<T extends string>({ value, onChange, options }: {
+  value: T;
+  onChange: (t: T) => void;
+  options: ReadonlyArray<{ id: T; label: string; count?: number; tone?: "green" | "red" }>;
+}) {
+  return (
+    <div className="seg">
+      {options.map((o) => (
+        <button key={o.id} className={value === o.id ? "on" : ""} onClick={() => onChange(o.id)}>
+          {o.label}
+          {o.count !== undefined && o.count > 0 && <span className={`tab-count${o.tone !== undefined ? ` ${o.tone}` : ""}`}>{o.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
 const OWED_TYPES = new Set(["credit_card", "mortgage", "loan", "heloc"]);
 
 type HoldingsTab = "institutions" | "real_estate" | "crypto";
@@ -1649,27 +1672,18 @@ function InstitutionsPage({ tick, onChanged }: { tick: number; onChanged: () => 
           <p className="page-sub">Connections are read-only. We can observe your holdings, but we never move money.</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <div className="seg">
-            {(
-              [
-                ["institutions", "Institutions"],
-                ["real_estate", "Real Estate"],
-                ["crypto", "Crypto"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                className={tab === id ? "on" : ""}
-                onClick={() => {
-                  setTab(id);
-                  setAdding(false);
-                }}
-              >
-                {label}
-                {(counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
-              </button>
-            ))}
-          </div>
+          <SegTabs
+            value={tab}
+            onChange={(id) => {
+              setTab(id);
+              setAdding(false);
+            }}
+            options={[
+              { id: "institutions", label: "Institutions", count: counts.get("institutions") ?? 0 },
+              { id: "real_estate", label: "Real Estate", count: counts.get("real_estate") ?? 0 },
+              { id: "crypto", label: "Crypto", count: counts.get("crypto") ?? 0 },
+            ]}
+          />
           <button onClick={() => setAdding(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="plus" /> Add Asset</button>
         </div>
       </div>
@@ -4311,27 +4325,39 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
   useEffect(() => {
     api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
   }, [tick]);
-  const tabs = (
-    <div className="tabs-underline" style={{ marginBottom: tab === "chat" ? 0 : 28 }}>
-      <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>The Strategist</button>
-      <button className={tab === "plan" ? "on" : ""} onClick={() => setTab("plan")}>
-        Plan &amp; Rebalancing{approvalsCount > 0 && <span className="tab-count green">{approvalsCount}</span>}
-      </button>
+  // The SAME header on both tabs -- title left, tabs right, exactly where
+  // every other tabbed page puts them -- so nothing moves when switching.
+  const head = (
+    <div className="page-head">
+      <div>
+        <h2>Strategy</h2>
+        <p className="page-sub">
+          {tab === "chat"
+            ? "Advisory conversation. Figures come from tools, never invented; nothing here can move money."
+            : "The written plan, where the portfolio drifted, and the Market Manager's proposals. The Auditor re-runs every figure; execution stays disabled."}
+        </p>
+      </div>
+      <SegTabs
+        value={tab}
+        onChange={setTab}
+        options={[
+          { id: "chat", label: "The Strategist" },
+          { id: "plan", label: "Plan & Rebalancing", count: approvalsCount, tone: "green" },
+        ]}
+      />
     </div>
   );
   if (tab === "chat") {
     return (
       <>
-        <div className="page page-mid" style={{ paddingTop: 16, paddingBottom: 0, flex: "none", width: "100%" }}>{tabs}</div>
+        <div className="page page-mid" style={{ paddingTop: 16, paddingBottom: 0, flex: "none", width: "100%" }}>{head}</div>
         <ChatPage openFact={openFact} />
       </>
     );
   }
   return (
     <div className="page page-narrow">
-      <h2>Strategy</h2>
-      <p className="page-sub">The written plan, where the portfolio has drifted from it, and the Market Manager's proposals. The Auditor re-runs every figure; execution stays disabled.</p>
-      {tabs}
+      {head}
       <PlanSection tick={tick} onChanged={onChanged} openFact={openFact} />
     </div>
   );
@@ -4577,11 +4603,17 @@ function AuditPage({ tick, onChanged, openFact }: { tick: number; onChanged: () 
   const [tab, setTab] = useState<"runs" | "journal">("runs");
   return (
     <>
-      <h2>Audit Logs</h2>
-      <p style={{ marginBottom: 4 }}>
-        <button className={tab === "runs" ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab("runs")}>Nightly runs</button>
-        <button className={tab === "journal" ? "" : "secondary"} onClick={() => setTab("journal")}>Decision journal</button>
-      </p>
+      <div className="page-head">
+        <div><h2>Audit Logs</h2></div>
+        <SegTabs
+          value={tab}
+          onChange={setTab}
+          options={[
+            { id: "runs", label: "Nightly runs" },
+            { id: "journal", label: "Decision journal" },
+          ]}
+        />
+      </div>
       {tab === "runs" && <Runs tick={tick} onChanged={onChanged} />}
       {tab === "journal" && <JournalPage tick={tick} openFact={openFact} />}
     </>
@@ -4900,27 +4932,24 @@ function Documents({ tick }: { tick: number }) {
     });
   return (
     <>
-      <h2>Document vault</h2>
+      <div className="page-head">
+        <div><h2>Document vault</h2></div>
+        <SegTabs
+          value={tab}
+          onChange={setTab}
+          options={[
+            { id: "all", label: "All" },
+            { id: "drafts", label: "Drafts", count: counts.get("drafts") ?? 0 },
+            { id: "data", label: "Statements & data", count: counts.get("data") ?? 0 },
+            { id: "records", label: "Records", count: counts.get("records") ?? 0 },
+          ]}
+        />
+      </div>
       <p>
         <button disabled={busy} onClick={() => void doExport()}>{busy ? "exporting…" : "Break-glass export"}</button>
         <span className="small muted"> Create a directory with all of your information in clear text</span>
       </p>
       {exported !== null && <div className="banner">{exported}</div>}
-      <p>
-        {(
-          [
-            ["all", "All"],
-            ["drafts", "Drafts"],
-            ["data", "Statements & data"],
-            ["records", "Records"],
-          ] as const
-        ).map(([id, label]) => (
-          <button key={id} className={tab === id ? "" : "secondary"} style={{ marginRight: 6 }} onClick={() => setTab(id)}>
-            {label}
-            {id !== "all" && (counts.get(id) ?? 0) > 0 ? ` (${counts.get(id)})` : ""}
-          </button>
-        ))}
-      </p>
       <div className="actions" style={{ marginBottom: 8 }}>
         <select value={creator} onChange={(e) => setCreator(e.target.value)}>
           <option value="">All creators</option>
