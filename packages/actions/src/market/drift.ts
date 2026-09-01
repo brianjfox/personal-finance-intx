@@ -92,8 +92,18 @@ export function computeDrift(inputs: DriftInputs): DriftReport {
     if (plan.constraints.max_order_value != null && decimal.cmp(value, plan.constraints.max_order_value) > 0) {
       value = plan.constraints.max_order_value;
     }
-    // Whole shares only: floor(value / price).
-    const quantity = decimal.div(value, price).split(".")[0] ?? "0";
+    // Whole shares only: floor(value / price) -- and a SELL can never
+    // exceed what the chosen position holds: a class's excess may be
+    // larger than its largest position (issue #48: 99 BTC of 83.81).
+    let quantity = decimal.div(value, price).split(".")[0] ?? "0";
+    let capped = false;
+    if (side === "SELL") {
+      const held = p.quantity.split(".")[0] ?? "0";
+      if (decimal.cmp(quantity, held) > 0) {
+        quantity = held;
+        capped = true;
+      }
+    }
     if (decimal.isZero(quantity)) continue;
     const estValue = decimal.round(decimal.mul(quantity, price), 2);
     const taxLots =
@@ -108,7 +118,7 @@ export function computeDrift(inputs: DriftInputs): DriftReport {
       quantity,
       est_price: decimal.round(price, 2),
       est_value: estValue,
-      rationale: `${line.asset_class} ${formatPp(line.drift)} ${decimal.cmp(line.drift, "0") > 0 ? "over" : "under"} target (band ${formatPp(plan.band)})`,
+      rationale: `${line.asset_class} ${formatPp(line.drift)} ${decimal.cmp(line.drift, "0") > 0 ? "over" : "under"} target (band ${formatPp(plan.band)})${capped ? `; capped at the ${quantity} ${p.instrument.symbol} held in this position` : ""}`,
       ...(taxLots !== undefined ? { tax_lots: taxLots } : {}),
     });
   }
