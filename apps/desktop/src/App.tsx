@@ -3099,8 +3099,11 @@ function FactLink({ id, children, openFact }: { id: string; children: React.Reac
 type AccountSortKey = "account" | "type" | "value" | "observed";
 
 /** Long account names lose their middle: >70 chars becomes 32 + "..." + 32 (67), full name on hover. */
-function chopMiddle(name: string): string {
-  return name.length > 70 ? `${name.slice(0, 32)}...${name.slice(-32)}` : name;
+/** Middle-ellipsize past `max` chars (the full value stays in the title tooltip). Account ids get a tight max: "acct.schwab.6oDX...CyDVpD1" chops, "acct.ledger_ethereum_6.wallet" does not. */
+function chopMiddle(name: string, max = 70): string {
+  if (name.length <= max) return name;
+  const keep = Math.floor((max - 6) / 2);
+  return `${name.slice(0, keep)}...${name.slice(-keep)}`;
 }
 
 /** The yield slider's ceiling, %/yr. */
@@ -3390,7 +3393,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
               <tbody>
                 {lines.map((l) => (
                   <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
-                    <td title={l.name}><span style={{ fontWeight: 500, color: "var(--strong)" }}>{chopMiddle(l.name)}</span><div className="small muted" title={l.account_id}>{chopMiddle(l.account_id)}</div></td>
+                    <td title={l.name}><span style={{ fontWeight: 500, color: "var(--strong)" }}>{chopMiddle(l.name)}</span><div className="small muted" title={l.account_id}>{chopMiddle(l.account_id, 32)}</div></td>
                     <td className="muted">{l.type}</td>
                     <td className="num">
                       {l.fact_ids.length > 0 ? <FactLink id={l.fact_ids[0] as string} openFact={openFact}>{money(l.value, l.currency)}</FactLink> : money(l.value, l.currency)}
@@ -3484,7 +3487,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
     <div className="modal-scrim" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
         <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
-        <p className="small muted" style={{ marginTop: 0 }} title={accountId}>{chopMiddle(accountId)} · oldest first; sales consume from the top</p>
+        <p className="small muted" style={{ marginTop: 0 }} title={accountId}>{chopMiddle(accountId, 32)} · oldest first; sales consume from the top</p>
         {rows === null && <p className="muted">Loading…</p>}
         {rows !== null && rows.length === 0 && <p className="muted">No lots are recorded for this position yet — they arrive with the institution's next update.</p>}
         {rows !== null && rows.length > 0 && (
@@ -3589,7 +3592,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
           <tbody>
             {sortPositions(rows, sort).map((p) => (
               <tr key={p.fact_id} className={p.provisional ? "prov" : ""}>
-                <td className="small" title={p.account_id}>{chopMiddle(p.account_id)}</td>
+                <td className="small" title={p.account_id}>{chopMiddle(p.account_id, 32)}</td>
                 <td title={p.name ?? undefined}>{p.symbol}<div className="small muted">{chopMiddle(p.name ?? p.asset_class)}</div></td>
                 <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
