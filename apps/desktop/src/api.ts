@@ -18,7 +18,7 @@ export interface Position {
 export interface LotRow {
   fact_id: string; lot_id: string; quantity: string; acquired_at: string; cost_basis: string | null; basis_known: boolean;
   basis_source: "operator" | null; value_at_transfer: string | null; transferred_in: boolean; currency: string;
-  suggested: { amount: string; source: string } | null;
+  suggested: { amount: string; source: string; unit_price: string | null; unit_source: string | null } | null;
 }
 export interface Fact {
   id: string; kind: string; subject: string; key: string; payload: Record<string, unknown>; observed_at: string; effective_at: string;

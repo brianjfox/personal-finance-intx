@@ -40,14 +40,22 @@ function account(now: Date): SnapshotAccount {
 describe("operator-entered lot basis", () => {
   test("suggested default is the arrival value; the entry is badged, journaled, fills the position, and survives the next fetch", async () => {
     const dataDir = tmp();
-    const app = createApp({ dataDir, adapters: [fixtureAdapter("inst.cb", { accounts: [account(new Date())] })], pollMs: 20, inferenceSource: stubSource });
+    const app = createApp({
+      dataDir,
+      adapters: [fixtureAdapter("inst.cb", { accounts: [account(new Date())] })],
+      pollMs: 20,
+      inferenceSource: stubSource,
+      // No network in tests: the market price for the arrival date.
+      historicSpot: async (sym, date) => (sym === "BTC" && date === "2023-11-03" ? "34250.10" : null),
+    });
     try {
       expect((await app.runNightly({ runId: "n1" })).terminalStatus).toBe("completed");
       const before = await app.lotsFor("acct.cb.coinbase", "BTC");
       expect(before).toHaveLength(1);
       expect(before[0]).toMatchObject({ lot_id: "cb:t", basis_known: false, basis_source: null, transferred_in: true });
-      // The default the operator sees: the lot's value on the transfer date.
-      expect(before[0]!.suggested).toEqual({ amount: "68000", source: "its value on the day it arrived" });
+      // The default the operator sees: the lot's value on the transfer date,
+      // and the UNIT price looked up from the provider for that date.
+      expect(before[0]!.suggested).toEqual({ amount: "68000", source: "its value on the day it arrived", unit_price: "34250.10", unit_source: "Coinbase" });
       // Enter the real basis (friendly formatting), correcting the date.
       const r = app.setLotBasis({ accountId: "acct.cb.coinbase", lotId: "cb:t", costBasis: "$52,000", acquiredAt: "Feb 1 2020" });
       expect(r.lot).toMatchObject({ cost_basis: "52000.00", basis_known: true, basis_source: "operator", acquired_at: "2020-02-01" });
