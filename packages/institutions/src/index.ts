@@ -4,6 +4,7 @@ export * from "./coinbase-lots";
 export * from "./csv";
 export * from "./jsondrop";
 export * from "./kraken";
+export * from "./kraken-lots";
 export * from "./csvdrop";
 export * from "./enablebanking";
 export * from "./fixture";
