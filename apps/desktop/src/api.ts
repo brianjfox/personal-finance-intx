@@ -15,6 +15,11 @@ export interface Position {
   market_value: string | null; cost_basis: string | null; basis_known: boolean; currency: string; fact_id: string;
   observed_at: string; effective_at: string; source_doc_id: string | null; provisional: boolean;
 }
+export interface LotRow {
+  fact_id: string; lot_id: string; quantity: string; acquired_at: string; cost_basis: string | null; basis_known: boolean;
+  basis_source: "operator" | null; value_at_transfer: string | null; transferred_in: boolean; currency: string;
+  suggested: { amount: string; source: string } | null;
+}
 export interface Fact {
   id: string; kind: string; subject: string; key: string; payload: Record<string, unknown>; observed_at: string; effective_at: string;
   source_id: string; source_doc_id: string | null; page?: number | null; supersedes: string | null; writer: string; provisional: boolean; batch_id: string;
@@ -247,6 +252,9 @@ export const api = {
   lanStatus: () => get<LanStatus>("/api/lan"),
   lanSet: (enabled: boolean) => post<LanStatus>("/api/lan", { enabled }),
   positions: () => get<Position[]>("/api/positions"),
+  lots: (account: string, symbol: string) => get<LotRow[]>(`/api/lots?account=${encodeURIComponent(account)}&symbol=${encodeURIComponent(symbol)}`),
+  setLotBasis: (account_id: string, lot_id: string, cost_basis: string, acquired_at?: string) =>
+    post<{ lot: LotRow }>("/api/lot/basis", { account_id, lot_id, cost_basis, ...(acquired_at !== undefined && acquired_at !== "" ? { acquired_at } : {}) }),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),
   findings: () => get<Finding[]>("/api/findings"),

@@ -44,8 +44,7 @@ import {
   type ScenarioRequest,
   type ScenarioResult,
   type TaxQuarter,
-  type TaxStage,
-} from "@fin/contracts";
+  type TaxStage, type LotPayload, decimal, type PositionPayload } from "@fin/contracts";
 import {
   redactHttpEntry,
   addInstitutionEntry,
@@ -200,6 +199,10 @@ export interface App {
   removeInstitution(institutionId: string): boolean;
   /** Hide one account (closed + ignored: no data recorded, the feed cannot reopen it) or restore it (reopened; the next fetch fills it in). */
   setAccountIgnored(accountId: string, ignored: boolean): void;
+  /** The position's live tax lots, oldest first, with a suggested default basis for the unknown ones (issue #57). */
+  lotsFor(accountId: string, symbol: string): Promise<LotRow[]>;
+  /** Record the operator's cost basis (and optionally the true acquisition date) for one lot. */
+  setLotBasis(o: { accountId: string; lotId: string; costBasis: string; acquiredAt?: string }): { lot: LotRow };
   /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
   renameInstitution(institutionId: string, name: string): boolean;
   /** Put the listed institutions in that relative order (their slots only; unlisted entries stay put). */
@@ -443,6 +446,49 @@ export function machineKeychainSweepAllowed(o: {
 }): boolean {
   if (o.injectedStore || o.nodeEnv === "test") return false;
   return o.keychainSweepOnWipe?.() ?? true;
+}
+
+/** One live tax lot as the GUI lists it (issue #57). */
+export interface LotRow {
+  fact_id: string;
+  lot_id: string;
+  quantity: string;
+  acquired_at: string;
+  cost_basis: string | null;
+  basis_known: boolean;
+  /** "operator" when the basis was typed in by hand. */
+  basis_source: "operator" | null;
+  value_at_transfer: string | null;
+  transferred_in: boolean;
+  currency: string;
+  /** Default offered when entering a basis: the lot's value on the transfer date. */
+  suggested: { amount: string; source: string } | null;
+}
+
+const symbol_ = (p: LotPayload): string => p.instrument.symbol;
+
+function lotRow(factId: string, p: LotPayload, suggested: LotRow["suggested"]): LotRow {
+  return {
+    fact_id: factId,
+    lot_id: p.lot_id,
+    quantity: p.quantity,
+    acquired_at: p.acquired_at,
+    cost_basis: p.cost_basis,
+    basis_known: p.basis_known,
+    basis_source: p.basis_source ?? null,
+    value_at_transfer: p.value_at_transfer ?? null,
+    transferred_in: p.transferred_in,
+    currency: p.currency,
+    suggested,
+  };
+}
+
+function liveLotsOf(ledger: Ledger, accountId: string, symbol: string): { fact: { id: string }; p: LotPayload }[] {
+  return ledger
+    .asOf({ kind: "lot", subject: accountId })
+    .map((f) => ({ fact: { id: f.id }, p: f.payload as LotPayload }))
+    .filter(({ p }) => p.instrument.symbol.toUpperCase() === symbol.toUpperCase() && !decimal.isZero(p.quantity))
+    .sort((x, y) => x.p.acquired_at.localeCompare(y.p.acquired_at));
 }
 
 export function createApp(opts: AppOptions): App {
@@ -899,6 +945,110 @@ export function createApp(opts: AppOptions): App {
       const removed = removeInstitutionEntry(dataDir, institutionId);
       if (removed) loaded = reloadRegistry();
       return removed;
+    },
+    async lotsFor(accountId, symbol) {
+      const rows = liveLotsOf(ledger, accountId, symbol);
+      const out: LotRow[] = [];
+      for (const { fact, p } of rows) {
+        let suggested: LotRow["suggested"] = null;
+        if (!p.basis_known) {
+          if (p.value_at_transfer != null) suggested = { amount: p.value_at_transfer, source: "its value on the day it arrived" };
+          else {
+            // Best effort: the public historic spot price on the acquisition date.
+            try {
+              const ctl = new AbortController();
+              const t = setTimeout(() => ctl.abort(), 5000);
+              const r = await fetch(`https://api.coinbase.com/v2/prices/${encodeURIComponent(p.instrument.symbol)}-USD/spot?date=${p.acquired_at}`, { signal: ctl.signal });
+              clearTimeout(t);
+              if (r.ok) {
+                const body = (await r.json()) as { data?: { amount?: string } };
+                if (body.data?.amount != null && /^\d+(\.\d+)?$/.test(body.data.amount)) {
+                  suggested = { amount: decimal.round(decimal.mul(body.data.amount, p.quantity), 2), source: `${p.instrument.symbol} at $${body.data.amount} on ${p.acquired_at}` };
+                }
+              }
+            } catch {
+              suggested = null;
+            }
+          }
+        }
+        out.push(lotRow(fact.id, p, suggested));
+      }
+      return out;
+    },
+    setLotBasis({ accountId, lotId, costBasis, acquiredAt }) {
+      const prior = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0];
+      if (prior === undefined) throw new Error(`${accountId} has no lot ${lotId}`);
+      const p = prior.payload as LotPayload;
+      const cleaned = costBasis.replace(/[$,\s]/g, "");
+      if (!/^\d+(\.\d+)?$/.test(cleaned)) throw new Error(`"${costBasis}" is not an amount -- enter the total cost of this lot, in ${p.currency}`);
+      const basis = decimal.round(cleaned, 2);
+      let acquired = p.acquired_at;
+      if (acquiredAt !== undefined && acquiredAt.trim() !== "") {
+        const parsed = parseDateInput(acquiredAt);
+        if (parsed === null) throw new Error(`"${acquiredAt}" is not a date I can read -- try 2020-02-01 or "Feb 1 2020"`);
+        acquired = parsed;
+      }
+      const now = clock();
+      const payload: LotPayload = { ...p, cost_basis: basis, basis_known: true, basis_source: "operator", acquired_at: acquired };
+      ledger.commit({
+        batchId: `lot-basis:${accountId}:${lotId}:${now.toISOString()}`,
+        writer: "assets_manager",
+        note: `cost basis for ${lotId} entered by the operator`,
+        facts: [
+          {
+            kind: "lot",
+            subject: accountId,
+            key: lotId,
+            payload,
+            observed_at: now.toISOString(),
+            effective_at: now.toISOString(),
+            source_id: "operator",
+            source_doc_id: null,
+            supersedes: prior.id,
+            writer: "assets_manager",
+            provisional: false,
+          },
+        ],
+      });
+      // Once every live lot of the symbol is known, the position's own
+      // basis fills in immediately (the nightly fetch keeps it that way).
+      const lots = liveLotsOf(ledger, accountId, symbol_(p));
+      if (lots.length > 0 && lots.every((l) => l.p.basis_known)) {
+        const pos = ledger.asOf({ kind: "position", subject: accountId, key: symbol_(p).toUpperCase() })[0];
+        if (pos !== undefined) {
+          const pp = pos.payload as PositionPayload;
+          ledger.commit({
+            batchId: `lot-basis-pos:${accountId}:${lotId}:${now.toISOString()}`,
+            writer: "assets_manager",
+            facts: [
+              {
+                kind: "position",
+                subject: accountId,
+                key: pos.key,
+                payload: { ...pp, cost_basis: decimal.round(decimal.sum(lots.map((l) => l.p.cost_basis as string)), 2), basis_known: true },
+                observed_at: now.toISOString(),
+                effective_at: now.toISOString(),
+                source_id: "operator",
+                source_doc_id: null,
+                supersedes: pos.id,
+                writer: "assets_manager",
+                provisional: false,
+              },
+            ],
+          });
+        }
+      }
+      ledger.appendJournal({
+        at: now.toISOString(),
+        kind: "system",
+        subject: accountId,
+        summary: `cost basis of lot ${lotId} (${p.quantity} ${symbol_(p)}) set to ${basis} ${p.currency} by the operator${acquired !== p.acquired_at ? `; acquired ${acquired}` : ""}`,
+        detail: { lot_id: lotId, cost_basis: basis, acquired_at: acquired, was: { cost_basis: p.cost_basis, acquired_at: p.acquired_at } },
+        refs: [prior.id],
+        author: "operator",
+      });
+      const fresh = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0]!;
+      return { lot: lotRow(fresh.id, fresh.payload as LotPayload, null) };
     },
     setAccountIgnored(accountId, ignored) {
       const prior = ledger.asOf({ kind: "account", subject: accountId })[0];

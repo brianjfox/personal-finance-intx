@@ -3437,15 +3437,106 @@ function sortPositions<T extends { symbol: string; quantity: string; price: stri
   return out;
 }
 
+/** The position's tax lots (issue #57): list, badge the operator-entered
+ * bases, and let an unknown one be typed in -- prefilled with the lot's
+ * value on the date it was transferred in. */
+function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: string; symbol: string; onClose: () => void; onChanged: () => void }) {
+  const [rows, setRows] = useState<import("./api").LotRow[] | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [basis, setBasis] = useState("");
+  const [acquired, setAcquired] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => api.lots(accountId, symbol).then(setRows).catch((e: unknown) => setError(String(e)));
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId, symbol]);
+  const startEdit = (r: import("./api").LotRow) => {
+    setEditing(r.lot_id);
+    setBasis(r.cost_basis ?? r.suggested?.amount ?? "");
+    setAcquired("");
+    setError(null);
+  };
+  const save = async (r: import("./api").LotRow) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setLotBasis(accountId, r.lot_id, basis, acquired);
+      setEditing(null);
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+        <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
+        <p className="small muted" style={{ marginTop: 0 }} title={accountId}>{chopMiddle(accountId)} · oldest first; sales consume from the top</p>
+        {rows === null && <p className="muted">Loading…</p>}
+        {rows !== null && rows.length === 0 && <p className="muted">No lots are recorded for this position yet — they arrive with the institution's next update.</p>}
+        {rows !== null && rows.length > 0 && (
+          <table>
+            <thead><tr><th>Acquired</th><th className="num">Quantity</th><th className="num">Cost basis</th><th></th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.lot_id}>
+                  <td className="small">{r.acquired_at}{r.transferred_in && <div className="small muted">transferred in</div>}</td>
+                  <td className="num">{maskDigits(r.quantity)}</td>
+                  <td className="num">
+                    {r.basis_known ? (
+                      <>
+                        {money(r.cost_basis, r.currency)}
+                        {r.basis_source === "operator" && <div><span className="pill low" title="You typed this basis in; it survives updates">entered by you</span></div>}
+                      </>
+                    ) : (
+                      <span className="pill medium">unknown</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {editing === r.lot_id ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                        <input value={basis} onChange={(e) => setBasis(e.target.value)} placeholder={`total cost in ${r.currency}`} style={{ width: 180 }} autoFocus />
+                        {r.suggested !== null && !r.basis_known && (
+                          <div className="small muted">Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
+                        )}
+                        <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+                          <button disabled={busy || basis.trim() === ""} onClick={() => void save(r)}>Save</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button className="secondary" onClick={() => startEdit(r)}>{r.basis_known ? "Edit" : "Enter basis"}</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {error !== null && <div className="banner">{error}</div>}
+        <div style={{ marginTop: 12, textAlign: "right" }}><button className="secondary" onClick={onClose}>Close</button></div>
+      </div>
+    </div>
+  );
+}
+
 function Positions({ tick, openFact }: { tick: number; openFact: (id: string) => void }) {
   const [rows, setRows] = useState<Position[]>([]);
   const [bundled, setBundled] = useState<import("./api").ConsolidatedPosition[]>([]);
   const [consolidated, setConsolidated] = useState(true);
   const [sort, setSort] = useState<{ key: PositionSortKey; dir: 1 | -1 } | null>({ key: "value", dir: -1 });
+  const [lotsOf, setLotsOf] = useState<{ account: string; symbol: string } | null>(null);
+  const [bump, setBump] = useState(0);
   useEffect(() => {
     api.positions().then(setRows).catch(() => setRows([]));
     api.positionsConsolidated().then(setBundled).catch(() => setBundled([]));
-  }, [tick]);
+  }, [tick, bump]);
   const clickSort = (key: PositionSortKey) =>
     setSort((s) => {
       if (s === null || s.key !== key) {
@@ -3484,7 +3575,15 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
                 <td className="num">{maskDigits(p.quantity)}</td>
                 <td className="num">{money(p.price, p.currency)}</td>
                 <td className="num"><FactLink id={p.fact_id} openFact={openFact}>{money(p.market_value, p.currency)}</FactLink></td>
-                <td className="num">{p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}</td>
+                <td className="num">
+                  <button
+                    title="View this position's tax lots"
+                    style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "inherit", cursor: "pointer" }}
+                    onClick={() => setLotsOf({ account: p.account_id, symbol: p.symbol })}
+                  >
+                    {p.basis_known ? money(p.cost_basis, p.currency) : <span className="pill medium">unknown</span>}
+                  </button>
+                </td>
                 <td className="small">{when(p.observed_at)}</td>
               </tr>
             ))}
@@ -3510,14 +3609,21 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
                   {p.fact_ids.length > 1 && <span className="small muted"> (+{p.fact_ids.length - 1} facts)</span>}
                 </td>
                 <td className="num">
-                  {p.cost_basis === null ? (
-                    <span className="pill medium">unknown</span>
-                  ) : (
-                    <>
-                      {money(p.cost_basis, p.currency)}
-                      {!p.basis_complete && <span className="pill medium" title="some accounts don't state a basis; the sum understates"> partial</span>}
-                    </>
-                  )}
+                  <button
+                    title={p.account_ids.length === 1 ? "View this position's tax lots" : "Switch to By account to open one account's lots"}
+                    disabled={p.account_ids.length !== 1}
+                    style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "inherit", cursor: p.account_ids.length === 1 ? "pointer" : "default" }}
+                    onClick={() => p.account_ids.length === 1 && setLotsOf({ account: p.account_ids[0] as string, symbol: p.symbol })}
+                  >
+                    {p.cost_basis === null ? (
+                      <span className="pill medium">unknown</span>
+                    ) : (
+                      <>
+                        {money(p.cost_basis, p.currency)}
+                        {!p.basis_complete && <span className="pill medium" title="some accounts don't state a basis; the sum understates"> partial</span>}
+                      </>
+                    )}
+                  </button>
                 </td>
                 <td className="small">{when(p.observed_at)}</td>
               </tr>
@@ -3525,6 +3631,7 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
           </tbody>
         </table>
       )}
+      {lotsOf !== null && <LotsModal accountId={lotsOf.account} symbol={lotsOf.symbol} onClose={() => setLotsOf(null)} onChanged={() => setBump((b) => b + 1)} />}
     </>
   );
 }

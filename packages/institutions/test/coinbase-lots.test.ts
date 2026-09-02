@@ -36,11 +36,19 @@ describe("deriveCoinbaseLots", () => {
       { id: "buy1", type: "buy", status: "completed", created_at: "2024-04-01T00:00:00Z", amount: { amount: "0.5", currency: "BTC" }, native_amount: { amount: "31000", currency: "USD" }, buy: { total: { amount: "31500", currency: "USD" }, fee: { amount: "500", currency: "USD" } } },
     ]);
     expect(d.lots).toEqual([
-      { lot_id: "cb:d1", quantity: "10", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true },
+      { lot_id: "cb:d1", quantity: "10", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "300000.00" },
       { lot_id: "cb:r1", quantity: "0.1", acquired_at: "2024-02-01", cost_basis: "5000.00", transferred_in: false },
       { lot_id: "cb:x1", quantity: "1", acquired_at: "2024-03-01", cost_basis: "65000.00", transferred_in: false },
       { lot_id: "cb:buy1", quantity: "0.5", acquired_at: "2024-04-01", cost_basis: "31500.00", transferred_in: false },
     ]);
+  });
+
+  test("a partially consumed transfer keeps its arrival value scaled, for the operator's default (#57)", () => {
+    const d = deriveCoinbaseLots([
+      txn("d1", "exchange_deposit", "2023-11-03T00:00:00Z", "10", "300000"),
+      txn("s1", "send", "2024-01-01T00:00:00Z", "-4", "-170000"),
+    ]);
+    expect(d.lots).toEqual([{ lot_id: "cb:d1", quantity: "6", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "180000.00" }]);
   });
 
   test("outflows the record cannot cover are a shortfall; pending and zero rows are ignored", () => {

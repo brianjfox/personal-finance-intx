@@ -338,13 +338,25 @@ function normalizeAccount(
       cost_basis: p.cost_basis,
       basis_known: p.cost_basis !== null,
     };
-    positionRefs.push(push({ ...base, kind: "position", key, writer: "assets_manager", payload }));
     // Lots re-derived from history arrive identical night after night (a
     // thousand of them for an active account): only a CHANGED lot gets a
-    // new fact; an unchanged one keeps the fact it has (issue #53).
+    // new fact; an unchanged one keeps the fact it has (issue #53). An
+    // OPERATOR-entered basis outlives re-derivation: the adapter keeps
+    // reporting cost_basis null, and the held basis is carried forward,
+    // scaled by quantity when the lot was partially consumed since
+    // (issue #57) -- the acquisition date the operator corrected too.
     const heldLots = p.lots !== undefined ? new Map(ledger.asOf({ kind: "lot", subject: acct.account_id }).map((f) => [f.key, f.payload as LotPayload])) : new Map<string, LotPayload>();
     const sameLot = (a: LotPayload, b: LotPayload): boolean =>
-      a.quantity === b.quantity && a.cost_basis === b.cost_basis && a.acquired_at === b.acquired_at && a.basis_known === b.basis_known && a.transferred_in === b.transferred_in && a.instrument.symbol === b.instrument.symbol;
+      a.quantity === b.quantity &&
+      a.cost_basis === b.cost_basis &&
+      a.acquired_at === b.acquired_at &&
+      a.basis_known === b.basis_known &&
+      a.transferred_in === b.transferred_in &&
+      (a.value_at_transfer ?? null) === (b.value_at_transfer ?? null) &&
+      (a.basis_source ?? null) === (b.basis_source ?? null) &&
+      a.instrument.symbol === b.instrument.symbol;
+    const effectiveLots: LotPayload[] = [];
+    const changedLots: { key: string; payload: LotPayload }[] = [];
     (p.lots ?? []).forEach((lot, i) => {
       const lotId = lot.lot_id ?? `${p.instrument.symbol}:${lot.acquired_at}:${i}`;
       const lp: LotPayload = {
@@ -356,12 +368,28 @@ function normalizeAccount(
         cost_basis: lot.cost_basis,
         basis_known: lot.cost_basis !== null,
         transferred_in: lot.transferred_in ?? false,
+        ...(lot.value_at_transfer != null ? { value_at_transfer: lot.value_at_transfer } : {}),
         currency: acct.currency,
       };
       const held = heldLots.get(lotId);
+      if (held?.basis_source === "operator" && lp.cost_basis === null && held.cost_basis !== null && !decimal.isZero(held.quantity)) {
+        lp.cost_basis = decimal.round(decimal.div(decimal.mul(held.cost_basis, lp.quantity), held.quantity), 2);
+        lp.basis_known = true;
+        lp.basis_source = "operator";
+        lp.acquired_at = held.acquired_at;
+      }
+      effectiveLots.push(lp);
       if (held !== undefined && sameLot(held, lp)) return;
-      lotRefs.push(push({ ...base, kind: "lot", key: lotId, writer: "assets_manager", payload: lp }));
+      changedLots.push({ key: lotId, payload: lp });
     });
+    // A position whose institution states no basis fills in from its lots
+    // once every one of them is known (issue #57).
+    if (payload.cost_basis === null && p.lots !== undefined && effectiveLots.length > 0 && effectiveLots.every((l) => l.basis_known)) {
+      payload.cost_basis = decimal.round(decimal.sum(effectiveLots.map((l) => l.cost_basis as string)), 2);
+      payload.basis_known = true;
+    }
+    positionRefs.push(push({ ...base, kind: "position", key, writer: "assets_manager", payload }));
+    for (const c of changedLots) lotRefs.push(push({ ...base, kind: "lot", key: c.key, writer: "assets_manager", payload: c.payload }));
     // An adapter that reports lots reports ALL of the symbol's open lots:
     // a ledger lot it no longer lists was consumed (or re-derived under a
     // new id) and is superseded at quantity 0 -- the same rule positions
