@@ -29,6 +29,8 @@ export const SnapshotLot = type({
   /** `null` = the institution did not report a basis. Adapters must not coerce to "0". */
   cost_basis: Decimal.or("null"),
   "transferred_in?": "boolean",
+  /** Fair value of the lot on arrival, when the institution reports one (issue #57). */
+  "value_at_transfer?": Decimal.or("null"),
 });
 
 export const SnapshotPosition = type({

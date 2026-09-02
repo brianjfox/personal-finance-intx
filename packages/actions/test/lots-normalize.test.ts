@@ -27,6 +27,25 @@ const lotsOf = (ledger: ReturnType<typeof openLedger>) =>
     .sort((a, b) => a.key.localeCompare(b.key));
 
 describe("lots through normalize", () => {
+  test("an operator-entered basis survives re-derivation, scaled to what remains; the position basis fills in (#57)", () => {
+    const ledger = openLedger(":memory:");
+    const n1 = night(ledger, "n1", AT1, [{ lot_id: "cb:t", quantity: "4", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "100000" }], "4");
+    n1.commit();
+    // The operator types the basis in (what setLotBasis records).
+    const prior = ledger.asOf({ kind: "lot", subject: "acct.cb.coinbase", key: "cb:t" })[0]!;
+    ledger.commit({
+      batchId: "operator",
+      writer: "assets_manager",
+      facts: [{ kind: "lot", subject: "acct.cb.coinbase", key: "cb:t", payload: { ...(prior.payload as LotPayload), cost_basis: "120000", basis_known: true, basis_source: "operator", acquired_at: "2020-02-01" }, observed_at: AT1, effective_at: AT1, source_id: "operator", source_doc_id: null, supersedes: prior.id, writer: "assets_manager", provisional: false }],
+    });
+    // Next fetch: the adapter re-derives the lot, still basis-less and half consumed.
+    const n2 = night(ledger, "n2", AT2, [{ lot_id: "cb:t", quantity: "2", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "50000" }], "2");
+    const lot = n2.norm.facts.find((f) => f.fact.kind === "lot")!.fact.payload as LotPayload;
+    expect(lot).toMatchObject({ cost_basis: "60000.00", basis_known: true, basis_source: "operator", acquired_at: "2020-02-01", quantity: "2" });
+    const pos = n2.norm.facts.find((f) => f.fact.kind === "position")!.fact.payload as { cost_basis: string | null; basis_known: boolean };
+    expect(pos).toMatchObject({ cost_basis: "60000.00", basis_known: true });
+  });
+
   test("vanished lots close at 0, changed lots re-emit, unchanged lots keep their fact", () => {
     const ledger = openLedger(":memory:");
     const n1 = night(ledger, "n1", AT1, [

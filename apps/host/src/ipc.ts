@@ -48,6 +48,13 @@ export function openCommand(platform: string, url: string): string[] {
 const LanBody = type({ enabled: "boolean" });
 const AccountIgnoreBody = type({ account_id: "string > 0", ignored: "boolean" });
 const ReorderBody = type({ order: "string[]" });
+const LotBasisBody = type({
+  account_id: "string > 0",
+  lot_id: "string > 0",
+  cost_basis: "string > 0",
+  "acquired_at?": "string",
+});
+
 const PlanBody = type({
   band: "string > 0",
   targets: type({ asset_class: "string > 0", weight: "string > 0" }).array(),
@@ -263,6 +270,14 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         }
         if (p === "/api/accounts") return json(views.accounts(app.ledger, asOf));
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
+        if (p === "/api/lots" && req.method === "GET") {
+          return json(await app.lotsFor(q.get("account") ?? "", q.get("symbol") ?? ""));
+        }
+        if (p === "/api/lot/basis" && req.method === "POST") {
+          const body = LotBasisBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.setLotBasis({ accountId: body.account_id, lotId: body.lot_id, costBasis: body.cost_basis, ...(body.acquired_at !== undefined ? { acquiredAt: body.acquired_at } : {}) }));
+        }
         if (p === "/api/positions") {
           return json(q.get("consolidated") === "1" ? views.consolidatedPositions(app.ledger, asOf) : views.positions(app.ledger, asOf));
         }

@@ -33,6 +33,8 @@ export interface DerivedLot {
   /** USD basis of what remains of the lot, or null when Coinbase cannot know it. */
   cost_basis: string | null;
   transferred_in: boolean;
+  /** Fair value of what remains, at arrival prices -- the operator's default when entering a basis (issue #57). */
+  value_at_transfer?: string | null;
 }
 
 export interface LotDerivation {
@@ -78,7 +80,7 @@ export function deriveCoinbaseLots(txns: readonly CoinbaseTxn[], nativeCurrency 
   const rows = txns
     .filter((t) => t.status === "completed" && DEC.test(t.amount?.amount ?? ""))
     .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-  const open: { lot: DerivedLot; unitCost: string | null }[] = [];
+  const open: { lot: DerivedLot; unitCost: string | null; unitValue: string | null }[] = [];
   let net = "0";
   let shortfall = "0";
   const counted: Record<string, number> = {};
@@ -88,9 +90,14 @@ export function deriveCoinbaseLots(txns: readonly CoinbaseTxn[], nativeCurrency 
     counted[t.type] = (counted[t.type] ?? 0) + 1;
     if (decimal.cmp(amt, "0") > 0) {
       const { cost, transferred } = basisOf(t, nativeCurrency);
+      // The arrival's fair value: what the operator is offered as a default
+      // when typing the real basis in (issue #57). Only for lots whose
+      // basis Coinbase cannot know.
+      const arrival = transferred && t.native_amount != null && t.native_amount.currency === nativeCurrency && DEC.test(t.native_amount.amount) ? decimal.abs(t.native_amount.amount) : null;
       open.push({
-        lot: { lot_id: `cb:${t.id}`, quantity: amt, acquired_at: t.created_at.slice(0, 10), cost_basis: cost, transferred_in: transferred },
+        lot: { lot_id: `cb:${t.id}`, quantity: amt, acquired_at: t.created_at.slice(0, 10), cost_basis: cost, transferred_in: transferred, ...(arrival !== null ? { value_at_transfer: arrival } : {}) },
         unitCost: cost === null ? null : decimal.div(cost, amt),
+        unitValue: arrival === null ? null : decimal.div(arrival, amt),
       });
       net = decimal.add(net, amt);
       continue;
@@ -106,13 +113,18 @@ export function deriveCoinbaseLots(txns: readonly CoinbaseTxn[], nativeCurrency 
         const left = decimal.sub(head.lot.quantity, remaining);
         head.lot.quantity = left;
         if (head.unitCost !== null) head.lot.cost_basis = decimal.mul(head.unitCost, left);
+        if (head.unitValue !== null) head.lot.value_at_transfer = decimal.mul(head.unitValue, left);
         remaining = "0";
       }
     }
     if (decimal.cmp(remaining, "0") > 0) shortfall = decimal.add(shortfall, remaining);
   }
   return {
-    lots: open.map((o) => ({ ...o.lot, cost_basis: o.lot.cost_basis === null ? null : decimal.round(o.lot.cost_basis, 2) })),
+    lots: open.map((o) => ({
+      ...o.lot,
+      cost_basis: o.lot.cost_basis === null ? null : decimal.round(o.lot.cost_basis, 2),
+      ...(o.lot.value_at_transfer != null ? { value_at_transfer: decimal.round(o.lot.value_at_transfer, 2) } : {}),
+    })),
     net,
     shortfall,
     counted,

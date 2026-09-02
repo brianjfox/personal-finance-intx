@@ -168,6 +168,10 @@ export const LotPayload = type({
   cost_basis: Decimal.or("null"),
   basis_known: "boolean",
   transferred_in: "boolean",
+  /** Fair value of the lot when it arrived (the institution's number) -- the DEFAULT offered when the operator enters a basis, never the basis itself (issue #57). */
+  "value_at_transfer?": Decimal.or("null"),
+  /** Present when the operator typed the basis in (issue #57): it survives re-derivation and the list shows who said so. */
+  "basis_source?": "'operator'",
   currency: Currency,
 });
 export type LotPayload = typeof LotPayload.infer;
