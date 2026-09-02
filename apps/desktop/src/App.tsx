@@ -3440,6 +3440,14 @@ function sortPositions<T extends { symbol: string; quantity: string; price: stri
 /** The position's tax lots (issue #57): list, badge the operator-entered
  * bases, and let an unknown one be typed in -- prefilled with the lot's
  * value on the date it was transferred in. */
+/** Per-unit price of an aggregate basis over a lot's quantity, as a decimal string — display only. */
+function unitOf(total: string, quantity: string): string | null {
+  const t = Number(String(total).replace(/[$,\s]/g, ""));
+  const q = Number(quantity);
+  if (!Number.isFinite(t) || !Number.isFinite(q) || q <= 0) return null;
+  return (t / q).toFixed(2);
+}
+
 function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: string; symbol: string; onClose: () => void; onChanged: () => void }) {
   const [rows, setRows] = useState<import("./api").LotRow[] | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -3501,8 +3509,14 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
                     {editing === r.lot_id ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
                         <input value={basis} onChange={(e) => setBasis(e.target.value)} placeholder={`total cost in ${r.currency}`} style={{ width: 180 }} autoFocus />
+                        {unitOf(basis, r.quantity) !== null && (
+                          <div className="small muted">= {money(unitOf(basis, r.quantity), r.currency)} per {symbol}</div>
+                        )}
                         {r.suggested !== null && !r.basis_known && (
-                          <div className="small muted">Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
+                          <div className="small muted">
+                            Default: {money(r.suggested.amount, r.currency)}
+                            {unitOf(r.suggested.amount, r.quantity) !== null && <> ({money(unitOf(r.suggested.amount, r.quantity), r.currency)} per {symbol})</>} — {r.suggested.source}
+                          </div>
                         )}
                         <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
                         <div style={{ display: "flex", gap: 8 }}>
