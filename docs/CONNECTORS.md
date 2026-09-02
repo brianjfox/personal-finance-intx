@@ -140,6 +140,21 @@ cash-class position priced by its -USD spot rate. Key rotation: the
 card's "Replace the API key". Live test gate: `KRAKEN_API_KEY` +
 `KRAKEN_PRIVATE_KEY`.
 
+
+**Tax lots.** With the key permission **Query ledger entries** added,
+each update walks `/0/private/Ledgers` (paced for Kraken's rate limit)
+into FIFO lots per symbol: a fiat-quoted trade's basis is the fiat
+leg plus its fee (trade legs pair by `refid`), a crypto-to-crypto trade
+or staking reward opens a lot with a real date but an unknown basis
+(Kraken states no fiat value — the historic-spot default covers it,
+and fees charged in the asset reduce the lot), deposits arrive as
+"basis unknown" transfers, and withdrawals consume oldest-first.
+Internal spot↔staking transfers are skipped. A symbol's lots are kept
+only when the ledger nets exactly to its balance; otherwise they are
+withheld and the fetch log says why. Without the ledger permission the
+walk fails quietly and positions stay lot-less — add lots by hand from
+the Positions page instead.
+
 ## Watch-only wallets (Ledger, Trezor, any address)
 
 A hardware wallet is read WITHOUT the device: paste public addresses
