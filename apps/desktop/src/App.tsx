@@ -3506,7 +3506,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
   };
   return (
     <div className="modal-scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720, maxHeight: "82vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720, maxHeight: "82vh", display: "flex", flexDirection: "column", overflow: "hidden", alignItems: "stretch", textAlign: "left" }}>
         <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
         <p className="small muted" style={{ marginTop: 0 }} title={accountId}>
           {chopMiddle(accountId, 32)} · {rows !== null && rows.length > 0 && <>{rows.length} lot{rows.length === 1 ? "" : "s"} · </>}oldest first; sales consume from the top
