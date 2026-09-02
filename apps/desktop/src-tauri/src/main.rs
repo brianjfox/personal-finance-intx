@@ -1,8 +1,12 @@
-// The Tauri v2 shell (BUILD_PLAN §7): a window, a menu with the kill
-// switch, and the fin-host sidecar -- spawned on startup, killed on
-// exit. The GUI is the same web app fin-host serves; the shell adds
-// only what a browser cannot: the bundled binary, the Keychain-fed API
-// key (macOS), and a double-clickable lifecycle.
+// The Tauri v2 shell (BUILD_PLAN §7): a window, a menu-bar (tray) icon
+// that OWNS the app's life, a menu with the kill switch, and the
+// fin-host sidecar -- spawned on startup, killed only on a real quit.
+// Closing the window merely hides it (issue #67): the host keeps
+// serving so the nightly imports actually run; Quit -- from the tray or
+// the application menu (Cmd+Q) -- is what stops the host. The GUI is
+// the same web app fin-host serves; the shell adds only what a browser
+// cannot: the bundled binary, the Keychain-fed API key (macOS), and a
+// double-clickable lifecycle.
 //
 // Startup sequence (§7.2): resolve the platform's data dir -> read the
 // Anthropic key from the macOS Keychain (service "fin-interchange"; the
@@ -23,11 +27,33 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
 struct HostChild(Mutex<Option<CommandChild>>);
+/// The sidecar's port, for re-opening the window from the tray.
+struct HostPort(u16);
+
+/// Show the main window (created after the health check), or rebuild it
+/// if it is somehow gone. Never touches the host.
+fn open_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Some(port) = app.try_state::<HostPort>().map(|p| p.0) {
+        let url = format!("http://127.0.0.1:{port}/");
+        let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().expect("bad url")))
+            .title("Corbits Personal Finance")
+            .inner_size(1240.0, 860.0)
+            .disable_drag_drop_handler()
+            .build();
+    }
+}
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -147,6 +173,7 @@ fn main() {
             }
             let (_rx, child) = sidecar.spawn().expect("failed to spawn fin-host");
             app.manage(HostChild(Mutex::new(Some(child))));
+            app.manage(HostPort(port));
 
             // The kill switch, reachable from the menu bar.
             let kill = MenuItem::with_id(app, "kill-host", "Kill Switch: Stop fin-host", true, Some("CmdOrCtrl+Shift+K"))?;
@@ -180,6 +207,24 @@ fn main() {
                 }
             });
 
+            // The menu-bar icon owns the app's life (issue #67): the
+            // window is just a view. Open re-shows it; Quit is the real
+            // exit that stops the host.
+            let open_item = MenuItem::with_id(app, "tray-open", "Open Corbits Personal Finance", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "tray-quit", "Quit Corbits Personal Finance", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&open_item, &PredefinedMenuItem::separator(app)?, &quit_item])?;
+            TrayIconBuilder::with_id("fin-tray")
+                .icon(app.default_window_icon().expect("bundle has no icon").clone())
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .tooltip("Corbits Personal Finance — the host keeps running while this icon is here")
+                .on_menu_event(|app_handle, event| match event.id().as_ref() {
+                    "tray-open" => open_main(app_handle),
+                    "tray-quit" => app_handle.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
             // Open the window once the host answers (the host resumes
             // parked runs before listening, so this also waits for that).
             std::thread::spawn(move || {
@@ -203,15 +248,30 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                kill_host(window.app_handle());
+            // Closing the window must NOT stop the host (issue #67): the
+            // nightly imports need it alive. Hide instead; the tray (and
+            // the Dock on macOS) brings it back.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .build(tauri::generate_context!())
         .expect("failed to build the app")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            // A no-windows-left exit request (never an explicit
+            // app.exit/quit, which carries a code) is refused: the tray
+            // owns the lifecycle.
+            tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+                api.prevent_exit();
+            }
+            tauri::RunEvent::Exit => {
                 kill_host(app);
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                open_main(app);
+            }
+            _ => {}
         });
 }
