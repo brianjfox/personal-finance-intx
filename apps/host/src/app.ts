@@ -132,6 +132,8 @@ export interface AppOptions {
   agentFactory?: (def: AgentDefinition<BaseEnv>, env: BaseEnv) => Promise<Agent>;
   /** Test seam: the inference source resolver (default: Anthropic from env). */
   inferenceSource?: () => InferenceSource;
+  /** Test seam: historic spot price of `symbol` in USD on an ISO date; default asks Coinbase's public price endpoint. */
+  historicSpot?: (symbol: string, dateIso: string) => Promise<string | null>;
   /** Model the chat definitions name (default FIN_MODEL or claude-sonnet-5). */
   model?: string;
   /** Connector config (Plaid / Enable Banking): secret store, base-URL overrides (tests/mocks), redirect URL. */
@@ -461,8 +463,8 @@ export interface LotRow {
   value_at_transfer: string | null;
   transferred_in: boolean;
   currency: string;
-  /** Default offered when entering a basis: the lot's value on the transfer date. */
-  suggested: { amount: string; source: string } | null;
+  /** Default offered when entering a basis: the lot's value on the transfer date, plus the market unit price looked up for that date. */
+  suggested: { amount: string; source: string; unit_price: string | null; unit_source: string | null } | null;
 }
 
 const symbol_ = (p: LotPayload): string => p.instrument.symbol;
@@ -492,6 +494,32 @@ function liveLotsOf(ledger: Ledger, accountId: string, symbol: string): { fact: 
 }
 
 export function createApp(opts: AppOptions): App {
+  // Historic USD spot prices, per (symbol, date), looked up once per process.
+  const spotCache = new Map<string, string | null>();
+  const historicSpot = async (symbol: string, date: string): Promise<string | null> => {
+    const key = `${symbol}|${date}`;
+    const hit = spotCache.get(key);
+    if (hit !== undefined) return hit;
+    let price: string | null = null;
+    try {
+      if (opts.historicSpot !== undefined) price = await opts.historicSpot(symbol, date);
+      else {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 5000);
+        const r = await fetch(`https://api.coinbase.com/v2/prices/${encodeURIComponent(symbol)}-USD/spot?date=${date}`, { signal: ctl.signal });
+        clearTimeout(t);
+        if (r.ok) {
+          const body = (await r.json()) as { data?: { amount?: string } };
+          if (body.data?.amount != null && /^\d+(\.\d+)?$/.test(body.data.amount)) price = body.data.amount;
+        }
+      }
+    } catch {
+      price = null;
+    }
+    spotCache.set(key, price);
+    return price;
+  };
+
   const dataDir = path.resolve(opts.dataDir);
   fs.mkdirSync(dataDir, { recursive: true });
   const clock = opts.clock ?? (() => new Date());
@@ -952,23 +980,21 @@ export function createApp(opts: AppOptions): App {
       for (const { fact, p } of rows) {
         let suggested: LotRow["suggested"] = null;
         if (!p.basis_known) {
-          if (p.value_at_transfer != null) suggested = { amount: p.value_at_transfer, source: "its value on the day it arrived" };
-          else {
-            // Best effort: the public historic spot price on the acquisition date.
-            try {
-              const ctl = new AbortController();
-              const t = setTimeout(() => ctl.abort(), 5000);
-              const r = await fetch(`https://api.coinbase.com/v2/prices/${encodeURIComponent(p.instrument.symbol)}-USD/spot?date=${p.acquired_at}`, { signal: ctl.signal });
-              clearTimeout(t);
-              if (r.ok) {
-                const body = (await r.json()) as { data?: { amount?: string } };
-                if (body.data?.amount != null && /^\d+(\.\d+)?$/.test(body.data.amount)) {
-                  suggested = { amount: decimal.round(decimal.mul(body.data.amount, p.quantity), 2), source: `${p.instrument.symbol} at $${body.data.amount} on ${p.acquired_at}` };
-                }
-              }
-            } catch {
-              suggested = null;
-            }
+          // The UNIT price is looked up from the price provider for the
+          // date the lot arrived (the operator's request, issue #57); the
+          // aggregate default prefers the arrival value the institution
+          // itself reported, falling back to unit x quantity.
+          const spot = await historicSpot(p.instrument.symbol, p.acquired_at);
+          const unitPrice = spot ?? (p.value_at_transfer != null && !decimal.isZero(p.quantity) ? decimal.round(decimal.div(p.value_at_transfer, p.quantity), 2) : null);
+          const unitSource = spot !== null ? "Coinbase" : p.value_at_transfer != null ? "from its value on arrival" : null;
+          const amount = p.value_at_transfer ?? (spot !== null ? decimal.round(decimal.mul(spot, p.quantity), 2) : null);
+          if (amount !== null) {
+            suggested = {
+              amount,
+              source: p.value_at_transfer != null ? "its value on the day it arrived" : `${p.instrument.symbol} at $${spot ?? "?"} on ${p.acquired_at}`,
+              unit_price: unitPrice,
+              unit_source: unitSource,
+            };
           }
         }
         out.push(lotRow(fact.id, p, suggested));

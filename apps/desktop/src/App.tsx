@@ -3514,8 +3514,13 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
                         )}
                         {r.suggested !== null && !r.basis_known && (
                           <div className="small muted">
-                            Default: {money(r.suggested.amount, r.currency)}
-                            {unitOf(r.suggested.amount, r.quantity) !== null && <> ({money(unitOf(r.suggested.amount, r.quantity), r.currency)} per {symbol})</>} — {r.suggested.source}
+                            <div>Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
+                            {r.suggested.unit_price !== null && (
+                              <div>
+                                Market price on {r.acquired_at}: {money(r.suggested.unit_price, r.currency)} per {symbol}
+                                {r.suggested.unit_source !== null && <> · {r.suggested.unit_source}</>}
+                              </div>
+                            )}
                           </div>
                         )}
                         <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
