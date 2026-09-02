@@ -383,9 +383,24 @@ function normalizeAccount(
       changedLots.push({ key: lotId, payload: lp });
     });
     // A position whose institution states no basis fills in from its lots
-    // once every one of them is known (issue #57).
-    if (payload.cost_basis === null && p.lots !== undefined && effectiveLots.length > 0 && effectiveLots.every((l) => l.basis_known)) {
-      payload.cost_basis = decimal.round(decimal.sum(effectiveLots.map((l) => l.cost_basis as string)), 2);
+    // once every one is known AND they cover the whole position (issue
+    // #57/#62) -- partial coverage must not masquerade as a full basis.
+    // When the institution reports no lots at all, operator-added ledger
+    // lots (issue #62) serve the same way; they are never superseded here.
+    const basisLots =
+      p.lots !== undefined
+        ? effectiveLots.filter((l) => !decimal.isZero(l.quantity))
+        : ledger
+            .asOf({ kind: "lot", subject: acct.account_id })
+            .map((f) => f.payload as LotPayload)
+            .filter((l) => l.instrument.symbol.toUpperCase() === key && !decimal.isZero(l.quantity));
+    if (
+      payload.cost_basis === null &&
+      basisLots.length > 0 &&
+      basisLots.every((l) => l.basis_known) &&
+      decimal.cmp(decimal.sum(basisLots.map((l) => l.quantity)), payload.quantity) === 0
+    ) {
+      payload.cost_basis = decimal.round(decimal.sum(basisLots.map((l) => l.cost_basis as string)), 2);
       payload.basis_known = true;
     }
     positionRefs.push(push({ ...base, kind: "position", key, writer: "assets_manager", payload }));

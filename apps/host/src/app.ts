@@ -205,6 +205,8 @@ export interface App {
   lotsFor(accountId: string, symbol: string): Promise<LotRow[]>;
   /** Record the operator's cost basis (and optionally the true acquisition date) for one lot. */
   setLotBasis(o: { accountId: string; lotId: string; costBasis: string; acquiredAt?: string }): { lot: LotRow };
+  /** Add a lot by hand for an institution that reports none (issue #62): quantity, date acquired, total cost. */
+  addLot(o: { accountId: string; symbol: string; quantity: string; acquiredAt: string; costBasis: string }): { lot: LotRow };
   /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
   renameInstitution(institutionId: string, name: string): boolean;
   /** Put the listed institutions in that relative order (their slots only; unlisted entries stay put). */
@@ -483,6 +485,42 @@ function lotRow(factId: string, p: LotPayload, suggested: LotRow["suggested"]): 
     currency: p.currency,
     suggested,
   };
+}
+
+/**
+ * A position's own basis is the sum of its lots' ONLY when the lots
+ * cover the whole position and every one is known (issue #62): partial
+ * coverage must not masquerade as a full basis.
+ */
+function fillPositionBasis(ledger: Ledger, accountId: string, symbol: string, now: Date, clock: () => Date): void {
+  void clock;
+  const lots = liveLotsOf(ledger, accountId, symbol);
+  if (lots.length === 0 || !lots.every((l) => l.p.basis_known)) return;
+  const pos = ledger.asOf({ kind: "position", subject: accountId, key: symbol.trim().toUpperCase() })[0];
+  if (pos === undefined) return;
+  const pp = pos.payload as PositionPayload;
+  if (decimal.cmp(decimal.sum(lots.map((l) => l.p.quantity)), pp.quantity) !== 0) return;
+  const basis = decimal.round(decimal.sum(lots.map((l) => l.p.cost_basis as string)), 2);
+  if (pp.cost_basis === basis && pp.basis_known) return;
+  ledger.commit({
+    batchId: `lot-basis-pos:${accountId}:${symbol}:${now.toISOString()}`,
+    writer: "assets_manager",
+    facts: [
+      {
+        kind: "position",
+        subject: accountId,
+        key: pos.key,
+        payload: { ...pp, cost_basis: basis, basis_known: true },
+        observed_at: now.toISOString(),
+        effective_at: now.toISOString(),
+        source_id: "operator",
+        source_doc_id: null,
+        supersedes: pos.id,
+        writer: "assets_manager",
+        provisional: false,
+      },
+    ],
+  });
 }
 
 function liveLotsOf(ledger: Ledger, accountId: string, symbol: string): { fact: { id: string }; p: LotPayload }[] {
@@ -1036,34 +1074,7 @@ export function createApp(opts: AppOptions): App {
           },
         ],
       });
-      // Once every live lot of the symbol is known, the position's own
-      // basis fills in immediately (the nightly fetch keeps it that way).
-      const lots = liveLotsOf(ledger, accountId, symbol_(p));
-      if (lots.length > 0 && lots.every((l) => l.p.basis_known)) {
-        const pos = ledger.asOf({ kind: "position", subject: accountId, key: symbol_(p).toUpperCase() })[0];
-        if (pos !== undefined) {
-          const pp = pos.payload as PositionPayload;
-          ledger.commit({
-            batchId: `lot-basis-pos:${accountId}:${lotId}:${now.toISOString()}`,
-            writer: "assets_manager",
-            facts: [
-              {
-                kind: "position",
-                subject: accountId,
-                key: pos.key,
-                payload: { ...pp, cost_basis: decimal.round(decimal.sum(lots.map((l) => l.p.cost_basis as string)), 2), basis_known: true },
-                observed_at: now.toISOString(),
-                effective_at: now.toISOString(),
-                source_id: "operator",
-                source_doc_id: null,
-                supersedes: pos.id,
-                writer: "assets_manager",
-                provisional: false,
-              },
-            ],
-          });
-        }
-      }
+      fillPositionBasis(ledger, accountId, symbol_(p), now, clock);
       ledger.appendJournal({
         at: now.toISOString(),
         kind: "system",
@@ -1071,6 +1082,70 @@ export function createApp(opts: AppOptions): App {
         summary: `cost basis of lot ${lotId} (${p.quantity} ${symbol_(p)}) set to ${basis} ${p.currency} by the operator${acquired !== p.acquired_at ? `; acquired ${acquired}` : ""}`,
         detail: { lot_id: lotId, cost_basis: basis, acquired_at: acquired, was: { cost_basis: p.cost_basis, acquired_at: p.acquired_at } },
         refs: [prior.id],
+        author: "operator",
+      });
+      const fresh = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0]!;
+      return { lot: lotRow(fresh.id, fresh.payload as LotPayload, null) };
+    },
+    addLot({ accountId, symbol, quantity, acquiredAt, costBasis }) {
+      const pos = ledger.asOf({ kind: "position", subject: accountId, key: symbol.trim().toUpperCase() })[0];
+      if (pos === undefined) throw new Error(`${accountId} holds no ${symbol} position to attach a lot to`);
+      const pp = pos.payload as PositionPayload;
+      const qty = quantity.replace(/[,\s]/g, "");
+      if (!/^\d+(\.\d+)?$/.test(qty) || decimal.isZero(qty)) throw new Error(`"${quantity}" is not a quantity of ${symbol}`);
+      const cleaned = costBasis.replace(/[$,\s]/g, "");
+      if (!/^\d+(\.\d+)?$/.test(cleaned)) throw new Error(`"${costBasis}" is not an amount -- enter the total cost of this lot, in ${pp.currency}`);
+      const basis = decimal.round(cleaned, 2);
+      const acquired = parseDateInput(acquiredAt);
+      if (acquired === null) throw new Error(`"${acquiredAt}" is not a date I can read -- try 2021-05-01 or "May 1 2021"`);
+      // The lots of a position may never sum past what the position holds.
+      const existing = liveLotsOf(ledger, accountId, symbol);
+      const total = decimal.add(decimal.sum(existing.map((l) => l.p.quantity)), qty);
+      if (decimal.cmp(total, pp.quantity) > 0) {
+        throw new Error(`these lots would total ${total} ${symbol} but the position holds ${pp.quantity} -- adjust the quantity or edit an existing lot`);
+      }
+      const now = clock();
+      const lotId = `op:${newId("l").slice(2)}`;
+      const payload: LotPayload = {
+        account_id: accountId,
+        lot_id: lotId,
+        instrument: pp.instrument,
+        quantity: qty,
+        acquired_at: acquired,
+        cost_basis: basis,
+        basis_known: true,
+        transferred_in: false,
+        basis_source: "operator",
+        currency: pp.currency,
+      };
+      ledger.commit({
+        batchId: `lot-add:${accountId}:${lotId}`,
+        writer: "assets_manager",
+        note: `lot added by the operator`,
+        facts: [
+          {
+            kind: "lot",
+            subject: accountId,
+            key: lotId,
+            payload,
+            observed_at: now.toISOString(),
+            effective_at: now.toISOString(),
+            source_id: "operator",
+            source_doc_id: null,
+            supersedes: null,
+            writer: "assets_manager",
+            provisional: false,
+          },
+        ],
+      });
+      fillPositionBasis(ledger, accountId, symbol, now, clock);
+      ledger.appendJournal({
+        at: now.toISOString(),
+        kind: "system",
+        subject: accountId,
+        summary: `lot ${lotId} added by the operator: ${qty} ${symbol} acquired ${acquired}, cost ${basis} ${pp.currency}`,
+        detail: { lot_id: lotId, quantity: qty, acquired_at: acquired, cost_basis: basis },
+        refs: [pos.id],
         author: "operator",
       });
       const fresh = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0]!;

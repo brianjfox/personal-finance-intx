@@ -253,6 +253,8 @@ export const api = {
   lanSet: (enabled: boolean) => post<LanStatus>("/api/lan", { enabled }),
   positions: () => get<Position[]>("/api/positions"),
   lots: (account: string, symbol: string) => get<LotRow[]>(`/api/lots?account=${encodeURIComponent(account)}&symbol=${encodeURIComponent(symbol)}`),
+  addLot: (account_id: string, symbol: string, quantity: string, acquired_at: string, cost_basis: string) =>
+    post<{ lot: LotRow }>("/api/lot/add", { account_id, symbol, quantity, acquired_at, cost_basis }),
   setLotBasis: (account_id: string, lot_id: string, cost_basis: string, acquired_at?: string) =>
     post<{ lot: LotRow }>("/api/lot/basis", { account_id, lot_id, cost_basis, ...(acquired_at !== undefined && acquired_at !== "" ? { acquired_at } : {}) }),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
