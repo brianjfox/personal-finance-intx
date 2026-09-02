@@ -48,6 +48,14 @@ export function openCommand(platform: string, url: string): string[] {
 const LanBody = type({ enabled: "boolean" });
 const AccountIgnoreBody = type({ account_id: "string > 0", ignored: "boolean" });
 const ReorderBody = type({ order: "string[]" });
+const LotAddBody = type({
+  account_id: "string > 0",
+  symbol: "string > 0",
+  quantity: "string > 0",
+  acquired_at: "string > 0",
+  cost_basis: "string > 0",
+});
+
 const LotBasisBody = type({
   account_id: "string > 0",
   lot_id: "string > 0",
@@ -272,6 +280,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/balances") return json(views.balances(app.ledger, asOf));
         if (p === "/api/lots" && req.method === "GET") {
           return json(await app.lotsFor(q.get("account") ?? "", q.get("symbol") ?? ""));
+        }
+        if (p === "/api/lot/add" && req.method === "POST") {
+          const body = LotAddBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          return json(app.addLot({ accountId: body.account_id, symbol: body.symbol, quantity: body.quantity, acquiredAt: body.acquired_at, costBasis: body.cost_basis }));
         }
         if (p === "/api/lot/basis" && req.method === "POST") {
           const body = LotBasisBody(await req.json());

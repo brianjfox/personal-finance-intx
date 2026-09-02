@@ -3456,6 +3456,10 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
   const [editing, setEditing] = useState<string | null>(null);
   const [basis, setBasis] = useState("");
   const [acquired, setAcquired] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [addQty, setAddQty] = useState("");
+  const [addDate, setAddDate] = useState("");
+  const [addBasis, setAddBasis] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = () => api.lots(accountId, symbol).then(setRows).catch((e: unknown) => setError(String(e)));
@@ -3468,6 +3472,23 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
     setBasis(r.cost_basis ?? r.suggested?.amount ?? "");
     setAcquired("");
     setError(null);
+  };
+  const addLot = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addLot(accountId, symbol, addQty, addDate, addBasis);
+      setAdding(false);
+      setAddQty("");
+      setAddDate("");
+      setAddBasis("");
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   };
   const save = async (r: import("./api").LotRow) => {
     setBusy(true);
@@ -3489,7 +3510,12 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
         <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
         <p className="small muted" style={{ marginTop: 0 }} title={accountId}>{chopMiddle(accountId, 32)} · oldest first; sales consume from the top</p>
         {rows === null && <p className="muted">Loading…</p>}
-        {rows !== null && rows.length === 0 && <p className="muted">No lots are recorded for this position yet — they arrive with the institution's next update.</p>}
+        {rows !== null && rows.length === 0 && (
+          <p className="muted">
+            This institution doesn't report tax lots for {symbol} — Coinbase connections derive them from history; others cannot. Add what you know below: each lot is a
+            quantity, the date you acquired it, and what you paid.
+          </p>
+        )}
         {rows !== null && rows.length > 0 && (
           <table>
             <thead><tr><th>Acquired</th><th className="num">Quantity</th><th className="num">Cost basis</th><th></th></tr></thead>
@@ -3541,8 +3567,23 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
             </tbody>
           </table>
         )}
+        {adding && (
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 12, flexWrap: "wrap" }}>
+            <input value={addQty} onChange={(e) => setAddQty(e.target.value)} placeholder={`quantity of ${symbol}`} style={{ width: 150 }} autoFocus />
+            <input value={addDate} onChange={(e) => setAddDate(e.target.value)} placeholder={'acquired — "May 1 2021"'} style={{ width: 170 }} />
+            <div>
+              <input value={addBasis} onChange={(e) => setAddBasis(e.target.value)} placeholder="total cost" style={{ width: 140 }} />
+              {unitOf(addBasis, addQty) !== null && <div className="small muted">= {money(unitOf(addBasis, addQty), "USD")} per {symbol}</div>}
+            </div>
+            <button className="secondary" disabled={busy} onClick={() => setAdding(false)}>Cancel</button>
+            <button disabled={busy || addQty.trim() === "" || addDate.trim() === "" || addBasis.trim() === ""} onClick={() => void addLot()}>Save lot</button>
+          </div>
+        )}
         {error !== null && <div className="banner">{error}</div>}
-        <div style={{ marginTop: 12, textAlign: "right" }}><button className="secondary" onClick={onClose}>Close</button></div>
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between" }}>
+          {!adding ? <button className="secondary" onClick={() => { setAdding(true); setError(null); }}>Add a lot</button> : <span />}
+          <button className="secondary" onClick={onClose}>Close</button>
+        </div>
       </div>
     </div>
   );
