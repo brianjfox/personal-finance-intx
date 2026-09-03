@@ -56,6 +56,41 @@ fn open_main(app: &tauri::AppHandle) {
     }
 }
 
+/// The static splash the window opens on (issue #67 follow-up): shown
+/// instantly, it polls the host itself (a no-cors fetch resolves on any
+/// HTTP answer and rejects on connection-refused) and replaces to the
+/// app the moment the host is up -- however long the first boot takes.
+fn splash_html(port: u16) -> String {
+    let url = format!("http://127.0.0.1:{port}/");
+    format!(
+        r##"<!doctype html><html><head><meta charset="utf-8"><title>Corbits Personal Finance</title><style>
+  :root {{ color-scheme: light dark; }}
+  body {{ margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+         font: 15px -apple-system, system-ui, sans-serif; background: #f6f5f2; color: #4b4237; }}
+  @media (prefers-color-scheme: dark) {{ body {{ background: #201d1a; color: #cfc6ba; }} }}
+  .spin {{ width: 22px; height: 22px; border: 3px solid #d9893d44; border-top-color: #d9893d; border-radius: 50%; animation: r 0.9s linear infinite; }}
+  @keyframes r {{ to {{ transform: rotate(360deg); }} }}
+  .name {{ font-size: 19px; font-weight: 600; letter-spacing: 0.2px; }}
+  .note {{ opacity: 0.75; }}
+</style></head><body>
+<svg width="72" height="72" viewBox="106 96 330 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Corbits mark">
+<defs><mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><line x1="128" y1="388" x2="396" y2="238" stroke="#000" stroke-width="32" stroke-linecap="round"/><polygon points="427,220 406,255 386,221" fill="#000" stroke="#000" stroke-width="18" stroke-linejoin="round"/></mask></defs>
+<g mask="url(#cut)" fill="#D9893D"><rect x="140" y="336" width="48" height="60" rx="8"/><rect x="204" y="312" width="48" height="84" rx="8"/><rect x="268" y="284" width="48" height="112" rx="8"/><rect x="332" y="248" width="48" height="148" rx="8"/></g>
+<g fill="#D9893D" stroke="#D9893D"><line x1="128" y1="388" x2="396" y2="238" stroke-width="14" stroke-linecap="round"/><polygon points="427,220 406,255 386,221" stroke-width="4" stroke-linejoin="round"/></g>
+</svg>
+<div class="name">Corbits Personal Finance</div>
+<div style="display:flex;align-items:center;gap:10px"><div class="spin"></div><div class="note">Starting the household host&hellip;</div></div>
+<script>
+  const url = {url:?};
+  const probe = () => fetch(url + "api/health", {{ mode: "no-cors", cache: "no-store" }})
+    .then(() => location.replace(url))
+    .catch(() => setTimeout(probe, 600));
+  probe();
+</script>
+</body></html>"##
+    )
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -138,11 +173,21 @@ fn kill_host(app: &tauri::AppHandle) {
 }
 
 fn main() {
+    let splash_port = std::sync::Arc::new(std::sync::atomic::AtomicU16::new(0));
+    let splash_port_reader = splash_port.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .register_uri_scheme_protocol("splash", move |_ctx, _req| {
+            let port = splash_port_reader.load(std::sync::atomic::Ordering::SeqCst);
+            tauri::http::Response::builder()
+                .header("content-type", "text/html; charset=utf-8")
+                .body(splash_html(port).into_bytes())
+                .expect("splash response")
+        })
+        .setup(move |app| {
             let handle = app.handle().clone();
             let port = free_port();
+            splash_port.store(port, std::sync::atomic::Ordering::SeqCst);
 
             let data_dir = default_data_dir(app.path().home_dir().expect("no home directory"));
             std::fs::create_dir_all(&data_dir).ok();
@@ -230,13 +275,13 @@ fn main() {
                 })
                 .build(app)?;
 
-            // The window opens IMMEDIATELY -- a double-click that shows
-            // nothing for up to a minute reads as a dead app. It points
-            // at the host's port from the start; once the host answers
-            // (it resumes parked runs before listening) the page reloads
-            // and the title drops its "starting" note.
-            let url = format!("http://127.0.0.1:{port}/");
-            let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().expect("bad url")))
+            // The window opens IMMEDIATELY on a static splash -- a
+            // double-click that shows nothing (or a blank page) reads as
+            // a dead app. The splash polls the host itself and replaces
+            // to the app the moment it answers; the health thread below
+            // is the belt-and-braces fallback and fixes the title.
+            let splash_url = if cfg!(windows) { "http://splash.localhost/" } else { "splash://localhost/" };
+            let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(splash_url.parse().expect("bad url")))
                 .title("Corbits Personal Finance — starting the host…")
                 .inner_size(1240.0, 860.0)
                 // Tauri's drag-drop handler intercepts native drags
