@@ -223,6 +223,49 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           opts.users.logout(token);
           return json({ ok: true });
         }
+        // The menu-bar tray (the desktop shell's Rust side) has no session
+        // token; it gets a LOOPBACK-ONLY surface (issue #72): the net-worth
+        // figure the operator chose to put in their own menu bar, and the
+        // refresh-all trigger. In users mode both resolve the most recently
+        // active session -- nobody signed in (or a locked volume) means
+        // nothing is revealed and nothing runs.
+        if (p.startsWith("/api/tray/")) {
+          const ip = server.requestIP(req)?.address ?? "";
+          if (ip !== "127.0.0.1" && ip !== "::1" && ip !== "::ffff:127.0.0.1") return json({ error: "tray endpoints are local-only" }, 403);
+          const trayApp = (): App | null => {
+            if (opts.users === undefined) return opts.app!;
+            const me = opts.users.activeUser();
+            if (me === null) return null;
+            try {
+              return opts.users.appFor(me.id);
+            } catch {
+              return null; // locked volume: signed out mid-flight
+            }
+          };
+          if (p === "/api/tray/summary" && req.method === "GET") {
+            const a = trayApp();
+            if (a === null) return json({ available: false, reason: "nobody is signed in" });
+            try {
+              const fx = await a.getFx();
+              const nw = views.netWorth(a.ledger, { currency: fx.to, rates: fx.rates });
+              return json({ available: true, net_worth: nw.net_worth, currency: fx.to });
+            } catch (e) {
+              return json({ available: false, reason: e instanceof Error ? e.message : String(e) });
+            }
+          }
+          if (p === "/api/tray/refresh" && req.method === "POST") {
+            const a = trayApp();
+            if (a === null) return json({ started: false, reason: "nobody is signed in" });
+            if (running.has("tray:refresh")) return json({ started: false, already_running: true });
+            const run = a
+              .runNightly({})
+              .catch(() => undefined)
+              .finally(() => running.delete("tray:refresh"));
+            running.set("tray:refresh", run);
+            return json({ started: true });
+          }
+          return notFound();
+        }
         // Identity comes from the SESSION, never from anything the client
         // asserts: a user sees exactly their own data. Only /api/ needs
         // it -- the GUI's static files stay public (they hold no data).
