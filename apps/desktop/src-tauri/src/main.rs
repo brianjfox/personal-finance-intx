@@ -26,6 +26,7 @@ use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -214,7 +215,11 @@ fn main() {
             let quit_item = MenuItem::with_id(app, "tray-quit", "Quit Corbits Personal Finance", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&open_item, &PredefinedMenuItem::separator(app)?, &quit_item])?;
             TrayIconBuilder::with_id("fin-tray")
-                .icon(app.default_window_icon().expect("bundle has no icon").clone())
+                // A menu-bar icon must be a TEMPLATE image (monochrome,
+                // alpha-only) so macOS tints it for the bar; the bundle
+                // icon carries its tile and looks wrong there.
+                .icon(Image::from_bytes(include_bytes!("../icons/tray-template.png")).expect("bad tray icon"))
+                .icon_as_template(true)
                 .menu(&tray_menu)
                 .show_menu_on_left_click(true)
                 .tooltip("Corbits Personal Finance — the host keeps running while this icon is here")
@@ -225,24 +230,33 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Open the window once the host answers (the host resumes
-            // parked runs before listening, so this also waits for that).
+            // The window opens IMMEDIATELY -- a double-click that shows
+            // nothing for up to a minute reads as a dead app. It points
+            // at the host's port from the start; once the host answers
+            // (it resumes parked runs before listening) the page reloads
+            // and the title drops its "starting" note.
+            let url = format!("http://127.0.0.1:{port}/");
+            let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse().expect("bad url")))
+                .title("Corbits Personal Finance — starting the host…")
+                .inner_size(1240.0, 860.0)
+                // Tauri's drag-drop handler intercepts native drags
+                // for file-drop delivery, which prevents in-page
+                // HTML5 drag-and-drop (the institution-card
+                // reorder) from ever receiving the drop. Uploads
+                // use a file input, so nothing needs the handler.
+                .disable_drag_drop_handler()
+                .build();
             std::thread::spawn(move || {
                 let healthy = wait_for_health(port, Duration::from_secs(60));
-                let url = format!("http://127.0.0.1:{port}/");
                 let title = if healthy { "Corbits Personal Finance" } else { "Corbits Personal Finance (host not responding)" };
                 let handle2 = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
-                    let _ = WebviewWindowBuilder::new(&handle2, "main", WebviewUrl::External(url.parse().expect("bad url")))
-                        .title(title)
-                        .inner_size(1240.0, 860.0)
-                        // Tauri's drag-drop handler intercepts native drags
-                        // for file-drop delivery, which prevents in-page
-                        // HTML5 drag-and-drop (the institution-card
-                        // reorder) from ever receiving the drop. Uploads
-                        // use a file input, so nothing needs the handler.
-                        .disable_drag_drop_handler()
-                        .build();
+                    if let Some(w) = handle2.get_webview_window("main") {
+                        let _ = w.set_title(title);
+                        if healthy {
+                            let _ = w.eval("location.reload()");
+                        }
+                    }
                 });
             });
             Ok(())
