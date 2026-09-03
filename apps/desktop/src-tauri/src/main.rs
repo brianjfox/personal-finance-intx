@@ -27,9 +27,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
@@ -89,6 +90,64 @@ fn splash_html(port: u16) -> String {
 </script>
 </body></html>"##
     )
+}
+
+/// One tiny loopback HTTP exchange with the sidecar (no client crate):
+/// returns the response body on a 200, None otherwise.
+fn tray_http(port: u16, method: &str, path: &str) -> Option<String> {
+    use std::io::Write;
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+    s.write_all(format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes())
+        .ok()?;
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).ok()?;
+    if !buf.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    buf.split("\r\n\r\n").nth(1).map(|b| b.to_string())
+}
+
+/// "15390927.0124" -> "15,390,927" (dollars, separators, no cents).
+fn pretty_amount(raw: &str) -> String {
+    let whole = raw.split('.').next().unwrap_or(raw);
+    let (neg, digits) = whole.strip_prefix('-').map_or((false, whole), |d| (true, d));
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if neg {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// The tray's net-worth title, fetched from the loopback tray endpoint;
+/// None when nobody is signed in (or the host is not up yet).
+fn tray_networth_title(port: u16) -> Option<String> {
+    let body = tray_http(port, "GET", "/api/tray/summary")?;
+    if !body.contains("\"available\":true") {
+        return None;
+    }
+    let nw = body.split("\"net_worth\":\"").nth(1)?.split('"').next()?;
+    let currency = body.split("\"currency\":\"").nth(1).and_then(|c| c.split('"').next()).unwrap_or("USD");
+    Some(if currency == "USD" { format!("${}", pretty_amount(nw)) } else { format!("{} {}", pretty_amount(nw), currency) })
+}
+
+/// The shell's own tiny setting (issue #72): whether the menu bar shows
+/// the net worth. Lives beside the household data, no serde needed.
+fn tray_config_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("tray.json")
+}
+fn read_show_net_worth(data_dir: &std::path::Path) -> bool {
+    std::fs::read_to_string(tray_config_path(data_dir)).map(|s| s.contains("\"show_net_worth\":true")).unwrap_or(false)
+}
+fn write_show_net_worth(data_dir: &std::path::Path, on: bool) {
+    let _ = std::fs::write(tray_config_path(data_dir), format!("{{\"show_net_worth\":{on}}}"));
 }
 
 fn free_port() -> u16 {
@@ -177,6 +236,7 @@ fn main() {
     let splash_port_reader = splash_port.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .register_uri_scheme_protocol("splash", move |_ctx, _req| {
             let port = splash_port_reader.load(std::sync::atomic::Ordering::SeqCst);
             tauri::http::Response::builder()
@@ -257,8 +317,24 @@ fn main() {
             // window is just a view. Open re-shows it; Quit is the real
             // exit that stops the host.
             let open_item = MenuItem::with_id(app, "tray-open", "Open Corbits Personal Finance", true, None::<&str>)?;
+            let refresh_item = MenuItem::with_id(app, "tray-refresh", "Refresh Assets", true, None::<&str>)?;
+            let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+            let autostart_item = CheckMenuItem::with_id(app, "tray-autostart", "Launch at Login", true, autostart_on, None::<&str>)?;
+            let show_nw = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(read_show_net_worth(&data_dir)));
+            let shownw_item = CheckMenuItem::with_id(app, "tray-shownw", "Show Net Worth", true, show_nw.load(std::sync::atomic::Ordering::SeqCst), None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "tray-quit", "Quit Corbits Personal Finance", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&open_item, &PredefinedMenuItem::separator(app)?, &quit_item])?;
+            let tray_menu = Menu::with_items(
+                app,
+                &[
+                    &open_item,
+                    &refresh_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &autostart_item,
+                    &shownw_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &quit_item,
+                ],
+            )?;
             TrayIconBuilder::with_id("fin-tray")
                 // A menu-bar icon must be a TEMPLATE image (monochrome,
                 // alpha-only) so macOS tints it for the bar; the bundle
@@ -268,12 +344,62 @@ fn main() {
                 .menu(&tray_menu)
                 .show_menu_on_left_click(true)
                 .tooltip("Corbits Personal Finance — the host keeps running while this icon is here")
-                .on_menu_event(|app_handle, event| match event.id().as_ref() {
-                    "tray-open" => open_main(app_handle),
-                    "tray-quit" => app_handle.exit(0),
-                    _ => {}
+                .on_menu_event({
+                    let autostart_item = autostart_item.clone();
+                    let shownw_item = shownw_item.clone();
+                    let show_nw = show_nw.clone();
+                    let data_dir = data_dir.clone();
+                    move |app_handle, event| match event.id().as_ref() {
+                        "tray-open" => open_main(app_handle),
+                        "tray-refresh" => {
+                            std::thread::spawn(move || {
+                                let _ = tray_http(port, "POST", "/api/tray/refresh");
+                            });
+                        }
+                        "tray-autostart" => {
+                            let auto = app_handle.autolaunch();
+                            if auto.is_enabled().unwrap_or(false) {
+                                let _ = auto.disable();
+                            } else {
+                                let _ = auto.enable();
+                            }
+                            let _ = autostart_item.set_checked(auto.is_enabled().unwrap_or(false));
+                        }
+                        "tray-shownw" => {
+                            let on = !show_nw.load(std::sync::atomic::Ordering::SeqCst);
+                            show_nw.store(on, std::sync::atomic::Ordering::SeqCst);
+                            write_show_net_worth(&data_dir, on);
+                            let _ = shownw_item.set_checked(on);
+                            let title = if on { tray_networth_title(port) } else { None };
+                            if let Some(tray) = app_handle.tray_by_id("fin-tray") {
+                                let _ = tray.set_title(title.as_deref());
+                            }
+                        }
+                        "tray-quit" => app_handle.exit(0),
+                        _ => {}
+                    }
                 })
                 .build(app)?;
+
+            // The net-worth title, refreshed once a minute while enabled
+            // (and cleared when nobody is signed in). issue #72.
+            {
+                let handle_nw = app.handle().clone();
+                let show_nw = show_nw.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(8));
+                    loop {
+                        let title = if show_nw.load(std::sync::atomic::Ordering::SeqCst) { tray_networth_title(port) } else { None };
+                        let handle2 = handle_nw.clone();
+                        let _ = handle_nw.run_on_main_thread(move || {
+                            if let Some(tray) = handle2.tray_by_id("fin-tray") {
+                                let _ = tray.set_title(title.as_deref());
+                            }
+                        });
+                        std::thread::sleep(Duration::from_secs(60));
+                    }
+                });
+            }
 
             // The window opens IMMEDIATELY on a static splash -- a
             // double-click that shows nothing (or a blank page) reads as

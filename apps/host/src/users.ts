@@ -162,6 +162,8 @@ export interface UserManager {
   /** The user behind a session token; null when the token is unknown or expired. */
   sessionUser(token: string): PublicUser | null;
   logout(token: string): void;
+  /** The most recently active, unexpired session's user (the tray's notion of "the" user), or null when nobody is signed in. */
+  activeUser(): PublicUser | null;
 }
 
 export function createUserManager(opts: UserManagerOptions): UserManager {
@@ -243,6 +245,17 @@ export function createUserManager(opts: UserManagerOptions): UserManager {
   return {
     rootDir: root,
     list: () => file.users.map(publicUser),
+    activeUser() {
+      const now = clock().getTime();
+      let best: { id: string; lastSeen: number } | null = null;
+      for (const s of sessions.values()) {
+        if (now - s.lastSeen > SESSION_IDLE_MS) continue;
+        if (best === null || s.lastSeen > best.lastSeen) best = s;
+      }
+      if (best === null) return null;
+      const u = file.users.find((x) => x.id === best!.id);
+      return u === undefined ? null : publicUser(u);
+    },
     count: () => file.users.length,
     add(name, password) {
       const trimmed = name.trim();
