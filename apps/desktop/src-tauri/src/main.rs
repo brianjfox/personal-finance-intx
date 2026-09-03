@@ -247,14 +247,20 @@ fn main() {
                 .disable_drag_drop_handler()
                 .build();
             std::thread::spawn(move || {
-                let healthy = wait_for_health(port, Duration::from_secs(60));
+                let healthy = wait_for_health(port, Duration::from_secs(120));
                 let title = if healthy { "Corbits Personal Finance" } else { "Corbits Personal Finance (host not responding)" };
                 let handle2 = handle.clone();
+                let nav_url = format!("http://127.0.0.1:{port}/");
                 let _ = handle.run_on_main_thread(move || {
                     if let Some(w) = handle2.get_webview_window("main") {
                         let _ = w.set_title(title);
                         if healthy {
-                            let _ = w.eval("location.reload()");
+                            // The window's first load raced the host and
+                            // failed to a BLANK page; location.reload()
+                            // on about:blank is a no-op. Replace with the
+                            // absolute URL instead -- that navigates from
+                            // any context, blank included.
+                            let _ = w.eval(&format!("window.location.replace('{nav_url}')"));
                         }
                     }
                 });
