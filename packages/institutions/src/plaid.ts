@@ -7,7 +7,7 @@
 // transaction is idempotent: facts key on txn_id) -- and the raw API
 // responses are returned as a document so the vault keeps the evidence.
 
-import type { AccountType, AssetClass, TransactionType } from "@fin/contracts";
+import { decimal, type AccountType, type AssetClass, type TransactionType } from "@fin/contracts";
 
 import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { defaultSecretStore, type SecretStore } from "./secrets";
@@ -246,10 +246,23 @@ export function plaidAdapter(opts: PlaidOptions): InstitutionAdapter {
             raw_category: t.personal_finance_category?.primary ?? null,
           }));
 
-        const myHoldings = (invest?.holdings ?? []).filter((h) => h.account_id === a.account_id);
+        const myHoldings = (invest?.holdings ?? [])
+          .filter((h) => h.account_id === a.account_id)
+          .map((h) => ({ h, s: securities.get(h.security_id) }));
+        const isCash = ({ s }: { s: PlaidSecurity | undefined }): boolean => s?.is_cash_equivalent === true || (s?.type ?? "") === "cash";
+        // Cash-equivalent holdings (Plaid's CUR:USD line, money-market sweeps)
+        // are not positions, but their value is part of the stated total. Emit
+        // them as the account's cash balance so the reconciler's
+        // sum(positions) + cash comparison has every term the institution's
+        // total contains; without it a brokerage that is mostly cash looks like
+        // a position_balance_mismatch the size of its cash.
+        const cashHoldings = myHoldings.filter(isCash);
+        if (!liability && cashHoldings.length > 0) {
+          const cash = cashHoldings.reduce((acc, { h }) => decimal.add(acc, dec(h.institution_value ?? h.quantity)), "0");
+          balances.push({ balance_type: "cash", amount: cash });
+        }
         const positions = myHoldings
-          .map((h) => ({ h, s: securities.get(h.security_id) }))
-          .filter(({ s }) => s?.is_cash_equivalent !== true && (s?.type ?? "") !== "cash")
+          .filter((x) => !isCash(x))
           .map(({ h, s }) => ({
             instrument: {
               symbol: s?.ticker_symbol ?? h.security_id,
