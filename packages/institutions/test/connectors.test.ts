@@ -133,6 +133,13 @@ describe("plaid adapter (mock API)", () => {
 
     const ira = byId.get("acct.chase.investAcct1")!;
     expect(ira.type).toBe("ira");
+    // The cash-equivalent holding is not a position, but it IS part of the
+    // stated total: it comes back as the cash balance so the reconciler's
+    // sum(positions) + cash matches the institution (22634.05 + 997.93).
+    expect(ira.balances).toEqual([
+      { balance_type: "total", amount: "23631.98" },
+      { balance_type: "cash", amount: "997.93" },
+    ]);
     expect(ira.positions).toHaveLength(1); // the cash-equivalent holding is not a position
     expect(ira.positions?.[0]).toMatchObject({
       instrument: { symbol: "VTI", asset_class: "etf" },
