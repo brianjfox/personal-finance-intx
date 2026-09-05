@@ -47,6 +47,8 @@ export interface ReconcileOutput {
   provisional_subjects: string[];
   /** Passed through from normalize: institutions whose open fetch_failed findings record_findings resolves. */
   answered: string[];
+  /** Hand-entered holdings reported tonight: record_findings resolves their open stale_balance findings as moot (D-049). */
+  manual_subjects: string[];
   stats: Record<string, number>;
 }
 
@@ -83,6 +85,7 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
     findings: fresh,
     provisional_subjects: provisional,
     answered: input.answered ?? [],
+    manual_subjects: [...new Set(input.accounts.filter((a) => a.manual === true).map((a) => a.account_id))].sort(),
     stats,
   };
 }
@@ -319,6 +322,10 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
 function detectStaleBalances(ctx: DetectorContext): void {
   const maxAgeMs = ctx.thresholds.staleBalanceDays * 86_400_000;
   for (const a of ctx.input.accounts) {
+    // A hand-entered holding (real estate, a private asset) has no feed:
+    // its as-of is "when the operator last said so", and a valuation
+    // weeks old is its normal state, not a feed that died (D-049).
+    if (a.manual === true) continue;
     const age = Date.parse(a.fetched_at) - Date.parse(a.as_of);
     const totalRef = a.refs.balances.find((r) => {
       const pf = ctx.input.facts.find((f) => f.ref === r);

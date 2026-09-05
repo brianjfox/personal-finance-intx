@@ -79,6 +79,13 @@ export const SnapshotAccount = type({
   "positions?": SnapshotPosition.array(),
   "transactions?": SnapshotTransaction.array(),
   "tax_documents?": SnapshotTaxDocument.array(),
+  /**
+   * True when the operator typed these figures in (a managed holding:
+   * real estate, a private asset). There is no feed behind them, so
+   * `as_of` is "when the operator last said so" and staleness checks do
+   * not apply (D-049).
+   */
+  "manual?": "boolean",
 });
 export type SnapshotAccount = typeof SnapshotAccount.infer;
 

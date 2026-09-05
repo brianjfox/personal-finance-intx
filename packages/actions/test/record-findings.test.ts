@@ -57,6 +57,38 @@ describe("record_findings resolves answered institutions' fetch failures", () =>
     expect(ledger.getFinding(resolvedId)?.resolutions).toHaveLength(1);
   });
 
+  test("a hand-entered holding's open stale_balance is resolved as moot; a feed's stays open (#84)", async () => {
+    const ledger = openLedger(":memory:");
+    const stale = (subject: string): string =>
+      ledger.appendFinding({
+        kind: "staleness",
+        code: "stale_balance",
+        severity: "medium",
+        subject,
+        summary: `${subject}: institution as-of is 10.6 days older than tonight's fetch`,
+        detail: { as_of: "2026-08-20T06:00:00.000Z", age_days: 10.6 },
+        evidence: [],
+        before: [],
+        after: [],
+        requires_human: true,
+        emitted_by: "reconciliation",
+        as_of: "2026-08-30T06:00:00.000Z",
+        provenance: { source_id: "handler.reconcile", source_doc_id: null, observed_at: "2026-08-30T06:00:00.000Z", via: "reconcile@1" },
+      });
+    const house = stale("acct.home.cascais");
+    const bank = stale("acct.bank.sav");
+    const handler = recordFindingsHandler({ ledger, clock: () => NOW } as unknown as ActionContext);
+    const out = (await handler(
+      { run_key: "n1", clean: true, findings: [], provisional_subjects: [], manual_subjects: ["acct.home.cascais"] },
+      passThroughCtx,
+      new AbortController().signal,
+    )) as { resolved_stale_holdings: number };
+    expect(out.resolved_stale_holdings).toBe(1);
+    expect(ledger.getFinding(house)?.resolved).toBe(true);
+    expect(ledger.getFinding(house)?.resolutions[0]?.note).toContain("hand-entered");
+    expect(ledger.getFinding(bank)?.resolved).toBe(false);
+  });
+
   test("only fetch_failed findings are touched", async () => {
     const ledger = openLedger(":memory:");
     const other = ledger.appendFinding({

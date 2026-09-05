@@ -52,6 +52,8 @@ export interface NormalizeAccount {
   /** Refs of this account's balance facts, position facts, etc. */
   refs: { account: string; balances: string[]; positions: string[]; lots: string[]; transactions: string[]; tax_documents: string[] };
   source_doc_id: string | null;
+  /** The operator typed these figures in; no feed behind them (D-049). */
+  manual?: boolean;
 }
 
 export interface TransferPair {
@@ -551,6 +553,7 @@ function normalizeAccount(
   return {
     institution_id: snap.institution_id,
     account_id: acct.account_id,
+    ...(acct.manual === true ? { manual: true } : {}),
     type: acct.type,
     as_of: acct.as_of,
     fetched_at: snap.fetched_at,
