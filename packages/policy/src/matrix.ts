@@ -87,6 +87,19 @@ export const MATRIX: readonly MatrixRow[] = [
     place_orders: "no",
     pii: "masked",
   },
+  // D-044: the Ledger Analyst reads LINE ITEMS (the interpret tier's scope)
+  // but holds tools like the advisory tier, and writes nothing at all --
+  // no journal, no finding, no draft. Rows carry account names, never
+  // numbers (pii: masked); the tools return no masked_number field.
+  {
+    principal: "ledger_analyst",
+    credentials: "none",
+    read: "yes",
+    write: [],
+    tools: ["transactions_query", "transactions_summary", "cash_flow", "recurring_charges", "list_subjects"],
+    place_orders: "no",
+    pii: "masked",
+  },
   // Tier 4 -- govern: check, gate, remember
   { principal: "auditor", credentials: "none", read: "yes", write: [], records: ["recommendation", "verdict"], place_orders: "no", pii: "masked" },
   { principal: "execution", credentials: "scoped_per_order", read: "yes", write: ["receipt"], records: ["instruction"], place_orders: "on_approval", pii: "full" },

@@ -66,7 +66,7 @@ describe("slide 13, cell by cell", () => {
 
 describe("invariants across all seventeen (plus the operator)", () => {
   test("the advisory tier holds no credential, writes no fact table, places no order", async () => {
-    for (const p of ["strategist", "market_manager", "estate_planner"] as const) {
+    for (const p of ["strategist", "market_manager", "estate_planner", "ledger_analyst"] as const) {
       expect(await allow(p, "credential:inst.any", "read")).toBe(false);
       for (const t of WRITE_TABLES.filter((x) => x.startsWith("fact:"))) {
         expect(await allow(p, `ledger:${t}`, "write")).toBe(false);
@@ -169,6 +169,28 @@ describe("tool-set halves (Phase 3: the advisory agents exist; Phase 4/5 rows st
     expect(await allow("estate_planner", "tool:run_scenario", "invoke")).toBe(false);
     const def = estatePlannerAgent("test-model");
     expect(def.toolFactories.map((f) => f.id)).toEqual(["fin/estate"]);
+  });
+
+  test("Ledger Analyst: exactly the matrix's tools; reads line items; writes NOTHING (no journal, finding, draft, or fact)", async () => {
+    const { ledgerAnalystTools } = await import("@fin/tools");
+    const { ledgerAnalystAgent } = await import("@fin/agents");
+    const declared = ledgerAnalystTools.definitions.map((d) => d.name).sort();
+    expect(declared).toEqual([...(rowFor("ledger_analyst").tools ?? [])].sort());
+    for (const name of declared) expect(name).not.toMatch(FORBIDDEN);
+    for (const name of declared) expect(await allow("ledger_analyst", `tool:${name}`, "invoke")).toBe(true);
+    // The reads the Strategist is denied are exactly this agent's ground.
+    expect(await allow("ledger_analyst", "ledger:fact:transaction", "read")).toBe(true);
+    expect(await allow("strategist", "ledger:fact:transaction", "read")).toBe(false);
+    // And it writes nothing: every ledger table and record is denied.
+    expect(rowFor("ledger_analyst").write).toEqual([]);
+    for (const t of WRITE_TABLES) expect(await allow("ledger_analyst", `ledger:${t}`, "write")).toBe(false);
+    for (const t of RECORD_TABLES) expect(await allow("ledger_analyst", `record:${t}`, "write")).toBe(false);
+    for (const forged of ["journal_write", "emit_finding", "save_draft", "ledger_read_aggregates", "run_scenario", "ledger_commit"]) {
+      expect(await allow("ledger_analyst", `tool:${forged}`, "invoke")).toBe(false);
+    }
+    expect(await allow("ledger_analyst", "pii:full", "read")).toBe(false);
+    const def = ledgerAnalystAgent("test-model");
+    expect(def.toolFactories.map((f) => f.id)).toEqual(["fin/analyst"]);
   });
 
   test("non-advisory principals hold no tools at all", async () => {
