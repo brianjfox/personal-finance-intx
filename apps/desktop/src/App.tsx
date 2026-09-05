@@ -324,6 +324,35 @@ export function App() {
   );
 }
 
+/**
+ * A link that leaves the app (a web page or a mailto:). Inside the Tauri
+ * webview a target=_blank anchor is a blocked new-window request (GH
+ * issue #1), so when the page is served from this machine the host opens
+ * the default browser or mail client; served over the LAN, the anchor
+ * itself opens it on the viewer's own device. The href stays real for
+ * copy-link.
+ */
+function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const local = ["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname);
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => {
+        if (!local) return;
+        e.preventDefault();
+        void api.openExternal(href).catch(() => {
+          // Host refused or unreachable: fall back to the anchor's default.
+          window.open(href, "_blank");
+        });
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 /** The About popup: the mark, the name, and the version. */
 function AboutModal({ onClose }: { onClose: () => void }) {
   return (
@@ -340,10 +369,10 @@ function AboutModal({ onClose }: { onClose: () => void }) {
         <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
           Created by Brian J. Fox
           <br />
-          <a href="mailto:bfox@brianjfox.com">bfox@brianjfox.com</a>
+          <ExternalLink href="mailto:bfox@brianjfox.com">bfox@brianjfox.com</ExternalLink>
         </p>
         <p className="small muted" style={{ margin: 0 }}>
-          <a href="https://github.com/brianjfox/personal-finance-intx/issues/new" target="_blank" rel="noreferrer">Report an Issue</a>
+          <ExternalLink href="https://github.com/brianjfox/personal-finance-intx/issues/new">Report an Issue</ExternalLink>
         </p>
         <p className="small muted" style={{ margin: 0 }}>© 2026 ABK Labs, Inc.</p>
         <button className="secondary" onClick={onClose}>Close</button>
@@ -362,7 +391,7 @@ function HelpModal({ onClose }: { onClose: () => void }) {
           {TIPS.map((t) => <li key={t}>{t}</li>)}
         </ul>
         <p className="small muted" style={{ margin: 0 }}>
-          Release notes and downloads: <a href="https://github.com/brianjfox/personal-finance-intx/releases" target="_blank" rel="noreferrer">GitHub releases</a>. Something wrong? <a href="https://github.com/brianjfox/personal-finance-intx/issues/new" target="_blank" rel="noreferrer">Report an issue</a>.
+          Release notes and downloads: <ExternalLink href="https://github.com/brianjfox/personal-finance-intx/releases">GitHub releases</ExternalLink>. Something wrong? <ExternalLink href="https://github.com/brianjfox/personal-finance-intx/issues/new">Report an issue</ExternalLink>.
         </p>
         <button className="secondary" onClick={onClose}>Close</button>
       </div>
