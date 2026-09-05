@@ -1,6 +1,6 @@
 [package]
 name = "financial-interchange"
-version = "0.5.0"
+version = "0.6.0"
 description = "Household Financial Interchange - the Tauri shell around fin-host"
 edition = "2021"
 
