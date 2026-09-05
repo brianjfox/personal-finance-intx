@@ -54,6 +54,27 @@ durable on disk and resume next launch.
 The app and the CLI share the same data directory, so `fin-host ...`
 commands operate on the same household.
 
+## The menu bar (D-046)
+
+The shell carries the platform's standard menus. The **app menu** has
+About (the native panel, version from `Cargo.toml`), Settings… (⌘,),
+Check for Updates… (the host asks GitHub for the newest published
+release; the GUI compares it with its own version and shows a link --
+nothing downloads or installs itself), the Kill Switch, and on macOS
+Services, Hide, Hide Others, Show All, and Quit. **File**: New Window
+(re-shows the window; the app is single-window), Close Window (hides
+it, per D-043), Print… (the page's print dialog). **Edit**: Undo, Redo,
+Cut, Copy, Paste, Select All. **View**: Enter Full Screen. **Window**:
+Minimize, Zoom, Bring All to Front, plus macOS's own window list.
+**Help**: the app's help (every Tricks & Tips line, with links to the
+releases and the issue tracker), Release Notes, Report an Issue…; on
+macOS this is the Help menu NSApp searches.
+
+Menu items the page handles reach it as one DOM event, `fin:menu`, with
+the action as its detail (`settings`, `check-updates`, `print`, `help`,
+`about`); the shell injects it with `eval` since the page is served by
+the host over localhost and uses no Tauri API.
+
 ## Credentials (§7.3)
 
 The only secret in v1 is the Anthropic API key for the advisory agents.

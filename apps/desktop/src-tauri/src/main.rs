@@ -27,7 +27,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadataBuilder, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -55,6 +55,109 @@ fn open_main(app: &tauri::AppHandle) {
             .disable_drag_drop_handler()
             .build();
     }
+}
+
+const APP_NAME: &str = "Corbits Personal Finance";
+const REPO_URL: &str = "https://github.com/brianjfox/personal-finance-intx";
+
+/// A menu item the page handles: bring the window up, then hand the
+/// action to the GUI as a `fin:menu` DOM event. The page is served by
+/// the host over localhost, so this eval is the shell's one channel in.
+fn menu_dispatch(app: &tauri::AppHandle, action: &str) {
+    open_main(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(&format!("window.dispatchEvent(new CustomEvent('fin:menu', {{ detail: '{action}' }}))"));
+    }
+}
+
+/// The standard menu bar (D-046): the app menu, File, Edit, View,
+/// Window and Help, with the platform's predefined items where they
+/// exist and the app's own entries routed to the page. On macOS the
+/// Window and Help submenus are registered with NSApp so the window
+/// list and Help search appear.
+fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
+    let about = PredefinedMenuItem::about(
+        app,
+        Some(&format!("About {APP_NAME}")),
+        Some(
+            AboutMetadataBuilder::new()
+                .name(Some(APP_NAME))
+                .version(Some(env!("CARGO_PKG_VERSION")))
+                .comments(Some("A local-first household finance console. Your ledger, documents, and keys stay on this machine."))
+                .website(Some(REPO_URL))
+                .website_label(Some("github.com/brianjfox/personal-finance-intx"))
+                .build(),
+        ),
+    )?;
+    let settings = MenuItem::with_id(app, "menu-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let updates = MenuItem::with_id(app, "menu-updates", "Check for Updates…", true, None::<&str>)?;
+    // The kill switch, reachable from the menu bar.
+    let kill = MenuItem::with_id(app, "kill-host", "Kill Switch: Stop fin-host", true, Some("CmdOrCtrl+Shift+K"))?;
+    let app_menu = Submenu::with_items(
+        app,
+        APP_NAME,
+        true,
+        &[&about, &PredefinedMenuItem::separator(app)?, &settings, &updates, &PredefinedMenuItem::separator(app)?, &kill],
+    )?;
+    #[cfg(target_os = "macos")]
+    app_menu.append_items(&[
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::services(app, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::hide(app, None)?,
+        &PredefinedMenuItem::hide_others(app, None)?,
+        &PredefinedMenuItem::show_all(app, None)?,
+    ])?;
+    app_menu.append_items(&[&PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::quit(app, None)?])?;
+
+    let new_window = MenuItem::with_id(app, "menu-new-window", "New Window", true, Some("CmdOrCtrl+N"))?;
+    let print = MenuItem::with_id(app, "menu-print", "Print…", true, Some("CmdOrCtrl+P"))?;
+    let file_menu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[&new_window, &PredefinedMenuItem::close_window(app, None)?, &PredefinedMenuItem::separator(app)?, &print],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(app, "View", true, &[&PredefinedMenuItem::fullscreen(app, None)?])?;
+
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, Some("Zoom"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::bring_all_to_front(app, None)?,
+        ],
+    )?;
+    #[cfg(target_os = "macos")]
+    window_menu.set_as_windows_menu_for_nsapp()?;
+
+    let help = MenuItem::with_id(app, "menu-help", &format!("{APP_NAME} Help"), true, None::<&str>)?;
+    let notes = MenuItem::with_id(app, "menu-releases", "Release Notes", true, None::<&str>)?;
+    let issue = MenuItem::with_id(app, "menu-issue", "Report an Issue…", true, None::<&str>)?;
+    let help_menu = Submenu::with_items(app, "Help", true, &[&help, &PredefinedMenuItem::separator(app)?, &notes, &issue])?;
+    #[cfg(target_os = "macos")]
+    help_menu.set_as_help_menu_for_nsapp()?;
+
+    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu])
 }
 
 /// The static splash the window opens on (issue #67 follow-up): shown
@@ -281,36 +384,30 @@ fn main() {
             app.manage(HostChild(Mutex::new(Some(child))));
             app.manage(HostPort(port));
 
-            // The kill switch, reachable from the menu bar.
-            let kill = MenuItem::with_id(app, "kill-host", "Kill Switch: Stop fin-host", true, Some("CmdOrCtrl+Shift+K"))?;
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &Submenu::with_items(
-                        app,
-                        "Corbits Personal Finance",
-                        true,
-                        &[&kill, &PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::quit(app, None)?],
-                    )?,
-                    &Submenu::with_items(
-                        app,
-                        "Edit",
-                        true,
-                        &[
-                            &PredefinedMenuItem::cut(app, None)?,
-                            &PredefinedMenuItem::copy(app, None)?,
-                            &PredefinedMenuItem::paste(app, None)?,
-                            &PredefinedMenuItem::select_all(app, None)?,
-                        ],
-                    )?,
-                ],
-            )?;
+            let menu = build_menu(app)?;
             app.set_menu(menu)?;
-            app.on_menu_event(move |app_handle, event| {
-                if event.id() == "kill-host" {
+            app.on_menu_event(move |app_handle, event| match event.id().as_ref() {
+                "kill-host" => {
                     kill_host(app_handle);
                     app_handle.exit(0);
                 }
+                "menu-settings" => menu_dispatch(app_handle, "settings"),
+                "menu-updates" => menu_dispatch(app_handle, "check-updates"),
+                "menu-new-window" => open_main(app_handle),
+                "menu-print" => menu_dispatch(app_handle, "print"),
+                "menu-help" => menu_dispatch(app_handle, "help"),
+                // The shell plugin's open() is deprecated in favour of a
+                // separate opener plugin; it still hands a URL to the
+                // default browser, and one more plugin is not worth it here.
+                #[allow(deprecated)]
+                "menu-releases" => {
+                    let _ = app_handle.shell().open(format!("{REPO_URL}/releases"), None);
+                }
+                #[allow(deprecated)]
+                "menu-issue" => {
+                    let _ = app_handle.shell().open(format!("{REPO_URL}/issues/new"), None);
+                }
+                _ => {}
             });
 
             // The menu-bar icon owns the app's life (issue #67): the
