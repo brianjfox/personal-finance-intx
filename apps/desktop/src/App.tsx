@@ -7,7 +7,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, factHeadline, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
@@ -3969,14 +3969,8 @@ function QueueItem({ f, onChanged, openFact }: { f: Finding; onChanged: () => vo
 }
 
 function FactCard({ f, openFact }: { f: Fact; openFact: (id: string) => void }) {
-  const p = f.payload;
-  const headline =
-    f.kind === "transaction" ? `${String(p["amount"])} ${String(p["description"] ?? "")}`
-    : f.kind === "balance" ? `${String(p["balance_type"])} ${String(p["amount"])}`
-    : f.kind === "position" ? `${String(p["quantity"])} ${String((p["instrument"] as { symbol?: string } | undefined)?.symbol ?? "")} @ ${String(p["market_value"] ?? "?")}`
-    : f.kind === "lot" ? `lot ${String(p["lot_id"])} basis ${String(p["cost_basis"] ?? "unknown")}`
-    : f.kind === "tax_document" ? `${String(p["form"])} ${String(p["tax_year"])} v${String(p["version"])} ${JSON.stringify(p["totals"])}`
-    : f.kind;
+  // Fiat figures formatted like everywhere else: preferred currency, veil (issue #77).
+  const headline = factHeadline(f);
   return (
     <div style={{ marginTop: 6 }}>
       <div className="vs-val"><FactLink id={f.id} openFact={openFact}>{headline}</FactLink></div>

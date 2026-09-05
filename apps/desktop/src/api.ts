@@ -432,6 +432,37 @@ export function moneyNative(v: string | null | undefined, currency = "USD"): str
   const n = Number(v);
   return maskDigits(Number.isFinite(n) ? fmt(n, currency) : v);
 }
+/**
+ * One-line headline for a fact on a queue card (before/after boxes).
+ * Fiat figures go through money(): converted into the preferred display
+ * currency at the cached rate when one exists, native otherwise, with the
+ * privacy veil applied -- never the raw payload string (issue #77).
+ */
+export function factHeadline(f: Pick<Fact, "kind" | "payload">): string {
+  const p = f.payload;
+  const cur = typeof p["currency"] === "string" ? p["currency"] : "USD";
+  const str = (v: unknown, fallback = ""): string => (v === null || v === undefined ? fallback : String(v));
+  switch (f.kind) {
+    case "transaction":
+      return `${money(str(p["amount"]), cur)} ${str(p["description"])}`.trim();
+    case "balance":
+      return `${str(p["balance_type"])} ${money(str(p["amount"]), cur)}`;
+    case "position": {
+      const symbol = (p["instrument"] as { symbol?: string } | undefined)?.symbol ?? "";
+      const mv = p["market_value"];
+      return `${str(p["quantity"])} ${symbol} @ ${mv === null || mv === undefined ? "?" : money(String(mv), cur)}`;
+    }
+    case "lot": {
+      const basis = p["cost_basis"];
+      return `lot ${str(p["lot_id"])} basis ${basis === null || basis === undefined ? "unknown" : money(String(basis), cur)}`;
+    }
+    case "tax_document":
+      return `${str(p["form"])} ${str(p["tax_year"])} v${str(p["version"])} ${JSON.stringify(p["totals"])}`;
+    default:
+      return f.kind;
+  }
+}
+
 export function when(iso: string | null | undefined): string {
   if (!iso) return "—";
   return iso.replace("T", " ").replace(/\.\d{3}Z$/, "Z");
