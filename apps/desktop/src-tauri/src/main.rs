@@ -59,6 +59,8 @@ fn open_main(app: &tauri::AppHandle) {
 
 const APP_NAME: &str = "Corbits Personal Finance";
 const REPO_URL: &str = "https://github.com/brianjfox/personal-finance-intx";
+const TAGLINE: &str = "A Corbits Product built on Interchange";
+const AUTHOR: &str = "Brian J. Fox <bfox@brianjfox.com>";
 
 /// A menu item the page handles: bring the window up, then hand the
 /// action to the GUI as a `fin:menu` DOM event. The page is served by
@@ -83,7 +85,9 @@ fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
             AboutMetadataBuilder::new()
                 .name(Some(APP_NAME))
                 .version(Some(env!("CARGO_PKG_VERSION")))
-                .comments(Some("A local-first household finance console. Your ledger, documents, and keys stay on this machine."))
+                .authors(Some(vec![AUTHOR.to_string()]))
+                .comments(Some(TAGLINE))
+                .copyright(Some(&format!("© 2026 {AUTHOR}")))
                 .website(Some(REPO_URL))
                 .website_label(Some("github.com/brianjfox/personal-finance-intx"))
                 .build(),
