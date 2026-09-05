@@ -413,7 +413,7 @@ export interface CashFlowView {
  */
 export function cashFlow(
   ledger: Ledger,
-  opts: AsOfOpts & { currency?: string; rates?: Record<string, string>; months?: number; now?: Date } = {},
+  opts: AsOfOpts & { subject?: string; currency?: string; rates?: Record<string, string>; months?: number; now?: Date } = {},
 ): CashFlowView {
   const currency = opts.currency ?? "USD";
   const rates = opts.rates ?? {};
@@ -508,4 +508,394 @@ export function obligations(ledger: Ledger, opts: AsOfOpts & { subject?: string 
       provisional: f.provisional,
     };
   });
+}
+
+// --- transaction activity (the Ledger Analyst's ground, D-044) ---------
+//
+// Line-item reads over the transaction facts the connectors re-observe
+// nightly. Every figure below is computed here, in decimal string math,
+// and every row/bucket carries the fact ids it rests on -- the analyst
+// quotes; it never sums. Internal movement (transfer legs between
+// household accounts, in-account buy/sell/swap) is excluded by default,
+// mirroring cashFlow, and counted so its absence is visible.
+
+/** A transaction as the analyst sees it: no account numbers, the account's NAME only. */
+export interface TransactionRow {
+  fact_id: string;
+  subject: string;
+  account: string | null;
+  posted_at: string;
+  /** Signed: positive into the account, negative out. Native currency. */
+  amount: string;
+  currency: string;
+  type: TransactionPayload["type"];
+  description: string;
+  raw_category: string | null;
+  instrument: string | null;
+  /** A transfer leg between household accounts or an in-account conversion. */
+  internal: boolean;
+  provisional: boolean;
+}
+
+export interface TransactionFilter extends AsOfOpts {
+  subject?: string;
+  /** Inclusive ISO date bounds on posted_at ("YYYY-MM-DD"). */
+  from?: string;
+  to?: string;
+  types?: readonly TransactionPayload["type"][];
+  /** Case-insensitive substring of the description (or the raw category). */
+  description_contains?: string;
+  /** Bounds on |amount|, native currency. */
+  min_abs_amount?: string;
+  max_abs_amount?: string;
+  /** Default false: internal legs are excluded and counted. */
+  include_internal?: boolean;
+}
+
+export interface TransactionTotals {
+  count: number;
+  inflow: string;
+  outflow: string;
+  net: string;
+}
+
+export interface TransactionQueryView {
+  rows: TransactionRow[];
+  /** Rows matching the filter (before paging). */
+  matched: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  /** Over ALL matched rows, per native currency -- never mixed across currencies. */
+  totals_by_currency: Record<string, TransactionTotals>;
+  excluded_internal: number;
+  provisional: boolean;
+}
+
+const INTERNAL_TXN_TYPES: ReadonlySet<string> = new Set(["buy", "sell", "swap"]);
+const isInternalTxn = (p: TransactionPayload): boolean => p.transfer_group != null || INTERNAL_TXN_TYPES.has(p.type);
+
+function accountNames(ledger: Ledger, opts: AsOfOpts): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const f of ledger.asOf({ kind: "account", ...opts })) names.set(f.subject, (f.payload as AccountPayload).name);
+  return names;
+}
+
+/** The current, non-voided transaction facts matching the filter, newest first. Internal legs are dropped unless asked for; their count is returned. */
+function matchTransactions(ledger: Ledger, q: TransactionFilter): { facts: StoredFact[]; excluded_internal: number } {
+  const needle = q.description_contains?.trim().toLowerCase() ?? "";
+  const types = q.types !== undefined && q.types.length > 0 ? new Set<string>(q.types) : null;
+  const from = q.from !== undefined ? q.from.slice(0, 10) : null;
+  const to = q.to !== undefined ? q.to.slice(0, 10) : null;
+  const asOfOpts: AsOfOpts & { subject?: string } = {};
+  if (q.effectiveAt !== undefined) asOfOpts.effectiveAt = q.effectiveAt;
+  if (q.observedAt !== undefined) asOfOpts.observedAt = q.observedAt;
+  if (q.subject !== undefined) asOfOpts.subject = q.subject;
+  let excluded = 0;
+  const facts: StoredFact[] = [];
+  for (const f of ledger.asOf({ kind: "transaction", ...asOfOpts })) {
+    const p = f.payload as TransactionPayload;
+    if (p.voided === true) continue;
+    const day = p.posted_at.slice(0, 10);
+    if (from !== null && day < from) continue;
+    if (to !== null && day > to) continue;
+    if (types !== null && !types.has(p.type)) continue;
+    if (needle !== "" && !p.description.toLowerCase().includes(needle) && !(p.raw_category ?? "").toLowerCase().includes(needle)) continue;
+    const mag = decimal.abs(p.amount);
+    if (q.min_abs_amount !== undefined && decimal.cmp(mag, q.min_abs_amount) < 0) continue;
+    if (q.max_abs_amount !== undefined && decimal.cmp(mag, q.max_abs_amount) > 0) continue;
+    if (isInternalTxn(p)) {
+      excluded++;
+      if (q.include_internal !== true) continue;
+    }
+    facts.push(f);
+  }
+  facts.sort((a, b) => {
+    const pa = (a.payload as TransactionPayload).posted_at;
+    const pb = (b.payload as TransactionPayload).posted_at;
+    return pa < pb ? 1 : pa > pb ? -1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return { facts, excluded_internal: excluded };
+}
+
+function toRow(f: StoredFact, names: Map<string, string>): TransactionRow {
+  const p = f.payload as TransactionPayload;
+  return {
+    fact_id: f.id,
+    subject: f.subject,
+    account: names.get(f.subject) ?? null,
+    posted_at: p.posted_at,
+    amount: p.amount,
+    currency: p.currency,
+    type: p.type,
+    description: p.description,
+    raw_category: p.raw_category ?? null,
+    instrument: p.instrument?.symbol ?? null,
+    internal: isInternalTxn(p),
+    provisional: f.provisional,
+  };
+}
+
+function tally(into: Map<string, TransactionTotals>, currency: string, amount: string): void {
+  const t = into.get(currency) ?? { count: 0, inflow: "0", outflow: "0", net: "0" };
+  t.count++;
+  if (decimal.cmp(amount, "0") >= 0) t.inflow = decimal.add(t.inflow, amount);
+  else t.outflow = decimal.add(t.outflow, decimal.abs(amount));
+  t.net = decimal.sub(t.inflow, t.outflow);
+  into.set(currency, t);
+}
+
+export const TRANSACTION_PAGE_DEFAULT = 100;
+export const TRANSACTION_PAGE_MAX = 500;
+
+/** Filtered transaction lines, newest first, paged, with totals over the whole match. */
+export function transactionRows(ledger: Ledger, q: TransactionFilter & { limit?: number; offset?: number } = {}): TransactionQueryView {
+  const limit = Math.max(1, Math.min(TRANSACTION_PAGE_MAX, Math.trunc(q.limit ?? TRANSACTION_PAGE_DEFAULT)));
+  const offset = Math.max(0, Math.trunc(q.offset ?? 0));
+  const { facts, excluded_internal } = matchTransactions(ledger, q);
+  const names = accountNames(ledger, q);
+  const totals = new Map<string, TransactionTotals>();
+  let provisional = false;
+  for (const f of facts) {
+    const p = f.payload as TransactionPayload;
+    tally(totals, p.currency, p.amount);
+    provisional = provisional || f.provisional;
+  }
+  const page = facts.slice(offset, offset + limit);
+  return {
+    rows: page.map((f) => toRow(f, names)),
+    matched: facts.length,
+    offset,
+    limit,
+    truncated: offset + page.length < facts.length,
+    totals_by_currency: Object.fromEntries([...totals.entries()].sort()),
+    excluded_internal,
+    provisional,
+  };
+}
+
+export type TransactionGroupBy = "month" | "category" | "description" | "account" | "type";
+
+export interface TransactionBucket {
+  key: string;
+  label: string;
+  currency: string;
+  count: number;
+  inflow: string;
+  outflow: string;
+  net: string;
+  fact_ids: string[];
+}
+
+export interface TransactionSummaryView {
+  group_by: TransactionGroupBy;
+  /** One bucket per (group, currency); largest outflow first. */
+  buckets: TransactionBucket[];
+  matched: number;
+  excluded_internal: number;
+  provisional: boolean;
+}
+
+/** Normalise a statement description into a merchant-ish key: lowercase, digits and punctuation dropped, whitespace collapsed. */
+export function normaliseDescription(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Matched transactions bucketed by month, category, merchant, account, or type, totals per native currency. */
+export function transactionSummary(ledger: Ledger, q: TransactionFilter & { group_by: TransactionGroupBy }): TransactionSummaryView {
+  const { facts, excluded_internal } = matchTransactions(ledger, q);
+  const names = accountNames(ledger, q);
+  const buckets = new Map<string, TransactionBucket>();
+  let provisional = false;
+  for (const f of facts) {
+    const p = f.payload as TransactionPayload;
+    let key: string;
+    let label: string;
+    switch (q.group_by) {
+      case "month":
+        key = label = p.posted_at.slice(0, 7);
+        break;
+      case "category":
+        key = label = p.raw_category?.trim() !== "" && p.raw_category != null ? p.raw_category : "(uncategorised)";
+        break;
+      case "description":
+        key = normaliseDescription(p.description) || "(blank)";
+        label = p.description;
+        break;
+      case "account":
+        key = f.subject;
+        label = names.get(f.subject) ?? f.subject;
+        break;
+      case "type":
+        key = label = p.type;
+        break;
+    }
+    const id = `${key}|${p.currency}`;
+    const b = buckets.get(id) ?? { key, label, currency: p.currency, count: 0, inflow: "0", outflow: "0", net: "0", fact_ids: [] };
+    b.count++;
+    if (decimal.cmp(p.amount, "0") >= 0) b.inflow = decimal.add(b.inflow, p.amount);
+    else b.outflow = decimal.add(b.outflow, decimal.abs(p.amount));
+    b.net = decimal.sub(b.inflow, b.outflow);
+    b.fact_ids.push(f.id);
+    buckets.set(id, b);
+    provisional = provisional || f.provisional;
+  }
+  const out = [...buckets.values()].sort((a, b) => {
+    const c = decimal.cmp(b.outflow, a.outflow);
+    if (c !== 0) return c;
+    const d = decimal.cmp(b.inflow, a.inflow);
+    if (d !== 0) return d;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+  return { group_by: q.group_by, buckets: out, matched: facts.length, excluded_internal, provisional };
+}
+
+export type RecurringCadence = "weekly" | "biweekly" | "monthly" | "quarterly" | "annual";
+
+export interface RecurringCharge {
+  /** The most recent statement description in the group. */
+  description: string;
+  /** The normalised key the group was formed on. */
+  normalized: string;
+  direction: "inflow" | "outflow";
+  cadence: RecurringCadence;
+  /** Median gap between consecutive occurrences, in days. */
+  interval_days: number;
+  occurrences: number;
+  first_at: string;
+  last_at: string;
+  /** Median |amount| (lower-middle for even counts). */
+  typical_amount: string;
+  latest_amount: string;
+  /** typical_amount expressed per month (weekly x52/12, biweekly x26/12, quarterly /3, annual /12). */
+  monthly_equivalent: string;
+  currency: string;
+  /** Account NAMES the charge appears on. */
+  accounts: string[];
+  /** last_at plus the cadence's nominal interval, as a date. */
+  next_expected: string;
+  fact_ids: string[];
+  provisional: boolean;
+}
+
+export interface RecurringView {
+  /** Largest monthly equivalent first. */
+  charges: RecurringCharge[];
+  /** Sum of monthly equivalents, per native currency and direction. */
+  monthly_equivalent_by_currency: Record<string, { inflow: string; outflow: string }>;
+  /** Non-internal transactions the detector looked at. */
+  considered: number;
+  min_occurrences: number;
+}
+
+// Cadence bands on the median gap in days, and the nominal gap used for next_expected.
+const CADENCES: ReadonlyArray<{ cadence: RecurringCadence; lo: number; hi: number; nominal: number; perMonth: string }> = [
+  { cadence: "weekly", lo: 6, hi: 8, nominal: 7, perMonth: decimal.div("52", "12") },
+  { cadence: "biweekly", lo: 13, hi: 15, nominal: 14, perMonth: decimal.div("26", "12") },
+  { cadence: "monthly", lo: 27, hi: 33, nominal: 30, perMonth: "1" },
+  { cadence: "quarterly", lo: 85, hi: 95, nominal: 91, perMonth: decimal.div("1", "3") },
+  { cadence: "annual", lo: 355, hi: 375, nominal: 365, perMonth: decimal.div("1", "12") },
+];
+
+const DAY_MS = 86_400_000;
+const dayOf = (iso: string): number => Math.round(Date.parse(`${iso.slice(0, 10)}T00:00:00.000Z`) / DAY_MS);
+const median = (sorted: readonly string[]): string => sorted[Math.floor((sorted.length - 1) / 2)] ?? "0";
+
+/**
+ * Recurring charges and credits, detected deterministically: transactions
+ * grouped by normalised description + currency + direction, kept when at
+ * least `min_occurrences` occur, most consecutive gaps fall in one cadence
+ * band, and most amounts sit within `amount_tolerance` (default 20%) of
+ * the median. Internal movement and voided facts are never candidates.
+ */
+export function recurringCharges(
+  ledger: Ledger,
+  opts: AsOfOpts & { subject?: string; from?: string; to?: string; min_occurrences?: number; amount_tolerance?: string } = {},
+): RecurringView {
+  const minOcc = Math.max(2, Math.trunc(opts.min_occurrences ?? 3));
+  const tolerance = opts.amount_tolerance ?? "0.2";
+  const filter: TransactionFilter = { include_internal: false };
+  if (opts.subject !== undefined) filter.subject = opts.subject;
+  if (opts.from !== undefined) filter.from = opts.from;
+  if (opts.to !== undefined) filter.to = opts.to;
+  if (opts.effectiveAt !== undefined) filter.effectiveAt = opts.effectiveAt;
+  if (opts.observedAt !== undefined) filter.observedAt = opts.observedAt;
+  const { facts } = matchTransactions(ledger, filter);
+  const names = accountNames(ledger, opts);
+  const groups = new Map<string, StoredFact[]>();
+  for (const f of facts) {
+    const p = f.payload as TransactionPayload;
+    const norm = normaliseDescription(p.description);
+    if (norm === "" || decimal.isZero(p.amount)) continue;
+    const direction = decimal.cmp(p.amount, "0") > 0 ? "inflow" : "outflow";
+    const key = `${norm}|${p.currency}|${direction}`;
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, [f]);
+    else g.push(f);
+  }
+  const charges: RecurringCharge[] = [];
+  const totals = new Map<string, { inflow: string; outflow: string }>();
+  for (const [key, group] of groups) {
+    if (group.length < minOcc) continue;
+    // Oldest first, one occurrence per day (two same-day charges are one event for cadence purposes).
+    const byDay = new Map<number, StoredFact>();
+    for (const f of [...group].reverse()) byDay.set(dayOf((f.payload as TransactionPayload).posted_at), f);
+    const days = [...byDay.keys()].sort((a, b) => a - b);
+    if (days.length < minOcc) continue;
+    const gaps: number[] = [];
+    for (let i = 1; i < days.length; i++) gaps.push((days[i] ?? 0) - (days[i - 1] ?? 0));
+    const sortedGaps = [...gaps].sort((a, b) => a - b);
+    const medGap = sortedGaps[Math.floor((sortedGaps.length - 1) / 2)] ?? 0;
+    const band = CADENCES.find((c) => medGap >= c.lo && medGap <= c.hi);
+    if (band === undefined) continue;
+    const need = Math.ceil((gaps.length * 2) / 3);
+    if (gaps.filter((g) => g >= band.lo && g <= band.hi).length < need) continue;
+    const ordered = days.map((d) => byDay.get(d)!);
+    const mags = ordered.map((f) => decimal.abs((f.payload as TransactionPayload).amount)).sort(decimal.cmp);
+    const typical = median(mags);
+    const slack = decimal.mul(typical, tolerance);
+    const within = mags.filter((m) => decimal.cmp(decimal.abs(decimal.sub(m, typical)), slack) <= 0).length;
+    if (within < Math.ceil((mags.length * 2) / 3)) continue;
+    const last = ordered[ordered.length - 1]!;
+    const lastP = last.payload as TransactionPayload;
+    const [, currency, direction] = key.split("|") as [string, string, "inflow" | "outflow"];
+    const monthly = decimal.round(decimal.mul(typical, band.perMonth), 2);
+    const nextDay = (days[days.length - 1] ?? 0) + band.nominal;
+    const accounts = [...new Set(ordered.map((f) => names.get(f.subject) ?? f.subject))].sort();
+    charges.push({
+      description: lastP.description,
+      normalized: key.split("|")[0] ?? "",
+      direction,
+      cadence: band.cadence,
+      interval_days: medGap,
+      occurrences: ordered.length,
+      first_at: (ordered[0]!.payload as TransactionPayload).posted_at,
+      last_at: lastP.posted_at,
+      typical_amount: typical,
+      latest_amount: decimal.abs(lastP.amount),
+      monthly_equivalent: monthly,
+      currency,
+      accounts,
+      next_expected: new Date(nextDay * DAY_MS).toISOString().slice(0, 10),
+      fact_ids: ordered.map((f) => f.id),
+      provisional: ordered.some((f) => f.provisional),
+    });
+    const t = totals.get(currency) ?? { inflow: "0", outflow: "0" };
+    t[direction] = decimal.round(decimal.add(t[direction], monthly), 2);
+    totals.set(currency, t);
+  }
+  charges.sort((a, b) => {
+    const c = decimal.cmp(b.monthly_equivalent, a.monthly_equivalent);
+    return c !== 0 ? c : a.normalized < b.normalized ? -1 : a.normalized > b.normalized ? 1 : 0;
+  });
+  return {
+    charges,
+    monthly_equivalent_by_currency: Object.fromEntries([...totals.entries()].sort()),
+    considered: facts.length,
+    min_occurrences: minOcc,
+  };
 }

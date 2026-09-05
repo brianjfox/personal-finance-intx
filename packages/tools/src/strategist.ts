@@ -69,7 +69,7 @@ export const aggregatesTool: FinTool = {
   },
 };
 
-const listSubjects: FinTool = {
+export const listSubjectsTool: FinTool = {
   definition: {
     name: "list_subjects",
     description:
@@ -181,5 +181,5 @@ export const strategistTools = defineTool<BaseEnv & FinAgentEnvExtras>({
   id: "fin/strategist",
   requires: ["fin"],
   definitions: STRATEGIST_TOOL_NAMES.map((name) => ({ name })),
-  factory: (env) => finBundle(env.fin, [aggregatesTool, listSubjects, projection, scenario, journalWrite, householdProfileTool, saveDraftTool]),
+  factory: (env) => finBundle(env.fin, [aggregatesTool, listSubjectsTool, projection, scenario, journalWrite, householdProfileTool, saveDraftTool]),
 });

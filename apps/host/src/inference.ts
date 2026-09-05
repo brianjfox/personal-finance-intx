@@ -21,7 +21,7 @@ import type { InferenceSource } from "@intx/types/runtime";
 
 import { anthropicProxyBaseURL } from "./anthropic-proxy";
 
-export const INFERENCE_TASKS = ["profile", "estate", "tax", "strategy"] as const;
+export const INFERENCE_TASKS = ["profile", "estate", "tax", "strategy", "analyst"] as const;
 export type InferenceTask = (typeof INFERENCE_TASKS)[number];
 
 export const INFERENCE_SERVICE = "fin-inference";
@@ -41,7 +41,7 @@ export const InferenceSettingsV2 = type({
   providers: ProviderConfig.array(),
   /** Provider id everything uses unless a task says otherwise. */
   default: "string > 0",
-  "tasks?": type({ "profile?": "string", "estate?": "string", "tax?": "string", "strategy?": "string" }),
+  "tasks?": type({ "profile?": "string", "estate?": "string", "tax?": "string", "strategy?": "string", "analyst?": "string" }),
 });
 export type InferenceSettingsV2 = typeof InferenceSettingsV2.infer;
 export type InferenceSettings = InferenceSettingsV2;

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { resolveFinding, views } from "@fin/ledger";
-import { AccountType, ChatAgent, HouseholdProfileInput, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
+import { AccountType, CHAT_AGENTS, ChatAgent, HouseholdProfileInput, ProjectionRequest, ResolutionDecision, ScenarioRequest, TaxStage } from "@fin/contracts";
 import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
@@ -146,7 +146,7 @@ const TokensDeleteBody = type({ institution_id: "string > 0" });
 const ProfileBody = HouseholdProfileInput.and(type({ "clear_ssn?": "boolean" }));
 const ExtractBody = type({ text: "string > 0" });
 const InferenceBody = type({ settings: InferenceSettingsV2, "keys?": "Record<string, string>" });
-const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy'", "provider?": "string" });
+const InferenceTestBody = type({ "task?": "'profile' | 'estate' | 'tax' | 'strategy' | 'analyst'", "provider?": "string" });
 
 const UserAddBody = type({ name: "string > 0", "password?": "string" });
 const LoginBody = type({ user: "string > 0", password: "string" });
@@ -635,9 +635,9 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
           return json(app.runProjectionNow(body));
         }
-        const chatMatch = /^\/api\/chat\/(strategist|estate_planner)$/.exec(p);
-        if (chatMatch !== null && req.method === "GET") {
-          return json(app.chatTranscript(chatMatch[1] as "strategist" | "estate_planner"));
+        const chatMatch = /^\/api\/chat\/([a-z_]+)$/.exec(p);
+        if (chatMatch !== null && req.method === "GET" && (CHAT_AGENTS as readonly string[]).includes(chatMatch[1] ?? "")) {
+          return json(app.chatTranscript(chatMatch[1] as ChatAgent));
         }
         if (p === "/api/chat" && req.method === "POST") {
           const body = ChatBody(await req.json());

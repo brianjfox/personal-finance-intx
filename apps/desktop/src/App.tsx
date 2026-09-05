@@ -1201,6 +1201,7 @@ const INFERENCE_TASKS: ReadonlyArray<readonly [string, string, string]> = [
   ["estate", "Estate", "the Estate Planner chat and its drafts"],
   ["tax", "Tax", "reserved: tax math is deterministic today; applies when model-backed tax planning arrives"],
   ["strategy", "Strategy", "the Strategist chat"],
+  ["analyst", "Ledger Analyst", "the Ledger Analyst chat — it reads your transaction lines, so a local engine keeps them on this Mac"],
 ];
 
 /** Configure any number of AI providers; assign a default and one per task. Keys go to the Keychain. */
@@ -4321,7 +4322,17 @@ function Markdown({ text }: { text: string }) {
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-const agentTitle = (a: ChatAgentName): string => (a === "estate_planner" ? "The Estate Planner" : "The Strategist");
+const agentTitle = (a: ChatAgentName): string =>
+  a === "estate_planner" ? "The Estate Planner" : a === "ledger_analyst" ? "The Ledger Analyst" : "The Strategist";
+
+/** What each chat agent may see and do, as the header states it. */
+const agentStatus = (a: ChatAgentName): string =>
+  a === "ledger_analyst" ? "Active • read-only • line items, deterministic figures" : "Active • advisory only • deterministic figures";
+
+const agentIntro = (a: ChatAgentName): string =>
+  a === "ledger_analyst"
+    ? 'Try: "What are my recurring charges?" or "How much did I spend per month this year, and where did it go?"'
+    : 'Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"';
 
 /** One recorded exchange: your bubble on the right, the agent's evidence-rich reply on the left. */
 function ChatTurnCard({ t, openFact }: { t: ChatTurn; openFact: (id: string) => void }) {
@@ -4789,12 +4800,13 @@ function ChatPage({ openFact }: { openFact: (id: string) => void }) {
           <span className="icon-tile blue" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="sparkle" /></span>
           <div>
             <div className="w-name">{agentTitle(agent)}</div>
-            <div className="w-status"><span className="on" />Active • advisory only • deterministic figures</div>
+            <div className="w-status"><span className="on" />{agentStatus(agent)}</div>
           </div>
         </div>
         <select value={agent} onChange={(e) => setAgent(e.target.value as ChatAgentName)}>
           <option value="strategist">The Strategist</option>
           <option value="estate_planner">The Estate Planner</option>
+          <option value="ledger_analyst">The Ledger Analyst</option>
         </select>
       </div>
       <ChatPanel
@@ -4802,7 +4814,7 @@ function ChatPage({ openFact }: { openFact: (id: string) => void }) {
         agent={agent}
         openFact={openFact}
         layout="workspace"
-        intro={'Try: "If I sell the rental next spring, what does that do to the Q2 estimate and the trust schedule?"'}
+        intro={agentIntro(agent)}
       />
     </div>
   );
@@ -5208,6 +5220,7 @@ type DocSortKey = "name" | "kind" | "creator" | "size" | "date";
 const CREATOR_LABELS: Record<string, string> = {
   estate_planner: "Estate Planner",
   strategist: "Strategist",
+  ledger_analyst: "Ledger Analyst",
   assets_manager: "Institutions & feeds",
   operator: "You",
 };

@@ -169,7 +169,11 @@ in a prompt." The slide's six rows, verbatim:
 never sees a balance it does not need. A compromised advisory agent should
 be embarrassing, not catastrophic."
 (Implemented and extended to all seventeen: `packages/policy/src/matrix.ts`;
-the slide-13 rows are asserted verbatim in the capability test.)
+the slide-13 rows are asserted verbatim in the capability test. An
+eighteenth row, the *Ledger Analyst* — read yes, write nothing, PII masked,
+tools over transaction line items only — was added by D-044 so the
+operator can ask about spending and recurring charges without widening
+the Strategist's "aggregates" scope.)
 
 ## Workflow cadence (slide 14)
 

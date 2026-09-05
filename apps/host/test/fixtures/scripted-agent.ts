@@ -12,6 +12,10 @@
 //                                   -> run_scenario, then journal_write (the thesis)
 //   registry                        -> registry_read
 //   journal <summary...>            -> journal_write (to probe authorization)
+//   transactions [<needle>]         -> transactions_query (the Ledger Analyst)
+//   spend by <group_by>             -> transactions_summary
+//   recurring                       -> recurring_charges
+//   cashflow                        -> cash_flow
 //   anything else                   -> echoed reply, no tools
 
 import type { Agent, AgentDefinition, BaseEnv, ToolBundle } from "@intx/agent";
@@ -126,6 +130,27 @@ async function runScript(text: string, call: (name: string, args: Record<string,
   if (text === "registry") {
     const r = (await call("registry_read", {})) as { entities?: unknown[]; observed_titling?: unknown[] };
     return `Registry holds ${String((r.entities ?? []).length)} entities and ${String((r.observed_titling ?? []).length)} observed titlings -- from registry_read.`;
+  }
+  const txns = /^transactions(?: (.+))?$/.exec(text);
+  if (txns !== null) {
+    const args: Record<string, unknown> = txns[1] !== undefined ? { description_contains: txns[1] } : {};
+    const r = (await call("transactions_query", args)) as { matched?: number; rows?: Array<{ description: string; amount: string; account: string | null }>; totals_by_currency?: Record<string, { inflow: string; outflow: string }> };
+    const usd = r.totals_by_currency?.["USD"];
+    const first = r.rows?.[0];
+    return `${String(r.matched ?? 0)} transactions matched; USD inflow ${usd?.inflow ?? "0"}, outflow ${usd?.outflow ?? "0"}; newest: ${first?.description ?? "-"} ${first?.amount ?? ""} on ${first?.account ?? "?"} -- from transactions_query.`;
+  }
+  const spend = /^spend by (\w+)$/.exec(text);
+  if (spend !== null) {
+    const r = (await call("transactions_summary", { group_by: spend[1] })) as { buckets?: Array<{ key: string; inflow: string; outflow: string; count: number }> };
+    return `buckets: ${(r.buckets ?? []).map((b) => `${b.key}=${b.inflow}/${b.outflow}(${String(b.count)})`).join(", ")} -- from transactions_summary.`;
+  }
+  if (text === "recurring") {
+    const r = (await call("recurring_charges", {})) as { charges?: Array<{ normalized: string; cadence: string; typical_amount: string; occurrences: number; next_expected: string }> };
+    return `recurring: ${(r.charges ?? []).map((c) => `${c.normalized} ${c.cadence} ${c.typical_amount} x${String(c.occurrences)} next ${c.next_expected}`).join("; ")} -- from recurring_charges.`;
+  }
+  if (text === "cashflow") {
+    const r = (await call("cash_flow", { months: 6 })) as { months?: Array<{ month: string; inflow: string; outflow: string }> };
+    return `cash flow: ${(r.months ?? []).map((m) => `${m.month} ${m.inflow}/${m.outflow}`).join(", ")} -- from cash_flow.`;
   }
   const journal = /^journal (.+)$/.exec(text);
   if (journal !== null) {

@@ -110,6 +110,26 @@ describe("phase 3 through fin-host: the strategist chat over real tools", () => 
     expect(e2.turn!.reply).toContain("refused by policy");
     expect(app.ledger.listJournal().every((j) => j.author !== "estate_planner")).toBe(true);
 
+    // --- the ledger analyst's chat: line items the strategist cannot see -
+    const a1 = await app.sendChat({ agent: "ledger_analyst", text: "transactions payroll", wait: true });
+    expect(a1.turn!.reply).toContain("5 transactions matched; USD inflow 40000, outflow 0; newest: PAYROLL 8000 on Checking");
+    expect(a1.turn!.evidence[0]!.tool).toBe("transactions_query");
+    expect(a1.turn!.evidence[0]!.fact_ids).toHaveLength(5);
+    for (const id of a1.turn!.evidence[0]!.fact_ids) expect(app.ledger.getFact(id)?.kind).toBe("transaction");
+    const a2 = await app.sendChat({ agent: "ledger_analyst", text: "recurring", wait: true });
+    expect(a2.turn!.reply).toContain("payroll monthly 8000 x5 next 2027-06-14");
+    const a3 = await app.sendChat({ agent: "ledger_analyst", text: "spend by month", wait: true });
+    expect(a3.turn!.reply).toContain("2027-01=8000/0(1)");
+    // It writes nothing: the journal is the strategist's, and the matrix refuses.
+    const a4 = await app.sendChat({ agent: "ledger_analyst", text: "journal should not work", wait: true });
+    expect(a4.turn!.reply).toContain("refused by policy");
+    expect(app.ledger.listJournal().every((j) => j.author !== "ledger_analyst")).toBe(true);
+    // The strategist's transaction-blind tool set is unchanged by the analyst's existence.
+    const s3 = await app.sendChat({ agent: "strategist", text: "transactions payroll", wait: true });
+    expect(s3.turn!.reply).toContain("refused by policy");
+    expect(app.chatTranscript("ledger_analyst")).toHaveLength(4);
+    expect(app.chatTranscript("strategist")).toHaveLength(3);
+
     // Chat runs are standing runs.
     expect((await app.listRuns()).filter((x) => x.workflow.endsWith("-chat")).every((x) => x.status === "running")).toBe(true);
     app.close();

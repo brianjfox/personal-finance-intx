@@ -66,7 +66,7 @@ export interface Obligation {
   subject: string; key: string; obligation_id: string; kind: string; description: string; account_id: string;
   amount: string | null; due: string | null; currency: string; fact_id: string; observed_at: string; supersedes: string | null; provisional: boolean;
 }
-export type ChatAgentName = "strategist" | "estate_planner";
+export type ChatAgentName = "strategist" | "estate_planner" | "ledger_analyst";
 export interface ChatEvidence { tool: string; result: unknown; fact_ids: string[]; at: string }
 export interface ChatTurn {
   agent: ChatAgentName; message_id: string; message: string; reply: string;

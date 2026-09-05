@@ -12,9 +12,9 @@ import { type } from "arktype";
 
 import { Id, IsoDateTime } from "./scalars";
 
-export const CHAT_AGENTS = ["strategist", "estate_planner"] as const;
+export const CHAT_AGENTS = ["strategist", "estate_planner", "ledger_analyst"] as const;
 export type ChatAgent = (typeof CHAT_AGENTS)[number];
-export const ChatAgent = type("'strategist' | 'estate_planner'");
+export const ChatAgent = type("'strategist' | 'estate_planner' | 'ledger_analyst'");
 
 /** One tool result the reply's figures came from, captured at call time. */
 export const ChatEvidence = type({

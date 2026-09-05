@@ -115,7 +115,7 @@ describe("definition lints", () => {
     // The matrix (slide 13) lets the estate planner append findings and the
     // strategist append journal entries; what the advisory tier may never
     // touch is a fact table -- those have exactly one ledger-tier writer.
-    const advisory = new Set(["strategist", "market_manager", "estate_planner"]);
+    const advisory = new Set(["strategist", "market_manager", "estate_planner", "ledger_analyst"]);
     for (const w of ALL_WORKFLOWS) {
       for (const [id, p] of Object.entries(w.definition.steps)) {
         if (p.kind !== "action" || !advisory.has(w.stepPrincipals[id] ?? "")) continue;

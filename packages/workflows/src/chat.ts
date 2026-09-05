@@ -19,7 +19,14 @@
 // the ledger outbox -- the transcript is data with provenance, not
 // scrollback.
 
-import { estatePlannerAgent, strategistAgent, type ESTATE_PLANNER_AGENT_ID, type STRATEGIST_AGENT_ID } from "@fin/agents";
+import {
+  estatePlannerAgent,
+  ledgerAnalystAgent,
+  strategistAgent,
+  type ESTATE_PLANNER_AGENT_ID,
+  type LEDGER_ANALYST_AGENT_ID,
+  type STRATEGIST_AGENT_ID,
+} from "@fin/agents";
 import type { ChatAgent, Principal } from "@fin/contracts";
 import { defineWorkflow, step, type WorkflowDefinition } from "@intx/workflow";
 
@@ -29,13 +36,14 @@ export interface ChatWorkflowSpec {
   runIdPrefix: string;
   /** Step ids are global across workflows in the principal table, so each chat step carries its agent. */
   stepId: string;
-  agentId: typeof STRATEGIST_AGENT_ID | typeof ESTATE_PLANNER_AGENT_ID;
+  agentId: typeof STRATEGIST_AGENT_ID | typeof ESTATE_PLANNER_AGENT_ID | typeof LEDGER_ANALYST_AGENT_ID;
   principal: Principal;
 }
 
 export const CHAT_WORKFLOWS: readonly ChatWorkflowSpec[] = [
   { agent: "strategist", workflowId: "strategist-chat", runIdPrefix: "chatstrategist", stepId: "chat_strategist", agentId: "strategist", principal: "strategist" },
   { agent: "estate_planner", workflowId: "estate-chat", runIdPrefix: "chatestate", stepId: "chat_estate", agentId: "estate-planner", principal: "estate_planner" },
+  { agent: "ledger_analyst", workflowId: "analyst-chat", runIdPrefix: "chatanalyst", stepId: "chat_analyst", agentId: "ledger-analyst", principal: "ledger_analyst" },
 ];
 
 export function chatWorkflowSpec(agent: ChatAgent): ChatWorkflowSpec {
@@ -51,7 +59,7 @@ export function chatWorkflowSpec(agent: ChatAgent): ChatWorkflowSpec {
  */
 export function buildChatWorkflow(agent: ChatAgent, model: string): { definition: WorkflowDefinition; stepPrincipals: Record<string, Principal>; spec: ChatWorkflowSpec } {
   const spec = chatWorkflowSpec(agent);
-  const def = agent === "strategist" ? strategistAgent(model) : estatePlannerAgent(model);
+  const def = agent === "strategist" ? strategistAgent(model) : agent === "estate_planner" ? estatePlannerAgent(model) : ledgerAnalystAgent(model);
   return {
     definition: defineWorkflow({
       id: spec.workflowId,

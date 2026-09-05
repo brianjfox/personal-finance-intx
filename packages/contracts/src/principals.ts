@@ -1,6 +1,7 @@
 // The agents of the interchange, named as principals.
 //
-// Deck slide 5: four tiers, seventeen agents. Most of them are
+// Deck slide 5: four tiers, seventeen agents (plus the Ledger Analyst,
+// D-044: an eighteenth, read-only chat agent over transactions). Most of them are
 // deterministic `action` handlers (BUILD_PLAN §3), but every one of them
 // is a *principal* in the policy layer and a candidate `writer` on the
 // ledger -- capability scoping is by who is acting, not by what code ran.
@@ -20,7 +21,7 @@ export const INTERPRET_PRINCIPALS = [
   "risk",
   "projections",
 ] as const;
-export const ADVISE_PRINCIPALS = ["strategist", "market_manager", "estate_planner"] as const;
+export const ADVISE_PRINCIPALS = ["strategist", "market_manager", "estate_planner", "ledger_analyst"] as const;
 export const GOVERN_PRINCIPALS = [
   "auditor",
   "execution",
