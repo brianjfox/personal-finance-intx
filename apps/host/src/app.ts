@@ -705,8 +705,8 @@ export function createApp(opts: AppOptions): App {
   const resolveSource = (): InferenceSource => resolveSourceFor(undefined);
   /** Which per-task engine a chat agent follows. */
   const taskOfAgent = (agentId: string): InferenceTask | undefined =>
-    agentId === "estate-planner" ? "estate" : agentId === "strategist" ? "strategy" : undefined;
-  const taskOfChat = (agent: ChatAgent): InferenceTask => (agent === "estate_planner" ? "estate" : "strategy");
+    agentId === "estate-planner" ? "estate" : agentId === "strategist" ? "strategy" : agentId === "ledger-analyst" ? "analyst" : undefined;
+  const taskOfChat = (agent: ChatAgent): InferenceTask => (agent === "estate_planner" ? "estate" : agent === "ledger_analyst" ? "analyst" : "strategy");
 
   // Every policy decision lands in the access log; denials are loud.
   const onDecision = (d: PolicyDecision): void => {

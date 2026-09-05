@@ -11,7 +11,7 @@
 //   fin-host tax-start  [--data DIR] [--year Y]            launch the standing tax-year run (use under `serve` normally)
 //   fin-host tax-check  [--data DIR] --q N --stage pre|due run one manual tax check now
 //   fin-host tax-skip   [--data DIR] --q N --stage pre|due [note]  skip a deadline gate (journaled)
-//   fin-host chat       [--data DIR] [--agent strategist|estate_planner] <message...>   (needs ANTHROPIC_API_KEY)
+//   fin-host chat       [--data DIR] [--agent strategist|estate_planner|ledger_analyst] <message...>   (needs ANTHROPIC_API_KEY)
 //   fin-host propose    [--data DIR]                       drift -> Market Manager -> Auditor -> approval queue (needs key)
 //   fin-host approvals  [--data DIR]                       print the approval queue
 //   fin-host decide     [--data DIR] <rec_id> approve|reject [--qty N] [--limit N] [note...]
@@ -29,6 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { CHAT_AGENTS, type ChatAgent } from "@fin/contracts";
 import { findMergeCandidates, mergeAccounts, resolveFinding, views } from "@fin/ledger";
 
 import { createApp } from "./app";
@@ -200,10 +201,10 @@ async function main(argv: string[]): Promise<number> {
     case "chat": {
       const message = rest.join(" ").trim();
       if (message === "") {
-        console.error('usage: fin-host chat [--agent strategist|estate_planner] "<message>"');
+        console.error('usage: fin-host chat [--agent strategist|estate_planner|ledger_analyst] "<message>"');
         return 2;
       }
-      const agent = flags["agent"] === "estate_planner" ? "estate_planner" : "strategist";
+      const agent = (CHAT_AGENTS as readonly string[]).includes(flags["agent"] ?? "") ? (flags["agent"] as ChatAgent) : "strategist";
       const app = createApp({ dataDir });
       await app.resumeInFlight();
       const r = await app.sendChat({ agent, text: message, wait: true });
