@@ -12,6 +12,7 @@ import { detectWalletHolding } from "@fin/institutions";
 import { type } from "arktype";
 
 import type { App } from "./app";
+import { latestRelease } from "./updates";
 import { InferenceSettingsV2, type InferenceTask } from "./inference";
 import { userDir, type UserManager } from "./users";
 
@@ -188,6 +189,15 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/users" && req.method === "GET") {
           return json({ multi_user: opts.users !== undefined, users: opts.users?.list() ?? [] });
         }
+        if (p === "/api/updates/latest") {
+          // The app menu's "Check for Updates…": public like /api/health --
+          // it reads nothing of the household and must work before sign-in.
+          try {
+            return json(await latestRelease());
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+          }
+        }
         if (p === "/api/users" && req.method === "POST") {
           if (opts.users === undefined) return json({ error: "this host runs single-user" }, 400);
           const body = UserAddBody(await req.json());
@@ -310,13 +320,6 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json(opts.lan.get());
         }
         if (p === "/api/fx") return json(await app.getFx());
-        if (p === "/api/updates/latest") {
-          try {
-            return json(await app.latestRelease());
-          } catch (e) {
-            return json({ error: e instanceof Error ? e.message : String(e) }, 502);
-          }
-        }
         if (p === "/api/net-worth") {
           const fx = await app.getFx();
           return json(views.netWorth(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates }));
