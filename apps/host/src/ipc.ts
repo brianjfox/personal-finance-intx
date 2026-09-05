@@ -242,6 +242,11 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
               return null; // locked volume: signed out mid-flight
             }
           };
+          if (p === "/api/tray/session" && req.method === "GET") {
+            // Cheap enough to poll: is anyone signed in? (The shell enables
+            // Refresh Assets on it -- D-048.) No ledger work, no FX.
+            return json({ signed_in: trayApp() !== null });
+          }
           if (p === "/api/tray/summary" && req.method === "GET") {
             const a = trayApp();
             if (a === null) return json({ available: false, reason: "nobody is signed in" });

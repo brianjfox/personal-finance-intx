@@ -38,9 +38,17 @@ type Page = "queue" | "dashboard" | "institutions" | "credentials" | "profile" |
  * username + password -> a session token; every request carries the
  * token, and the host serves only that user's data.
  */
+/**
+ * File > New Window (D-048) opens the page with `?fresh=1`: that window
+ * starts signed out and keeps whatever session it signs into in memory
+ * only, so it never reads or overwrites the first window's stored token.
+ */
+const FRESH_WINDOW = new URLSearchParams(window.location.search).has("fresh");
+
 function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; current: { id: string; name: string } | null; enter: (token: string, user: { id: string; name: string }) => void; renameLocal?: (name: string) => void; signOut: () => void; refresh: () => void } {
   const [state, setState] = useState<{ multi: boolean; users: UserInfo[] } | null>(null);
   const [session, setSession] = useState<{ token: string; id: string; name: string } | null>(() => {
+    if (FRESH_WINDOW) return null;
     try {
       const token = localStorage.getItem("fin.token");
       const id = localStorage.getItem("fin.user");
@@ -73,6 +81,7 @@ function useUserGate(): { ready: boolean; multi: boolean; users: UserInfo[]; cur
   }, []);
   if (session !== null) setApiToken(session.token);
   const store = (token: string | null, user: { id: string; name: string } | null) => {
+    if (FRESH_WINDOW) return; // this window's session stays its own, in memory
     try {
       if (token === null || user === null) {
         localStorage.removeItem("fin.token");

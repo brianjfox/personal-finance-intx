@@ -63,8 +63,13 @@ Check for Updates… (the Tauri updater reads the release feed's
 newest version" -- and on Update installs the signed build in place and
 relaunches; docs/RELEASING.md *In-app updates*), the Kill Switch, and on macOS
 Services, Hide, Hide Others, Show All, and Quit. **File**: New Window
-(re-shows the window; the app is single-window), Close Window (hides
-it, per D-043), Print… (the page's print dialog). **Edit**: Undo, Redo,
+(⌘N: one more window on the same host, opened signed OUT so a second
+person can sign in beside the first -- the page keeps that window's
+session in memory only; closing an extra window really closes it),
+Close Window (⌘W: the main window hides, per D-043), Refresh Assets
+(⌘R: the nightly's full ingest, enabled only while someone is signed
+in -- the shell polls `/api/tray/session` every five seconds and flips
+this and the tray's item together), Print… (the page's print dialog). **Edit**: Undo, Redo,
 Cut, Copy, Paste, Select All. **View**: Enter Full Screen. **Window**:
 Minimize, Zoom, Bring All to Front, plus macOS's own window list.
 **Help**: the app's help (every Tricks & Tips line, with links to the

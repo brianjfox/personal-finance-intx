@@ -43,6 +43,8 @@ describe("tray endpoints", () => {
       const refresh = (await (await fetch(`${base}/api/tray/refresh`, { method: "POST" }))!.json()) as { started: boolean; already_running?: boolean };
       expect(refresh.started === true || refresh.already_running === true).toBe(true);
       expect((await fetch(`${base}/api/tray/nothing`)).status).toBe(404);
+      // The shell's Refresh Assets gate: single-user hosts are always "signed in".
+      expect(await (await fetch(`${base}/api/tray/session`)).json()).toEqual({ signed_in: true });
       // The authenticated surface is untouched: single-user /api/net-worth still answers.
       expect((await fetch(`${base}/api/net-worth`)).status).toBe(200);
     } finally {

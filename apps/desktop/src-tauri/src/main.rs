@@ -39,6 +39,30 @@ use tauri_plugin_updater::UpdaterExt;
 struct HostChild(Mutex<Option<CommandChild>>);
 /// The sidecar's port, for re-opening the window from the tray.
 struct HostPort(u16);
+/// The two Refresh Assets items (File menu, tray), enabled only while
+/// someone is signed in (D-048); the poll below flips them together.
+struct RefreshItems(Mutex<Vec<MenuItem<tauri::Wry>>>);
+/// Extra windows from File > New Window get unique labels.
+static EXTRA_WINDOWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Is anyone signed in? (`/api/tray/session`; a single-user host says yes.)
+fn tray_signed_in(port: u16) -> bool {
+    tray_http(port, "GET", "/api/tray/session").map(|b| b.contains("\"signed_in\":true")).unwrap_or(false)
+}
+
+/// File > New Window (D-048): one more window on the same host, opened
+/// signed OUT (`?fresh=1` -- the page keeps that window's session in
+/// memory only), so a second person can sign in beside the first.
+fn open_extra_window(app: &tauri::AppHandle) {
+    let Some(port) = app.try_state::<HostPort>().map(|p| p.0) else { return };
+    let n = EXTRA_WINDOWS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let url = format!("http://127.0.0.1:{port}/?fresh=1");
+    let _ = WebviewWindowBuilder::new(app, format!("extra-{n}"), WebviewUrl::External(url.parse().expect("bad url")))
+        .title(APP_NAME)
+        .inner_size(1240.0, 860.0)
+        .disable_drag_drop_handler()
+        .build();
+}
 
 /// Show the main window (created after the health check), or rebuild it
 /// if it is somehow gone. Never touches the host.
@@ -196,13 +220,23 @@ fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
     app_menu.append_items(&[&PredefinedMenuItem::separator(app)?, &PredefinedMenuItem::quit(app, None)?])?;
 
     let new_window = MenuItem::with_id(app, "menu-new-window", "New Window", true, Some("CmdOrCtrl+N"))?;
+    // Disabled until the session poll finds someone signed in (D-048).
+    let refresh = MenuItem::with_id(app, "menu-refresh", "Refresh Assets", false, Some("CmdOrCtrl+R"))?;
     let print = MenuItem::with_id(app, "menu-print", "Print…", true, Some("CmdOrCtrl+P"))?;
     let file_menu = Submenu::with_items(
         app,
         "File",
         true,
-        &[&new_window, &PredefinedMenuItem::close_window(app, None)?, &PredefinedMenuItem::separator(app)?, &print],
+        &[
+            &new_window,
+            &PredefinedMenuItem::close_window(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &refresh,
+            &PredefinedMenuItem::separator(app)?,
+            &print,
+        ],
     )?;
+    app.manage(RefreshItems(Mutex::new(vec![refresh])));
 
     let edit_menu = Submenu::with_items(
         app,
@@ -480,7 +514,14 @@ fn main() {
                 }
                 "menu-settings" => menu_dispatch(app_handle, "settings"),
                 "menu-updates" => check_for_updates(app_handle.clone()),
-                "menu-new-window" => open_main(app_handle),
+                "menu-new-window" => open_extra_window(app_handle),
+                "menu-refresh" => {
+                    if let Some(port) = app_handle.try_state::<HostPort>().map(|p| p.0) {
+                        std::thread::spawn(move || {
+                            let _ = tray_http(port, "POST", "/api/tray/refresh");
+                        });
+                    }
+                }
                 "menu-print" => menu_dispatch(app_handle, "print"),
                 "menu-help" => menu_dispatch(app_handle, "help"),
                 // The shell plugin's open() is deprecated in favour of a
@@ -501,7 +542,10 @@ fn main() {
             // window is just a view. Open re-shows it; Quit is the real
             // exit that stops the host.
             let open_item = MenuItem::with_id(app, "tray-open", "Open Corbits Personal Finance", true, None::<&str>)?;
-            let refresh_item = MenuItem::with_id(app, "tray-refresh", "Refresh Assets", true, None::<&str>)?;
+            let refresh_item = MenuItem::with_id(app, "tray-refresh", "Refresh Assets", false, None::<&str>)?;
+            if let Some(items) = app.try_state::<RefreshItems>() {
+                items.0.lock().expect("refresh items").push(refresh_item.clone());
+            }
             let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
             let autostart_item = CheckMenuItem::with_id(app, "tray-autostart", "Launch at Login", true, autostart_on, None::<&str>)?;
             let show_nw = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(read_show_net_worth(&data_dir)));
@@ -566,21 +610,38 @@ fn main() {
                 .build(app)?;
 
             // The net-worth title, refreshed once a minute while enabled
-            // (and cleared when nobody is signed in). issue #72.
+            // (and cleared when nobody is signed in) -- issue #72 -- and
+            // the Refresh Assets items, enabled only while someone is
+            // signed in, polled every five seconds (D-048; the session
+            // probe does no ledger work).
             {
                 let handle_nw = app.handle().clone();
                 let show_nw = show_nw.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(8));
+                    let mut tick: u32 = 0;
+                    let mut last_signed_in: Option<bool> = None;
                     loop {
-                        let title = if show_nw.load(std::sync::atomic::Ordering::SeqCst) { tray_networth_title(port) } else { None };
-                        let handle2 = handle_nw.clone();
-                        let _ = handle_nw.run_on_main_thread(move || {
-                            if let Some(tray) = handle2.tray_by_id("fin-tray") {
-                                let _ = tray.set_title(title.as_deref());
+                        let signed_in = tray_signed_in(port);
+                        if last_signed_in != Some(signed_in) {
+                            last_signed_in = Some(signed_in);
+                            if let Some(items) = handle_nw.try_state::<RefreshItems>() {
+                                for item in items.0.lock().expect("refresh items").iter() {
+                                    let _ = item.set_enabled(signed_in);
+                                }
                             }
-                        });
-                        std::thread::sleep(Duration::from_secs(60));
+                        }
+                        if tick % 12 == 0 {
+                            let title = if show_nw.load(std::sync::atomic::Ordering::SeqCst) { tray_networth_title(port) } else { None };
+                            let handle2 = handle_nw.clone();
+                            let _ = handle_nw.run_on_main_thread(move || {
+                                if let Some(tray) = handle2.tray_by_id("fin-tray") {
+                                    let _ = tray.set_title(title.as_deref());
+                                }
+                            });
+                        }
+                        tick = tick.wrapping_add(1);
+                        std::thread::sleep(Duration::from_secs(5));
                     }
                 });
             }
@@ -627,8 +688,11 @@ fn main() {
             // nightly imports need it alive. Hide instead; the tray (and
             // the Dock on macOS) brings it back.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // An extra window (File > New Window) simply closes.
             }
         })
         .build(tauri::generate_context!())
