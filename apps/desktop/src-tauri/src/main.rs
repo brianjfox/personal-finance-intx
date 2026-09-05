@@ -27,7 +27,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
-use tauri::menu::{AboutMetadataBuilder, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -85,8 +85,6 @@ fn open_main(app: &tauri::AppHandle) {
 
 const APP_NAME: &str = "Corbits Personal Finance";
 const REPO_URL: &str = "https://github.com/brianjfox/personal-finance-intx";
-const TAGLINE: &str = "A Corbits Product built on Interchange";
-const AUTHOR: &str = "Brian J. Fox <bfox@brianjfox.com>";
 
 /// A menu item the page handles: bring the window up, then hand the
 /// action to the GUI as a `fin:menu` DOM event. The page is served by
@@ -183,21 +181,10 @@ Try again later, or look at the releases page yourself."))
 /// Window and Help submenus are registered with NSApp so the window
 /// list and Help search appear.
 fn build_menu(app: &tauri::App) -> tauri::Result<Menu<tauri::Wry>> {
-    let about = PredefinedMenuItem::about(
-        app,
-        Some(&format!("About {APP_NAME}")),
-        Some(
-            AboutMetadataBuilder::new()
-                .name(Some(APP_NAME))
-                .version(Some(env!("CARGO_PKG_VERSION")))
-                .authors(Some(vec![AUTHOR.to_string()]))
-                .comments(Some(TAGLINE))
-                .copyright(Some(&format!("© 2026 {AUTHOR}")))
-                .website(Some(REPO_URL))
-                .website_label(Some("github.com/brianjfox/personal-finance-intx"))
-                .build(),
-        ),
-    )?;
+    // About opens the page's own dialog (the one the brand click shows),
+    // not the native panel: macOS renders only name/version/copyright/
+    // credits there, and the operator wants the in-app one.
+    let about = MenuItem::with_id(app, "menu-about", &format!("About {APP_NAME}"), true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "menu-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let updates = MenuItem::with_id(app, "menu-updates", "Check for Updates…", true, None::<&str>)?;
     // The kill switch, reachable from the menu bar.
@@ -512,6 +499,7 @@ fn main() {
                     kill_host(app_handle);
                     app_handle.exit(0);
                 }
+                "menu-about" => menu_dispatch(app_handle, "about"),
                 "menu-settings" => menu_dispatch(app_handle, "settings"),
                 "menu-updates" => check_for_updates(app_handle.clone()),
                 "menu-new-window" => open_extra_window(app_handle),

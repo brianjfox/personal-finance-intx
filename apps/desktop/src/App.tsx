@@ -292,14 +292,16 @@ function AboutModal({ onClose }: { onClose: () => void }) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <LogoMark size={72} />
         <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--strong)", textTransform: "none", letterSpacing: 0 }}>Corbits Personal Finance</h3>
-        <p className="small" style={{ margin: 0, color: "var(--t2)" }}>A Corbits Product built on Interchange</p>
+        <p className="small" style={{ margin: 0, color: "var(--t2)" }}>Built on Corbits Base/Interchange</p>
         <span className="pill info">Version {APP_VERSION}</span>
         <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
           A local-first household finance console. Your ledger, documents, and keys live on {thisMachine()} — and every figure
           links back to dated evidence.
         </p>
         <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
-          Author: Brian J. Fox — <a href="mailto:bfox@brianjfox.com">bfox@brianjfox.com</a>
+          Created by Brian J. Fox
+          <br />
+          <a href="mailto:bfox@brianjfox.com">bfox@brianjfox.com</a>
         </p>
         <button className="secondary" onClick={onClose}>Close</button>
       </div>
