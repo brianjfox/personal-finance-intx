@@ -19,6 +19,8 @@ export interface RecordFindingsInput {
   provisional_subjects: string[];
   /** Institutions that produced a snapshot tonight (reconcile passes it through from normalize). */
   answered?: string[];
+  /** Hand-entered holdings reported tonight: their open stale_balance findings are moot (D-049). */
+  manual_subjects?: string[];
   [writer: string]: unknown;
 }
 
@@ -30,6 +32,8 @@ export interface RecordFindingsOutput {
   provisional_subjects: string[];
   /** Stale "did not answer" findings this run closed because the institution answered. */
   resolved_fetch_failures: number;
+  /** stale_balance findings this run closed because the holding is hand-entered (D-049). */
+  resolved_stale_holdings: number;
 }
 
 export function recordFindingsHandler(actx: ActionContext): ActionHandler {
@@ -82,6 +86,23 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
             resolvedFetchFailures += 1;
           }
         }
+        // A hand-entered holding has no feed to be stale: any open
+        // stale_balance finding on it (raised before D-049) is moot.
+        let resolvedStaleHoldings = 0;
+        for (const subject of input.manual_subjects ?? []) {
+          for (const f of actx.ledger.openFindings({ subject })) {
+            if (f.code !== "stale_balance") continue;
+            actx.ledger.appendResolution({
+              finding_id: f.id,
+              decision: "dismiss",
+              note: `hand-entered holdings have no feed to be stale (resolved on ${input.run_key})`,
+              decided_by: "reconciliation",
+              decided_at: actx.clock().toISOString(),
+              resulting_facts: [],
+            });
+            resolvedStaleHoldings += 1;
+          }
+        }
         return {
           run_key: input.run_key,
           clean: input.clean,
@@ -89,6 +110,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
           queued,
           provisional_subjects: input.provisional_subjects ?? [],
           resolved_fetch_failures: resolvedFetchFailures,
+          resolved_stale_holdings: resolvedStaleHoldings,
         } satisfies RecordFindingsOutput;
       },
     })) as RecordFindingsOutput;

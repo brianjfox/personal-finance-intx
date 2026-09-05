@@ -80,6 +80,19 @@ describe("2. a balance that stopped updating four days ago but still looks live"
     expect(n.rec.provisional_subjects).toEqual(["acct.bank.sav"]);
   });
 
+  test("a hand-entered holding never reads as stale: no feed, so its as-of is 'when the operator last said so' (#84)", () => {
+    const ledger = freshLedger();
+    const house = checking("acct.home.cascais", "2026-07-01T00:00:00.000Z", "850000", { type: "real_estate", manual: true });
+    const n = runNight(ledger, "n1", { snapshots: [snap("inst.home", NIGHT1, [house])], failures: [] }, NIGHT1);
+    expect(n.rec.findings.filter((x) => x.code === "stale_balance")).toHaveLength(0);
+    expect(n.rec.provisional_subjects).toEqual([]);
+    expect(n.rec.manual_subjects).toEqual(["acct.home.cascais"]);
+    // The same age on a feed IS stale: the skip is about the source, not the type.
+    const fed = runNight(freshLedger(), "n2", { snapshots: [snap("inst.bank", NIGHT1, [checking("acct.bank.sav", "2026-07-01T00:00:00.000Z", "100")])], failures: [] }, NIGHT1);
+    expect(fed.rec.findings.filter((x) => x.code === "stale_balance")).toHaveLength(1);
+    expect(fed.rec.manual_subjects).toEqual([]);
+  });
+
   test("fresh-looking as-of but a value frozen for days while transactions keep posting", () => {
     const ledger = freshLedger();
     const day = (d: number) => `2026-08-${String(d).padStart(2, "0")}T00:00:00.000Z`;

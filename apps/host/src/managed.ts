@@ -70,6 +70,8 @@ function writeSnapshot(dataDir: string, institutionId: string, accounts: Managed
       type: a.type,
       currency: a.currency,
       as_of: asOf,
+      // Hand-entered: no feed behind it, so it never reads as stale (D-049).
+      manual: true,
       balances: [
         {
           balance_type: LIABILITY_ACCOUNT_TYPES.has(a.type) ? "owed" : "total",
