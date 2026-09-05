@@ -11,8 +11,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { memorySecretStore } from "@fin/institutions";
+
 import { createApp } from "../src/app";
+import { win32StoreCrypt } from "../src/crypt";
 import { openCommand, startIpc } from "../src/ipc";
+import { createUserManager } from "../src/users";
 
 const META_URL = "https://x.com/&calc.exe";
 
@@ -53,6 +57,67 @@ describe("/api/open", () => {
     } finally {
       await server.stop();
       app.close();
+    }
+  });
+
+  test("a mailto: link is opened like any other (the About dialog's author link)", async () => {
+    const app = createApp({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "fin-open-")) });
+    const spawned: string[][] = [];
+    const server = startIpc({ app, port: 0, openSpawner: (argv) => { spawned.push([...argv]); return Promise.resolve(0); } });
+    try {
+      const r = await fetch(new URL("/api/open", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: "mailto:bfox@brianjfox.com" }),
+      });
+      expect(r.status).toBe(200);
+      expect(spawned).toEqual([openCommand(process.platform, "mailto:bfox@brianjfox.com")]);
+    } finally {
+      await server.stop();
+      app.close();
+    }
+  });
+
+  test("a javascript: or file: URL is still refused", async () => {
+    const app = createApp({ dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "fin-open-")) });
+    const spawned: string[][] = [];
+    const server = startIpc({ app, port: 0, openSpawner: (argv) => { spawned.push([...argv]); return Promise.resolve(0); } });
+    try {
+      for (const url of ["javascript:alert(1)", "file:///etc/passwd", "ftp://x.com/"]) {
+        const r = await fetch(new URL("/api/open", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        expect(r.status).toBe(400);
+      }
+      expect(spawned).toEqual([]);
+    } finally {
+      await server.stop();
+      app.close();
+    }
+  });
+
+  test("in users mode, a loopback caller opens a link with nobody signed in (About on the sign-in screen)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "fin-open-users-"));
+    const users = createUserManager({ rootDir: root, secrets: memorySecretStore(), crypt: win32StoreCrypt(() => "none") });
+    const spawned: string[][] = [];
+    const server = startIpc({ users, port: 0, openSpawner: (argv) => { spawned.push([...argv]); return Promise.resolve(0); } });
+    try {
+      users.add("Alice", "alice-pw");
+      const url = "https://github.com/brianjfox/personal-finance-intx/issues/new";
+      const r = await fetch(`http://127.0.0.1:${server.port}/api/open`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      expect(r.status).toBe(200);
+      expect(spawned).toEqual([openCommand(process.platform, url)]);
+      // Everything else under /api/ still wants a session.
+      expect((await fetch(`http://127.0.0.1:${server.port}/api/me`)).status).toBe(401);
+    } finally {
+      await server.stop();
+      users.closeAll();
     }
   });
 });

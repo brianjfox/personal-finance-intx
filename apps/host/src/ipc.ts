@@ -114,7 +114,7 @@ const EbCompleteBody = type({ state: "string > 0", code: "string > 0" });
 // links); and the macOS Settings deep-link scheme, so a permission refusal
 // can walk the operator straight to the right pane.
 const OpenBody = type({
-  url: /^(https:\/\/[^\s]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/[^\s]*|x-apple\.systempreferences:[A-Za-z0-9._?&=-]+)$/,
+  url: /^(https:\/\/[^\s]+|http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/[^\s]*|mailto:[^\s]+|x-apple\.systempreferences:[A-Za-z0-9._?&=-]+)$/,
 });
 const CoinbaseBody = type({
   "name?": "string > 0",
@@ -229,9 +229,12 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         // refresh-all trigger. In users mode both resolve the most recently
         // active session -- nobody signed in (or a locked volume) means
         // nothing is revealed and nothing runs.
-        if (p.startsWith("/api/tray/")) {
+        const loopback = (): boolean => {
           const ip = server.requestIP(req)?.address ?? "";
-          if (ip !== "127.0.0.1" && ip !== "::1" && ip !== "::ffff:127.0.0.1") return json({ error: "tray endpoints are local-only" }, 403);
+          return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+        };
+        if (p.startsWith("/api/tray/")) {
+          if (!loopback()) return json({ error: "tray endpoints are local-only" }, 403);
           const trayApp = (): App | null => {
             if (opts.users === undefined) return opts.app!;
             const me = opts.users.activeUser();
@@ -270,6 +273,25 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
             return json({ started: true });
           }
           return notFound();
+        }
+        // The GUI runs inside the Tauri webview, where window.open() to an
+        // external site is blocked -- the host opens the default browser.
+        // From this machine (the shell's own webview) no session is needed:
+        // the About dialog offers its links on the sign-in screen too, and
+        // a loopback caller could run `open` itself anyway. From the LAN it
+        // is a signed-in action like everything else under /api/.
+        if (p === "/api/open" && req.method === "POST") {
+          if (!loopback() && opts.users !== undefined) {
+            const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+            if (token === "" || opts.users.sessionUser(token) === null) return json({ error: "login required" }, 401);
+          }
+          const body = OpenBody(await req.json());
+          if (body instanceof type.errors) return json({ error: body.summary }, 400);
+          if (body.url.startsWith("x-apple.systempreferences:") && process.platform !== "darwin") {
+            return json({ error: "that link opens macOS System Settings, which this machine doesn't have" }, 400);
+          }
+          const spawner = opts.openSpawner ?? ((argv: readonly string[]) => Bun.spawn([...argv], { stdout: "ignore", stderr: "ignore" }).exited);
+          return json({ opened: (await spawner(openCommand(process.platform, body.url))) === 0 });
         }
         // Identity comes from the SESSION, never from anything the client
         // asserts: a user sees exactly their own data. Only /api/ needs
@@ -393,17 +415,6 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         }
         if (p === "/api/plaid/test" && req.method === "POST") return json(await app.testPlaid());
         if (p === "/api/demo" && req.method === "POST") return json(await app.seedDemoData());
-        // The GUI runs inside the Tauri webview, where window.open() to an
-        // external site is blocked -- the host opens the default browser.
-        if (p === "/api/open" && req.method === "POST") {
-          const body = OpenBody(await req.json());
-          if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          if (body.url.startsWith("x-apple.systempreferences:") && process.platform !== "darwin") {
-            return json({ error: "that link opens macOS System Settings, which this machine doesn't have" }, 400);
-          }
-          const spawner = opts.openSpawner ?? ((argv: readonly string[]) => Bun.spawn([...argv], { stdout: "ignore", stderr: "ignore" }).exited);
-          return json({ opened: (await spawner(openCommand(process.platform, body.url))) === 0 });
-        }
         if (p === "/api/connect/plaid/start" && req.method === "POST") {
           const body = PlaidStartBody(await req.json().catch(() => ({})));
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
