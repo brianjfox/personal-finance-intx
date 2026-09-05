@@ -61,10 +61,38 @@ pre-release.
 | `Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg` | The app, one universal binary (Apple silicon + Intel); the `fin-host` sidecar inside is a fat binary too |
 | `Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe` | NSIS installer, WebView2 bootstrapper mode; **unsigned** (D-038) |
 | `SHA256SUMS.txt` | `shasum -a 256 -c SHA256SUMS.txt` |
+| `Corbits-Personal-Finance-X.Y.Z-macOS-universal.app.tar.gz` + `.sig` | The in-app updater's macOS payload (the signed .app as a tarball) and its minisign signature |
+| `Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe.sig` | The installer doubles as the Windows updater payload; this is its signature |
+| `latest.json` | The updater manifest: version, date, per-platform URL + signature (D-047) |
 
-Only what an installer needs. The `fin-host` CLI ships inside both
-bundles (`Contents/MacOS/fin-host`; the install directory on Windows)
-and is not a separate download.
+What an installer needs, plus what the in-app updater needs. The
+`fin-host` CLI ships inside both bundles (`Contents/MacOS/fin-host`;
+the install directory on Windows) and is not a separate download.
+
+## In-app updates (D-047)
+
+**Check for Updates…** in the app menu fetches
+`releases/latest/download/latest.json` -- GitHub resolves that to the
+newest *published, non-prerelease* release, so a draft is never offered
+-- compares its version with the running one, and on **Update**
+downloads the platform's payload, verifies its signature against the
+public key in `tauri.conf.json` (`plugins.updater.pubkey`), installs it
+over the current bundle, and relaunches.
+
+The private half of that key lives OUTSIDE the repository, on the
+release Mac: `PFI/UPDATER-SIGNING.key` and `PFI/UPDATER-SIGNING.password`
+(generated once with `bunx @tauri-apps/cli@^2 signer generate`). CI
+needs both as repository secrets, and **a build without them fails at
+bundling** because the config carries the public key:
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY          < ../UPDATER-SIGNING.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD < ../UPDATER-SIGNING.password
+```
+
+Losing the private key means every installed copy stops accepting
+updates (they trust only that public key); a new key would need a new
+manually-installed release. Back it up with the Apple credentials.
 
 The release body is `docs/releases/X.Y.Z.md` followed by a generated
 **Downloads** section that says truthfully whether the macOS build is
@@ -88,6 +116,8 @@ an app-specific password, and cleans up after itself); by hand it is
 | `APPLE_ID` | the Apple ID e-mail |
 | `APPLE_PASSWORD` | an app-specific password (appleid.apple.com → Sign-In and Security) |
 | `APPLE_TEAM_ID` | `UZHK52XR6P` |
+| `TAURI_SIGNING_PRIVATE_KEY` | the updater signing key (`PFI/UPDATER-SIGNING.key`) -- required, see *In-app updates* |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password (`PFI/UPDATER-SIGNING.password`) |
 
 The workflow imports the certificate into a throwaway keychain (the
 .p12 may carry every identity on the release Mac — `APPLE_SIGNING_IDENTITY`
@@ -110,6 +140,11 @@ NOTARY_PROFILE=fin-notary \
 TRIPLE=universal-apple-darwin ./scripts/build-app.sh
 # apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
 ```
+
+Every local `tauri build` now also needs the updater key, or bundling
+fails: `export TAURI_SIGNING_PRIVATE_KEY_PATH=../UPDATER-SIGNING.key
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ../UPDATER-SIGNING.password)"`
+(paths relative to the repo; see *In-app updates*).
 
 To replace CI's ad-hoc dmg with it on the draft:
 

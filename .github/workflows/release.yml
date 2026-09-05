@@ -3,11 +3,19 @@
 # and opens a DRAFT GitHub release carrying docs/releases/X.Y.Z.md as its
 # notes. Publishing the draft is a deliberate click after review.
 #
-# Artifacts — only what an installer needs:
-#   Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg   arm64 + x86_64 app
-#   Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe NSIS installer
-#   SHA256SUMS.txt                                       to verify the two above
-# (The standalone fin-host CLI ships inside both; it is not a separate download.)
+# Artifacts — what an installer needs, plus what the in-app updater needs:
+#   Corbits-Personal-Finance-X.Y.Z-macOS-universal.dmg          arm64 + x86_64 app
+#   Corbits-Personal-Finance-X.Y.Z-Windows-x64-setup.exe        NSIS installer
+#   SHA256SUMS.txt                                              to verify the above
+#   Corbits-Personal-Finance-X.Y.Z-macOS-universal.app.tar.gz   the updater's macOS payload
+#   *.sig                                                       minisign signatures (TAURI_SIGNING_PRIVATE_KEY)
+#   latest.json                                                 the updater manifest (D-047); the app reads
+#                                                               releases/latest/download/latest.json, so a
+#                                                               draft is never offered as an update
+# (The standalone fin-host CLI ships inside both installers; it is not a separate download.)
+# The update artifacts are signed with TAURI_SIGNING_PRIVATE_KEY /
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD; tauri.conf.json carries the public
+# key, so a build WITHOUT those secrets fails at bundling by design.
 #
 # macOS signing is opt-in through repository secrets (APPLE_CERTIFICATE,
 # APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID,
@@ -154,6 +162,9 @@ jobs:
             echo "notarization: off (no APPLE_ID)"
           fi
       - name: Build the universal app + dmg
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: TRIPLE=universal-apple-darwin ./scripts/build-app.sh
       # The arm64 runner has Rosetta: prove the Intel slice of the fat
       # sidecar actually executes (bun's "CPU lacks AVX" line is only a
@@ -171,6 +182,10 @@ jobs:
           OUT=release; mkdir -p "$OUT"
           DMG=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -1)
           cp "$DMG" "$OUT/Corbits-Personal-Finance-$VERSION-macOS-universal.dmg"
+          # The updater payload (the signed .app as a tarball) and its signature.
+          TGZ=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz | head -1)
+          cp "$TGZ" "$OUT/Corbits-Personal-Finance-$VERSION-macOS-universal.app.tar.gz"
+          cp "$TGZ.sig" "$OUT/Corbits-Personal-Finance-$VERSION-macOS-universal.app.tar.gz.sig"
           echo "$SIGNING" > "$OUT/macos-signing.txt"
           ls -la "$OUT"
       - uses: actions/upload-artifact@v7
@@ -205,6 +220,9 @@ jobs:
       # build. Unsigned per DECISIONS.md D-038 (SmartScreen will warn).
       - name: Tauri build (NSIS)
         working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bunx @tauri-apps/cli@^2 build --bundles nsis
       - name: Collect artifacts
         run: |
@@ -212,6 +230,8 @@ jobs:
           OUT=release; mkdir -p "$OUT"
           EXE=$(ls apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
           cp "$EXE" "$OUT/Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe"
+          # The installer doubles as the updater payload; its signature rides beside it.
+          cp "$EXE.sig" "$OUT/Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe.sig"
           ls -la "$OUT"
       - uses: actions/upload-artifact@v7
         with:
@@ -239,9 +259,25 @@ jobs:
         run: |
           set -x
           mkdir -p release
-          cp artifacts/*.dmg artifacts/*.exe release/
+          cp artifacts/*.dmg artifacts/*.exe artifacts/*.tar.gz artifacts/*.sig release/
           SIGNING="$(cat artifacts/macos-signing.txt)"
-          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          (cd release && sha256sum *.dmg *.exe *.tar.gz > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # The updater manifest (D-047). The app fetches
+          # releases/latest/download/latest.json, which GitHub resolves to the
+          # newest PUBLISHED, non-prerelease release -- so the draft gate holds.
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          MAC="Corbits-Personal-Finance-$VERSION-macOS-universal.app.tar.gz"
+          WIN="Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe"
+          jq -n --arg v "$VERSION" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "Corbits Personal Finance $VERSION -- the notes are on the release page." \
+            --arg macurl "$BASE/$MAC" --arg macsig "$(cat "release/$MAC.sig")" \
+            --arg winurl "$BASE/$WIN" --arg winsig "$(cat "release/$WIN.sig")" \
+            '{version: $v, notes: $notes, pub_date: $d, platforms: {
+               "darwin-universal": {url: $macurl, signature: $macsig},
+               "darwin-aarch64":   {url: $macurl, signature: $macsig},
+               "darwin-x86_64":    {url: $macurl, signature: $macsig},
+               "windows-x86_64":   {url: $winurl, signature: $winsig}}}' > release/latest.json
+          cat release/latest.json
           {
             cat "docs/releases/$VERSION.md"
             echo
@@ -255,6 +291,7 @@ jobs:
             fi
             echo "- **Windows 10/11 x64**: \`Corbits-Personal-Finance-$VERSION-Windows-x64-setup.exe\` — unsigned; SmartScreen will warn (More info → Run anyway)."
             echo "- \`SHA256SUMS.txt\` — verify with \`shasum -a 256 -c SHA256SUMS.txt\` (macOS) or \`certutil -hashfile <file> SHA256\` (Windows)."
+            echo "- Already installed? **Check for Updates…** in the app menu installs this release in place (the \`.app.tar.gz\`, \`.sig\`, and \`latest.json\` files are what the updater reads; you don't need them)."
           } > release-notes.md
       - name: Create or update the draft release
         shell: bash

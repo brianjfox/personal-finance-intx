@@ -32,7 +32,9 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::UpdaterExt;
 
 struct HostChild(Mutex<Option<CommandChild>>);
 /// The sidecar's port, for re-opening the window from the tray.
@@ -70,6 +72,85 @@ fn menu_dispatch(app: &tauri::AppHandle, action: &str) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.eval(&format!("window.dispatchEvent(new CustomEvent('fin:menu', {{ detail: '{action}' }}))"));
     }
+}
+
+/// "Check for Updates…" (D-047): ask the release feed for a newer
+/// signed build and show one native dialog with the answer -- Update /
+/// Later when there is one, "you have the newest version" when there is
+/// not, the reason when the check could not be made. Update downloads
+/// the signed artifact, verifies it against the public key in
+/// tauri.conf.json, installs it over this bundle, and relaunches; the
+/// host is stopped by the normal Exit path on the way out.
+fn check_for_updates(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let current = env!("CARGO_PKG_VERSION");
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                app.dialog()
+                    .message(format!("The updater could not start: {e}"))
+                    .title("Software Update")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                let go = app
+                    .dialog()
+                    .message(format!(
+                        "Version {} is available. You have {current}.
+
+Update downloads the signed build from GitHub, installs it over this copy, and relaunches the app.",
+                        update.version
+                    ))
+                    .title("Software Update")
+                    .kind(MessageDialogKind::Info)
+                    .buttons(MessageDialogButtons::OkCancelCustom("Update".into(), "Later".into()))
+                    .blocking_show();
+                if !go {
+                    return;
+                }
+                match update.download_and_install(|_chunk, _total| {}, || {}).await {
+                    Ok(()) => {
+                        app.dialog()
+                            .message(format!("Version {} is installed. The app will now relaunch.", update.version))
+                            .title("Software Update")
+                            .kind(MessageDialogKind::Info)
+                            .blocking_show();
+                        kill_host(&app);
+                        app.restart();
+                    }
+                    Err(e) => {
+                        app.dialog()
+                            .message(format!("The update could not be installed: {e}
+
+Nothing was changed. You can download it from the release page instead."))
+                            .title("Software Update")
+                            .kind(MessageDialogKind::Error)
+                            .blocking_show();
+                    }
+                }
+            }
+            Ok(None) => {
+                app.dialog()
+                    .message(format!("You have the newest version. Version {current} is the latest published release."))
+                    .title("Software Update")
+                    .kind(MessageDialogKind::Info)
+                    .blocking_show();
+            }
+            Err(e) => {
+                app.dialog()
+                    .message(format!("Couldn't check for updates: {e}
+
+Try again later, or look at the releases page yourself."))
+                    .title("Software Update")
+                    .kind(MessageDialogKind::Warning)
+                    .blocking_show();
+            }
+        }
+    });
 }
 
 /// The standard menu bar (D-046): the app menu, File, Edit, View,
@@ -343,6 +424,8 @@ fn main() {
     let splash_port_reader = splash_port.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .register_uri_scheme_protocol("splash", move |_ctx, _req| {
             let port = splash_port_reader.load(std::sync::atomic::Ordering::SeqCst);
@@ -396,7 +479,7 @@ fn main() {
                     app_handle.exit(0);
                 }
                 "menu-settings" => menu_dispatch(app_handle, "settings"),
-                "menu-updates" => menu_dispatch(app_handle, "check-updates"),
+                "menu-updates" => check_for_updates(app_handle.clone()),
                 "menu-new-window" => open_main(app_handle),
                 "menu-print" => menu_dispatch(app_handle, "print"),
                 "menu-help" => menu_dispatch(app_handle, "help"),

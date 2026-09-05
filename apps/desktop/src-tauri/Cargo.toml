@@ -11,6 +11,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+serde_json = "1"
 
 # NOTE: no `strip = true` here -- on this macOS, stripping corrupts the
 # proc-macro dylibs' LINKEDIT ("mis-aligned LINKEDIT string pool") and
