@@ -296,6 +296,7 @@ export const api = {
   exportBreakGlass: () => post<{ dir: string; files: number; documents: number }>("/api/export"),
   health: () => get<{ ok: boolean; dataDir: string; platform: string }>("/api/health"),
   fx: () => get<{ to: string; date: string; rates: Record<string, string>; stale: boolean }>("/api/fx"),
+  latestRelease: () => get<LatestRelease>("/api/updates/latest"),
   institutions: () => get<Array<{ institution_id: string; name: string; adapter: string; enabled?: boolean }>>("/api/institutions"),
   institutionsOverview: () => get<InstitutionsOverview>("/api/institutions-overview"),
   addInstitution: (name: string, mode: "managed" | "files", category?: "real_estate" | "crypto") =>
@@ -473,6 +474,27 @@ export function factHeadline(f: Pick<Fact, "kind" | "payload">): string {
 export function findingSummary(f: Pick<Finding, "summary" | "summary_parts">): string {
   if (f.summary_parts === undefined) return f.summary;
   return f.summary_parts.map((p) => (typeof p === "string" ? p : money(p.amount, p.currency))).join("");
+}
+
+/** The newest published release, as the host reports it from GitHub. */
+export interface LatestRelease { version: string; tag: string; name: string; url: string; published_at: string | null }
+
+/** Semver-ish comparison on the numeric triple (a pre-release suffix sorts before its release): <0, 0, >0. */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string): { nums: number[]; pre: string } => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?/.exec(v.trim());
+    return m === null ? { nums: [0, 0, 0], pre: "" } : { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? "" };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) {
+    const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  if (x.pre === y.pre) return 0;
+  if (x.pre === "") return 1;
+  if (y.pre === "") return -1;
+  return x.pre < y.pre ? -1 : 1;
 }
 
 export function when(iso: string | null | undefined): string {

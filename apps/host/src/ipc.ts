@@ -310,6 +310,13 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
           return json(opts.lan.get());
         }
         if (p === "/api/fx") return json(await app.getFx());
+        if (p === "/api/updates/latest") {
+          try {
+            return json(await app.latestRelease());
+          } catch (e) {
+            return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+          }
+        }
         if (p === "/api/net-worth") {
           const fx = await app.getFx();
           return json(views.netWorth(app.ledger, { ...asOf, currency: fx.to, rates: fx.rates }));

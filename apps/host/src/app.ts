@@ -100,6 +100,7 @@ import { createConnectors, type ConnectorConfig } from "./connect";
 import { INFERENCE_SERVICE, PROVIDER_PRESETS, providerForTask, readInferenceSettings, resolveTaskSource, sourceForProvider, testInference, writeInferenceSettings, type InferenceSettings, type InferenceTask } from "./inference";
 import { readLedgerLiveAccounts, type LedgerLiveImport } from "./ledgerlive";
 import { fxRates, type FxRates } from "./fx";
+import { latestRelease, type LatestRelease } from "./updates";
 import { extractProfilePatch, type ProfilePatch } from "./profile-extract";
 import {
   ANTHROPIC_SERVICE,
@@ -263,6 +264,8 @@ export interface App {
   ledgerLiveAccounts(file?: string): Promise<LedgerLiveImport>;
   /** Display FX: current ECB rates into the preferred currency (cached ~12h; stale-marked offline). */
   getFx(): Promise<FxRates>;
+  /** The newest published release on GitHub (the app menu's "Check for Updates…"); the GUI compares it with its own version. */
+  latestRelease(): Promise<LatestRelease>;
   /** The last few institution fetches with their (redacted) raw HTTP exchanges. In-memory; restarts clear it. */
   getFetchLogs(institutionId: string): FetchLogRecord[];
   /** The provider registry + which providers have a stored key (presence only) + the preset catalog. */
@@ -1189,6 +1192,9 @@ export function createApp(opts: AppOptions): App {
     },
     getFx() {
       return fetchFx();
+    },
+    latestRelease() {
+      return latestRelease(connectorCfg.fetchImpl !== undefined ? { fetchImpl: connectorCfg.fetchImpl } : {});
     },
     getInferenceSettings() {
       const s = inferenceSettings();

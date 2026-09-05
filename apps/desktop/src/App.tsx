@@ -7,7 +7,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, factHeadline, findingSummary, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, compareVersions, factHeadline, findingSummary, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type LatestRelease, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
@@ -294,6 +294,59 @@ function AboutModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+type UpdateState = { state: "checking" } | { state: "current"; latest: LatestRelease } | { state: "available"; latest: LatestRelease } | { state: "error"; message: string };
+
+/** "Check for Updates…" (the app menu): the newest published release next to this one. Nothing downloads itself. */
+function UpdateModal({ u, onClose }: { u: UpdateState; onClose: () => void }) {
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <LogoMark size={56} />
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--strong)", textTransform: "none", letterSpacing: 0 }}>Software Update</h3>
+        {u.state === "checking" && <p className="small muted" style={{ margin: 0 }}>Checking GitHub for the newest release…</p>}
+        {u.state === "current" && (
+          <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
+            You have the newest version. Version {APP_VERSION} is the latest published release.
+          </p>
+        )}
+        {u.state === "available" && (
+          <>
+            <span className="pill warn">Version {u.latest.version} is available</span>
+            <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
+              You are running {APP_VERSION}. Open the release page to read the notes and download the installer; the running app is never replaced behind your back.
+            </p>
+            <a className="button" href={u.latest.url} target="_blank" rel="noreferrer">Open the release page</a>
+          </>
+        )}
+        {u.state === "error" && (
+          <p className="small muted" style={{ margin: 0, lineHeight: 1.6 }}>
+            Couldn't reach GitHub to check: {u.message.replace(/^Error:\s*/, "")}. Try again later, or look at the releases page yourself.
+          </p>
+        )}
+        <button className="secondary" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+/** The Help menu's entry: every Tricks & Tips line at once, plus where the notes and the issue tracker live. */
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 560, textAlign: "left", alignItems: "stretch" }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "var(--strong)", textTransform: "none", letterSpacing: 0 }}>Corbits Personal Finance Help</h3>
+        <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6, maxHeight: "50vh", overflowY: "auto" }}>
+          {TIPS.map((t) => <li key={t}>{t}</li>)}
+        </ul>
+        <p className="small muted" style={{ margin: 0 }}>
+          Release notes and downloads: <a href="https://github.com/brianjfox/personal-finance-intx/releases" target="_blank" rel="noreferrer">GitHub releases</a>. Something wrong? <a href="https://github.com/brianjfox/personal-finance-intx/issues/new" target="_blank" rel="noreferrer">Report an issue</a>.
+        </p>
+        <button className="secondary" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 /** The sidebar's entries: page id, label, icon. */
 const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
   ["dashboard", "Dashboard", "squares-four"],
@@ -365,6 +418,29 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
       ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
       : "ME";
   const [showAbout, setShowAbout] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [update, setUpdate] = useState<UpdateState | null>(null);
+  // The native menu bar (the Tauri shell) talks to the page with one
+  // event: `fin:menu` with the action as its detail. A browser session
+  // never receives it; the page needs no Tauri API for it.
+  useEffect(() => {
+    const onMenu = (e: Event) => {
+      const action = (e as CustomEvent<string>).detail;
+      if (action === "settings") setPage("settings");
+      else if (action === "help") setShowHelp(true);
+      else if (action === "about") setShowAbout(true);
+      else if (action === "print") window.print();
+      else if (action === "check-updates") {
+        setUpdate({ state: "checking" });
+        api
+          .latestRelease()
+          .then((latest) => setUpdate(compareVersions(latest.version, APP_VERSION) > 0 ? { state: "available", latest } : { state: "current", latest }))
+          .catch((err: unknown) => setUpdate({ state: "error", message: String(err) }));
+      }
+    };
+    window.addEventListener("fin:menu", onMenu);
+    return () => window.removeEventListener("fin:menu", onMenu);
+  }, []);
   // Phone layout: the sidebar slides in from the left behind a hamburger.
   const [menuOpen, setMenuOpen] = useState(false);
   // The privacy veil: masks every rendered financial figure with *s.
@@ -470,6 +546,8 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
       </div>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {update !== null && <UpdateModal u={update} onClose={() => setUpdate(null)} />}
     </div>
   );
 }
