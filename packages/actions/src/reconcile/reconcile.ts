@@ -18,6 +18,8 @@
 
 import {
   decimal,
+  describe,
+  figure,
   type BalancePayload,
   type FindingCode,
   type FindingDraft,
@@ -25,6 +27,7 @@ import {
   type LotPayload,
   type PositionPayload,
   type Severity,
+  type SummaryPart,
   type TaxDocumentPayload,
   type TransactionPayload,
 } from "@fin/contracts";
@@ -132,6 +135,7 @@ function emit(
     severity: Severity;
     subject: string;
     summary: string;
+    summary_parts?: SummaryPart[];
     detail: Record<string, unknown>;
     evidence?: string[];
     before?: string[];
@@ -150,6 +154,7 @@ function emit(
     severity: f.severity,
     subject: f.subject,
     summary: f.summary,
+    ...(f.summary_parts !== undefined ? { summary_parts: f.summary_parts } : {}),
     detail: { ...f.detail, fingerprint },
     fingerprint,
     evidence: f.evidence ?? [],
@@ -243,7 +248,12 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
       code: "internal_transfer_booked_as_income",
       severity: "medium",
       subject: pair.in_account,
-      summary: `${pair.amount} into ${pair.in_account} was booked as ${pair.in_raw_type} but matches a ${pair.amount} outflow from ${pair.out_account}; reclassified as an internal transfer -- confirm`,
+      ...describe(
+        figure(pair.amount, pair.currency),
+        ` into ${pair.in_account} was booked as ${pair.in_raw_type} but matches a `,
+        figure(pair.amount, pair.currency),
+        ` outflow from ${pair.out_account}; reclassified as an internal transfer -- confirm`,
+      ),
       detail: { transfer_group: pair.group, amount: pair.amount, out_account: pair.out_account, in_account: pair.in_account, in_raw_type: pair.in_raw_type },
       evidence: [pair.out_ref, pair.in_ref].filter((r) => r.startsWith("ledger:")).map((r) => r.slice(7)),
       after_refs: [pair.out_ref, pair.in_ref].filter((r) => !r.startsWith("ledger:")),
@@ -348,7 +358,7 @@ function detectStaleBalances(ctx: DetectorContext): void {
         code: "stale_balance",
         severity: "medium",
         subject: a.account_id,
-        summary: `${a.account_id}: total ${ip.amount} unchanged since ${firstSeen.observed_at} while transactions kept posting`,
+        ...describe(`${a.account_id}: total `, figure(ip.amount, ip.currency), ` unchanged since ${firstSeen.observed_at} while transactions kept posting`),
         detail: { amount: ip.amount, stated_as_of: ip.stated_as_of ?? null, unchanged_since: firstSeen.observed_at },
         identity: ["amount", "unchanged_since"],
         evidence: [prior.id],
@@ -480,7 +490,11 @@ function detectMissingCostBasis(ctx: DetectorContext): void {
         code: "missing_cost_basis",
         severity: "high",
         subject: pf.fact.subject,
-        summary: `${p.quantity} ${p.instrument.symbol} in ${pf.fact.subject} reports a ZERO cost basis against ${p.market_value} market value -- almost certainly an unreported basis, not a free lot`,
+        ...describe(
+          `${p.quantity} ${p.instrument.symbol} in ${pf.fact.subject} reports a ZERO cost basis against `,
+          figure(p.market_value, p.currency),
+          " market value -- almost certainly an unreported basis, not a free lot",
+        ),
         detail: { symbol: p.instrument.symbol, quantity: p.quantity, market_value: p.market_value, cost_basis: "0" },
         after_refs: [pf.ref],
         requires_human: true,
@@ -573,7 +587,15 @@ function detectPositionBalanceMismatch(ctx: DetectorContext): void {
       code: "position_balance_mismatch",
       severity: "medium",
       subject: a.account_id,
-      summary: `${a.account_id}: positions${cash === null ? "" : " + cash"} sum to ${sum} but the institution states ${total.amount} (diff ${diff})`,
+      ...describe(
+        `${a.account_id}: positions${cash === null ? "" : " + cash"} sum to `,
+        figure(sum, total.currency),
+        " but the institution states ",
+        figure(total.amount, total.currency),
+        " (diff ",
+        figure(diff, total.currency),
+        ")",
+      ),
       detail: { positions_sum: decimal.sum(mvs), cash: cash?.amount ?? null, stated_total: total.amount, diff },
       after_refs: [totalRef, ...a.refs.positions],
       requires_human: true,

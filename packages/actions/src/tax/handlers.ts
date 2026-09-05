@@ -23,6 +23,8 @@
 import {
   assertType,
   decimal,
+  describe,
+  figure,
   QuarterEstimate,
   TaxProfile,
   type FindingCode,
@@ -31,6 +33,7 @@ import {
   type FindingKind,
   type LotPayload,
   type Severity,
+  type SummaryPart,
   type TransactionPayload,
 } from "@fin/contracts";
 
@@ -59,6 +62,8 @@ export interface TaxCheckInput {
 export type TaxEstimateOutput = QuarterEstimate & { findings: FindingDraft[] };
 
 const TAX_VIA = "tax@1";
+/** The tax engine computes in the filing currency; the profile's rates and thresholds are dollar figures. */
+const TAX_CURRENCY = "USD";
 
 function checkInput(rawInput: unknown, what: string): TaxCheckInput {
   const input = rawInput as Partial<TaxCheckInput>;
@@ -91,6 +96,7 @@ interface DraftSpec {
   severity: Severity;
   subject: string;
   summary: string;
+  summary_parts?: SummaryPart[];
   detail: Record<string, unknown>;
   evidence: string[];
   requires_human: boolean;
@@ -107,6 +113,7 @@ function draft(asOf: string, f: DraftSpec): FindingDraft {
     severity: f.severity,
     subject: f.subject,
     summary: f.summary,
+    ...(f.summary_parts !== undefined ? { summary_parts: f.summary_parts } : {}),
     detail: { ...f.detail, fingerprint },
     fingerprint,
     evidence: f.evidence,
@@ -212,7 +219,11 @@ export function estimateQuarter(actx: ActionContext, profile: TaxProfile, input:
         code: "estimated_tax_due",
         severity: "high",
         subject: yearSubject,
-        summary: `tax ${String(input.tax_year)} Q${String(input.quarter)}: estimated payment of ${installment} USD is due ${spec.due}${covered ? ` -- funded from reserve ${profile.reserve_account}` : ""}`,
+        ...describe(
+          `tax ${String(input.tax_year)} Q${String(input.quarter)}: estimated payment of `,
+          figure(installment, TAX_CURRENCY),
+          ` is due ${spec.due}${covered ? ` -- funded from reserve ${profile.reserve_account}` : ""}`,
+        ),
         detail: { tax_year: input.tax_year, quarter: input.quarter, amount: installment, due: spec.due, reserve_account: profile.reserve_account, covered },
         evidence,
         requires_human: true,
@@ -227,7 +238,15 @@ export function estimateQuarter(actx: ActionContext, profile: TaxProfile, input:
         code: "reserve_shortfall",
         severity: input.stage === "due" ? "critical" : "high",
         subject: profile.reserve_account,
-        summary: `tax ${String(input.tax_year)} Q${String(input.quarter)} ${input.stage}: reserve ${profile.reserve_account} holds ${reserveBalance ?? "nothing on record"} against a ${installment} USD installment due ${spec.due} -- fund ${shortfall} from cash flow before the deadline to avoid a forced sale`,
+        ...describe(
+          `tax ${String(input.tax_year)} Q${String(input.quarter)} ${input.stage}: reserve ${profile.reserve_account} holds `,
+          reserveBalance === null ? "nothing on record" : figure(reserveBalance, TAX_CURRENCY),
+          " against a ",
+          figure(installment, TAX_CURRENCY),
+          ` installment due ${spec.due} -- fund `,
+          figure(shortfall, TAX_CURRENCY),
+          " from cash flow before the deadline to avoid a forced sale",
+        ),
         detail: { tax_year: input.tax_year, quarter: input.quarter, stage: input.stage, installment, reserve_balance: reserveBalance, shortfall },
         evidence,
         requires_human: true,
@@ -252,7 +271,15 @@ export function estimateQuarter(actx: ActionContext, profile: TaxProfile, input:
         code: "safe_harbor_shortfall",
         severity: "medium",
         subject: yearSubject,
-        summary: `tax ${String(input.tax_year)} Q${String(q)}: payments through ${past.due} were ${pastPaid.total} against a required ${pastRequired} (short ${short}); an underpayment penalty may accrue -- catch up with the next installment`,
+        ...describe(
+          `tax ${String(input.tax_year)} Q${String(q)}: payments through ${past.due} were `,
+          figure(pastPaid.total, TAX_CURRENCY),
+          " against a required ",
+          figure(pastRequired, TAX_CURRENCY),
+          " (short ",
+          figure(short, TAX_CURRENCY),
+          "); an underpayment penalty may accrue -- catch up with the next installment",
+        ),
         detail: { tax_year: input.tax_year, quarter: q, required_cum: pastRequired, payments_cum: pastPaid.total, short },
         evidence: [...new Set([...pastIncome.factIds, ...pastPaid.factIds])],
         requires_human: true,
@@ -267,7 +294,13 @@ export function estimateQuarter(actx: ActionContext, profile: TaxProfile, input:
         code: "wash_sale_risk",
         severity: "medium",
         subject: w.account_id,
-        summary: `${w.symbol}: loss sale ${w.sale_txn_id} (${w.loss}) on ${w.sale_date} with a repurchase on ${w.repurchase_date} -- inside the 30-day wash-sale window; ~${w.disallowed_estimate} of the loss may be disallowed`,
+        ...describe(
+          `${w.symbol}: loss sale ${w.sale_txn_id} (`,
+          figure(w.loss, TAX_CURRENCY),
+          `) on ${w.sale_date} with a repurchase on ${w.repurchase_date} -- inside the 30-day wash-sale window; ~`,
+          figure(w.disallowed_estimate, TAX_CURRENCY),
+          " of the loss may be disallowed",
+        ),
         detail: { symbol: w.symbol, sale_txn_id: w.sale_txn_id, sale_date: w.sale_date, repurchase_txn_id: w.repurchase_txn_id, repurchase_date: w.repurchase_date, loss: w.loss, disallowed_estimate: w.disallowed_estimate },
         evidence,
         requires_human: false,

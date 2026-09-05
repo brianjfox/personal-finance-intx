@@ -68,6 +68,11 @@ export interface AsOfQuery {
   includeProvisional?: boolean;
 }
 
+/** The stored summary segments, absent (not undefined) on rows written before migration 4. */
+function summaryPartsOf(raw: unknown): Pick<FindingRow, "summary_parts"> {
+  return typeof raw === "string" ? { summary_parts: JSON.parse(raw) as NonNullable<Finding["summary_parts"]> } : {};
+}
+
 export interface FindingRow extends Finding {
   run_id: string | null;
   step_id: string | null;
@@ -445,8 +450,8 @@ export class Ledger {
     const id = this.mkId("fnd");
     this.db
       .query(
-        `INSERT INTO finding(id, kind, code, severity, subject, summary, detail, evidence, before_ids, after_ids, requires_human, emitted_by, as_of, provenance, run_id, step_id, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO finding(id, kind, code, severity, subject, summary, summary_parts, detail, evidence, before_ids, after_ids, requires_human, emitted_by, as_of, provenance, run_id, step_id, batch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -455,6 +460,7 @@ export class Ledger {
         f.severity,
         f.subject,
         f.summary,
+        f.summary_parts === undefined ? null : JSON.stringify(f.summary_parts),
         JSON.stringify(f.detail),
         JSON.stringify(f.evidence),
         JSON.stringify(f.before),
@@ -532,6 +538,7 @@ export class Ledger {
       severity: r["severity"] as Finding["severity"],
       subject: r["subject"] as string,
       summary: r["summary"] as string,
+      ...summaryPartsOf(r["summary_parts"]),
       detail: JSON.parse(r["detail"] as string) as Record<string, unknown>,
       evidence: JSON.parse(r["evidence"] as string) as string[],
       before: JSON.parse(r["before_ids"] as string) as string[],

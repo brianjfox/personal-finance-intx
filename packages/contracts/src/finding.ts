@@ -7,7 +7,7 @@ import { type } from "arktype";
 
 import { Principal } from "./principals";
 import { Provenance } from "./provenance";
-import { Id, IsoDateTime, Severity, Subject } from "./scalars";
+import { Currency, Decimal, Id, IsoDateTime, Severity, Subject } from "./scalars";
 
 export const FindingKind = type(
   "'break' | 'staleness' | 'correction' | 'gap' | 'tax_event' | 'risk' | 'mismatch' | 'info'",
@@ -47,6 +47,29 @@ export const FINDING_CODES = [
 export type FindingCode = (typeof FINDING_CODES)[number];
 export const FindingCode = type.enumerated(...FINDING_CODES);
 
+/** A money figure inside a finding's summary: amount in its native currency, formatted by the reader. */
+export const FindingFigure = type({ amount: Decimal, currency: Currency });
+export type FindingFigure = typeof FindingFigure.infer;
+/** A summary as segments: prose strings and money figures, in reading order. */
+export const SummaryPart = type("string").or(FindingFigure);
+export type SummaryPart = typeof SummaryPart.infer;
+
+/** A money figure for `describe`. */
+export function figure(amount: string, currency: string): FindingFigure {
+  return { amount, currency };
+}
+
+/**
+ * Build a finding's summary from prose and figures. `summary` is the plain
+ * rendering (amount followed by its currency code) for logs, the CLI, and
+ * exports; `summary_parts` keeps the figures structured so a display can
+ * format each one in the operator's preferred currency (issue #77).
+ */
+export function describe(...parts: SummaryPart[]): { summary: string; summary_parts: SummaryPart[] } {
+  const summary = parts.map((p) => (typeof p === "string" ? p : `${p.amount} ${p.currency}`)).join("");
+  return { summary, summary_parts: parts };
+}
+
 export const Finding = type({
   id: Id,
   kind: FindingKind,
@@ -54,6 +77,8 @@ export const Finding = type({
   severity: Severity,
   subject: Subject,
   summary: "string",
+  /** `summary` as segments, present when the summary carries money figures; absent on older or figure-free findings. */
+  "summary_parts?": SummaryPart.array(),
   /** Structured detail for the GUI and for tests; shape depends on `code`. */
   detail: "Record<string, unknown>",
   /** Ledger fact ids this finding is grounded in. "Cite or stay quiet." */

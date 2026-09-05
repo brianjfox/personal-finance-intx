@@ -204,7 +204,7 @@ describe("phase 4 through fin-host: the approval queue", () => {
     };
     const app = openApp(dataDir, [crypto]);
     try {
-      expect(app.ledger.schemaVersion()).toBe(3);
+      expect(app.ledger.schemaVersion()).toBe(4);
       expect((await app.runNightly({ runId: "nightly_lots" })).terminalStatus).toBe("completed");
       const r = await app.startProposal({ timeoutMs: 60_000 });
       expect(r.state).toBe("queued");

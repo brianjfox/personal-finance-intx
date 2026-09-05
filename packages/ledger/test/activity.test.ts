@@ -177,3 +177,29 @@ describe("recurringCharges", () => {
     expect(loose.charges.some((c) => c.normalized === "two only" && c.cadence === "monthly")).toBe(true);
   });
 });
+
+describe("finding summary_parts (migration 4)", () => {
+  test("round-trips through append and read; absent when not supplied", () => {
+    const l = openLedger(":memory:");
+    const base = {
+      kind: "mismatch" as const,
+      code: "position_balance_mismatch" as const,
+      severity: "medium" as const,
+      subject: "acct.demo.checking",
+      summary: "sum to 1 USD",
+      detail: {},
+      evidence: [],
+      before: [],
+      after: [],
+      requires_human: true,
+      emitted_by: "reconciliation" as const,
+      as_of: T1,
+      provenance: { source_id: "reconcile", source_doc_id: null, observed_at: T1, via: "test@1" },
+    };
+    const withParts = l.appendFinding({ ...base, summary_parts: ["sum to ", { amount: "1", currency: "USD" }] });
+    const plain = l.appendFinding(base);
+    expect(l.getFinding(withParts)?.summary_parts).toEqual(["sum to ", { amount: "1", currency: "USD" }]);
+    expect(l.getFinding(plain)).not.toHaveProperty("summary_parts");
+    expect(l.openFindings({ requiresHuman: true }).map((f) => f.summary_parts !== undefined)).toEqual([false, true]);
+  });
+});
