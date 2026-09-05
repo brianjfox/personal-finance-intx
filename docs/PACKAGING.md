@@ -54,6 +54,27 @@ durable on disk and resume next launch.
 The app and the CLI share the same data directory, so `fin-host ...`
 commands operate on the same household.
 
+## Local dev builds (D-050)
+
+To try main on this Mac before a release, without waiting for CI:
+
+```bash
+scripts/dev-install.sh            # build this checkout (arm64, ad-hoc, no dmg), replace /Applications/Corbits Personal Finance.app, relaunch
+scripts/dev-watch.sh --install    # a launch agent that does that automatically whenever main moves (every 2 min it fetches origin)
+scripts/dev-watch.sh --status     # what is installed vs. main; whether the agent is loaded
+scripts/dev-watch.sh --uninstall
+```
+
+The watcher builds from its own worktree (`../pfi-dev-build`, tracking
+`origin/main`), so the working tree and whatever branch is checked out
+there are never touched. Log: `~/Library/Logs/corbits-dev-build.log`.
+A failed build is not retried until main moves again. Both scripts
+need the updater signing key beside the repository (`../UPDATER-SIGNING.key`
++ `.password`; see RELEASING.md, *In-app updates*) because the config
+carries the public key. A dev build keeps the released version number
+(the About panel says 0.6.0 until the next cut); the log and `--status`
+carry the commit.
+
 ## The menu bar (D-046)
 
 The shell carries the platform's standard menus. The **app menu** has
