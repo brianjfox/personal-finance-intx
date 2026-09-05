@@ -267,8 +267,35 @@ function UserGate({ users, onEnter, onChanged }: { users: UserInfo[]; onEnter: (
 
 export function App() {
   const gate = useUserGate();
+  // About and Help belong to the whole app, not the signed-in body: the
+  // menu bar must open them on the start-up and sign-in screens too. The
+  // native menu bar (the Tauri shell) talks to the page with one event,
+  // `fin:menu`, with the action as its detail; a browser session never
+  // receives it, and the page needs no Tauri API for it.
+  const [showAbout, setShowAbout] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(() => {
+    const onMenu = (e: Event) => {
+      const action = (e as CustomEvent<string>).detail;
+      if (action === "about") setShowAbout(true);
+      else if (action === "help") setShowHelp(true);
+    };
+    window.addEventListener("fin:menu", onMenu);
+    return () => window.removeEventListener("fin:menu", onMenu);
+  }, []);
+  const modals = (
+    <>
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+    </>
+  );
   if (!gate.ready) {
-    return <div className="app"><main><div className="page"><p className="muted">Starting…</p></div></main></div>;
+    return (
+      <div className="app">
+        <main><div className="page"><p className="muted">Starting…</p></div></main>
+        {modals}
+      </div>
+    );
   }
   if (gate.multi && gate.current === null) {
     return (
@@ -278,11 +305,23 @@ export function App() {
             <UserGate users={gate.users} onEnter={gate.enter} onChanged={gate.refresh} />
           </div>
         </main>
+        {modals}
       </div>
     );
   }
   // Keyed by user: signing out or switching remounts everything fresh.
-  return <AppBody key={gate.current?.id ?? "single"} user={gate.multi ? gate.current : null} signOut={gate.signOut} onRenamed={gate.renameLocal ?? (() => {})} />;
+  return (
+    <>
+      <AppBody
+        key={gate.current?.id ?? "single"}
+        user={gate.multi ? gate.current : null}
+        signOut={gate.signOut}
+        onRenamed={gate.renameLocal ?? (() => {})}
+        openAbout={() => setShowAbout(true)}
+      />
+      {modals}
+    </>
+  );
 }
 
 /** The About popup: the mark, the name, and the version. */
@@ -342,7 +381,7 @@ const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
   ["settings", "Settings", "gear"],
 ];
 
-function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void }) {
+function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void; openAbout: () => void }) {
   const [page, setPage] = useState<Page>("dashboard");
   const [queue, setQueue] = useState<Finding[]>([]);
   const [approvalsCount, setApprovalsCount] = useState(0);
@@ -397,17 +436,12 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
     user !== null
       ? user.name.trim().split(/\s+/).map((w) => w[0] ?? "").slice(0, 2).join("").toUpperCase()
       : "ME";
-  const [showAbout, setShowAbout] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  // The native menu bar (the Tauri shell) talks to the page with one
-  // event: `fin:menu` with the action as its detail. A browser session
-  // never receives it; the page needs no Tauri API for it.
+  // Menu actions that need a signed-in page (About and Help are handled
+  // in App, so they work on the sign-in screen too).
   useEffect(() => {
     const onMenu = (e: Event) => {
       const action = (e as CustomEvent<string>).detail;
       if (action === "settings") setPage("settings");
-      else if (action === "help") setShowHelp(true);
-      else if (action === "about") setShowAbout(true);
       else if (action === "print") window.print();
     };
     window.addEventListener("fin:menu", onMenu);
@@ -429,7 +463,7 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
       <header className="topbar">
         <div className="tb-left">
           <button className="iconbtn only-mobile" title="Menu" onClick={() => setMenuOpen((o) => !o)}><Icon name="menu" /></button>
-          <span className="tb-brand click" role="button" title="About Corbits Personal Finance" onClick={() => setShowAbout(true)}><LogoMark /> <span className="bt">Corbits Personal Finance</span></span>
+          <span className="tb-brand click" role="button" title="About Corbits Personal Finance" onClick={openAbout}><LogoMark /> <span className="bt">Corbits Personal Finance</span></span>
           <span className="tb-divider" />
           <span className="tb-networth">
             <span className="lbl">Net Worth</span>
@@ -517,8 +551,6 @@ function AppBody({ user, signOut, onRenamed }: { user: { id: string; name: strin
         </main>
       </div>
       {factId !== null && <FactDrawer id={factId} onClose={() => setFactId(null)} openFact={setFactId} />}
-      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
-      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
