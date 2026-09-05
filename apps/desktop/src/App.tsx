@@ -345,6 +345,7 @@ function AboutModal({ onClose }: { onClose: () => void }) {
         <p className="small muted" style={{ margin: 0 }}>
           <a href="https://github.com/brianjfox/personal-finance-intx/issues/new" target="_blank" rel="noreferrer">Report an Issue</a>
         </p>
+        <p className="small muted" style={{ margin: 0 }}>© 2026 ABK Labs, Inc.</p>
         <button className="secondary" onClick={onClose}>Close</button>
       </div>
     </div>
