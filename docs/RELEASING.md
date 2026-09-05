@@ -142,9 +142,11 @@ TRIPLE=universal-apple-darwin ./scripts/build-app.sh
 ```
 
 Every local `tauri build` now also needs the updater key, or bundling
-fails: `export TAURI_SIGNING_PRIVATE_KEY_PATH=../UPDATER-SIGNING.key
+fails -- the CLI's bundler reads the key's CONTENTS, not a path:
+`export TAURI_SIGNING_PRIVATE_KEY="$(cat ../UPDATER-SIGNING.key)"
 TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat ../UPDATER-SIGNING.password)"`
-(paths relative to the repo; see *In-app updates*).
+(paths relative to the repo; see *In-app updates*). `scripts/dev-install.sh`
+does this for you.
 
 To replace CI's ad-hoc dmg with it on the draft:
 
