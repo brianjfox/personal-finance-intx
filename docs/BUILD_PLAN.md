@@ -136,6 +136,7 @@ Only these get a model, a system prompt, and reasoning budget:
 | **Strategist** | `ledger_read_aggregates`, `journal_write`, `run_projection` | Any credential tool, any write to a fact table, any order placement |
 | **Market Manager** | `ledger_read_positions`, `read_plan_targets`, `emit_proposal` | Account identifiers, balances beyond positions, any execution tool |
 | **Estate Planner** | `registry_read`, `document_read`, `emit_finding` | Credentials, execution |
+| **Ledger Analyst** (D-044) | `transactions_query`, `transactions_summary`, `cash_flow`, `recurring_charges`, `list_subjects` | Any write (journal, finding, draft, fact), credentials, execution, account numbers |
 
 A fourth optional model node: **Auditor narrator**, which explains a deterministic audit verdict in prose. It receives the verdict, never computes it.
 
