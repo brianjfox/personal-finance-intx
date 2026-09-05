@@ -7,7 +7,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, factHeadline, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
+import { api, factHeadline, findingSummary, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
@@ -3941,7 +3941,7 @@ function QueueItem({ f, onChanged, openFact }: { f: Finding; onChanged: () => vo
         <span className="c-title">{title}</span>
         <span className={`pill ${f.severity}`} style={{ marginLeft: "auto" }}>{f.severity}</span>
       </div>
-      <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 6px" }}>{f.summary}</p>
+      <p style={{ fontSize: 12, color: "var(--t2)", lineHeight: 1.6, margin: "0 0 6px" }}>{findingSummary(f)}</p>
       <div className="small muted" style={{ marginBottom: 14 }}>{f.subject} · {when(f.as_of)} · by {f.emitted_by}</div>
       {hasVersions && (
         <div className="vs-grid">

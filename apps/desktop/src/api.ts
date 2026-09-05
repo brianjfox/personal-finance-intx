@@ -28,8 +28,10 @@ export interface Doc {
   id: string; sha256: string; mime: string; bytes: number; filename: string; kind: string; pages: number | null; source_id: string;
   institution_id?: string | null; ingested_at: string; ingested_by: string;
 }
+/** A money figure inside a finding's summary; the display formats it in the preferred currency. */
+export type SummaryPart = string | { amount: string; currency: string };
 export interface Finding {
-  id: string; kind: string; code: string; severity: string; subject: string; summary: string; detail: Record<string, unknown>;
+  id: string; kind: string; code: string; severity: string; subject: string; summary: string; summary_parts?: SummaryPart[]; detail: Record<string, unknown>;
   evidence: string[]; before: string[]; after: string[]; requires_human: boolean; emitted_by: string; as_of: string;
   resolved: boolean; resolutions: Array<{ decision: string; note: string; decided_by: string; decided_at: string }>;
   run_id: string | null;
@@ -461,6 +463,16 @@ export function factHeadline(f: Pick<Fact, "kind" | "payload">): string {
     default:
       return f.kind;
   }
+}
+
+/**
+ * A finding's summary for display: when the host sent it as segments, each
+ * money figure is formatted like every other figure in the GUI (preferred
+ * currency, veil); otherwise the plain summary as written (issue #77).
+ */
+export function findingSummary(f: Pick<Finding, "summary" | "summary_parts">): string {
+  if (f.summary_parts === undefined) return f.summary;
+  return f.summary_parts.map((p) => (typeof p === "string" ? p : money(p.amount, p.currency))).join("");
 }
 
 export function when(iso: string | null | undefined): string {

@@ -59,6 +59,7 @@ export interface TransferPair {
   out_ref: string;
   in_ref: string;
   amount: string;
+  currency: string;
   out_account: string;
   in_account: string;
   /** The institution's own type for each leg before reclassification. */
@@ -656,6 +657,7 @@ function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Th
       out_ref: o.ref ?? `ledger:${o.id ?? ""}`,
       in_ref: best.ref ?? `ledger:${best.id ?? ""}`,
       amount: best.amount,
+      currency: best.payload.currency,
       out_account: o.account,
       in_account: best.account,
       out_raw_type: o.type,

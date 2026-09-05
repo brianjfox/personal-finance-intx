@@ -251,6 +251,12 @@ describe("extras", () => {
     expect(n.rec.provisional_subjects).toEqual(["acct.broker.ira"]);
     const mm = n.rec.findings.find((f) => f.code === "position_balance_mismatch")!;
     expect(mm.detail["diff"]).toBe("24000");
+    // The summary's money figures are structured (issue #77): the display
+    // formats each in the operator's currency; the plain text keeps the code.
+    expect(mm.summary).toContain("(diff 24000 USD)");
+    const figures = (mm.summary_parts ?? []).filter((p): p is { amount: string; currency: string } => typeof p !== "string");
+    expect(figures.map((f) => f.currency)).toEqual(["USD", "USD", "USD"]);
+    expect(figures[2]).toEqual({ amount: "24000", currency: "USD" });
   });
 
   test("a clean night is clean: nothing queued, nothing held, closed positions zeroed", () => {

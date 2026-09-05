@@ -245,6 +245,13 @@ ${["audit_verdict", "instruction_event"].map(appendOnlyTriggers).join("\n")}
     name: "audit-verdict-caveats",
     sql: `ALTER TABLE audit_verdict ADD COLUMN caveats TEXT NOT NULL DEFAULT '[]';`,
   },
+  {
+    version: 4,
+    name: "finding-summary-parts",
+    // The summary as segments (prose + money figures) so a display can
+    // format each figure in the operator's currency; NULL on older rows.
+    sql: `ALTER TABLE finding ADD COLUMN summary_parts TEXT;`,
+  },
 ];
 
 export const APPEND_ONLY = APPEND_ONLY_TABLES;
