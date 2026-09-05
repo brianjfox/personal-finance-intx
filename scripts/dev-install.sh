@@ -21,7 +21,8 @@ PARENT="$(cd .. && pwd)"
 KEY="${UPDATER_KEY:-$PARENT/UPDATER-SIGNING.key}"
 PW_FILE="${UPDATER_KEY_PASSWORD_FILE:-$PARENT/UPDATER-SIGNING.password}"
 [ -f "$KEY" ] || { echo "dev-install: updater signing key not found at $KEY (see docs/RELEASING.md, In-app updates)" >&2; exit 1; }
-export TAURI_SIGNING_PRIVATE_KEY_PATH="$KEY"
+# The CLI's bundler reads the key CONTENTS (the _PATH variant is not honoured there).
+TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY")"; export TAURI_SIGNING_PRIVATE_KEY
 if [ -f "$PW_FILE" ]; then TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "$PW_FILE")"; export TAURI_SIGNING_PRIVATE_KEY_PASSWORD; fi
 
 case "$(uname -m)" in
