@@ -37,6 +37,23 @@ export const WalletHolding = type({
 });
 export type WalletHolding = typeof WalletHolding.infer;
 
+/**
+ * A holding's address in the form two entries are compared by (issue
+ * #112): trimmed, and lower-cased for Ethereum, whose addresses are
+ * case-insensitive (the mixed case is only a checksum). Bitcoin,
+ * Litecoin, Solana addresses and xpubs are case-sensitive as written.
+ */
+export function walletAddressKey(h: Pick<WalletHolding, "kind" | "value">): string {
+  const v = h.value.trim();
+  return h.kind === "eth_address" ? v.toLowerCase() : v;
+}
+
+/** A short, safe rendering of an address for a message: first six and last four characters. */
+export function shortAddress(value: string): string {
+  const v = value.trim();
+  return v.length > 14 ? `${v.slice(0, 6)}…${v.slice(-4)}` : v;
+}
+
 export interface WalletOptions {
   institution_id: string;
   holdings: WalletHolding[];
@@ -235,6 +252,9 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
         balances: [{ balance_type: "total", amount: total }],
         ...(positions.length > 0 ? { positions } : {}),
         ...(transactions.length > 0 ? { transactions } : {}),
+        // What this account reads, so the reconciler can tell two entries
+        // watching the same funds from two wallets (issue #112).
+        watched_addresses: [...new Set(opts.holdings.map(walletAddressKey))].sort(),
       };
       const draft = validateDraftSnapshot(
         { institution_id: opts.institution_id, fetched_at: asOf, via: WALLET_VIA, accounts: [account] },

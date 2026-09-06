@@ -28,6 +28,7 @@ export const FINDING_CODES = [
   "crypto_swap_taxable_event", //          5. crypto swap the feed does not call a sale
   "position_balance_mismatch", //          sum(positions) != stated total
   "fetch_failed", //                       an institution did not answer
+  "address_watched_twice", //              two open wallet accounts watch the same address: one balance, counted twice (issue #112)
   "unknown_account", //                    an account appeared that the registry has not seen
   "account_relinked", //                   a reconnect re-observed a known account under a new provider id
   "account_gone", //                       a complete feed stopped reporting an open account; it was closed

@@ -21,6 +21,8 @@ export interface RecordFindingsInput {
   answered?: string[];
   /** Hand-entered holdings reported tonight: their open stale_balance findings are moot (D-049). */
   manual_subjects?: string[];
+  /** The address_watched_twice conditions still standing tonight, by fingerprint (issue #112): open findings not in it are resolved. */
+  still_watched_twice?: string[];
   [writer: string]: unknown;
 }
 
@@ -34,6 +36,8 @@ export interface RecordFindingsOutput {
   resolved_fetch_failures: number;
   /** stale_balance findings this run closed because the holding is hand-entered (D-049). */
   resolved_stale_holdings: number;
+  /** address_watched_twice findings this run closed because only one open account watches the address now (issue #112). */
+  resolved_watched_twice: number;
 }
 
 export function recordFindingsHandler(actx: ActionContext): ActionHandler {
@@ -103,6 +107,27 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
             resolvedStaleHoldings += 1;
           }
         }
+        // An address watched twice stops being so when one of the
+        // accounts closes (the operator removed the entry): the finding
+        // resolves itself rather than waiting for a dismissal.
+        let resolvedWatchedTwice = 0;
+        if (input.still_watched_twice !== undefined) {
+          const standing = new Set(input.still_watched_twice);
+          for (const f of actx.ledger.openFindings({})) {
+            if (f.code !== "address_watched_twice") continue;
+            const fp = typeof f.detail["fingerprint"] === "string" ? (f.detail["fingerprint"] as string) : null;
+            if (fp !== null && standing.has(fp)) continue;
+            actx.ledger.appendResolution({
+              finding_id: f.id,
+              decision: "dismiss",
+              note: `only one open account watches the address now (resolved on ${input.run_key})`,
+              decided_by: "reconciliation",
+              decided_at: actx.clock().toISOString(),
+              resulting_facts: [],
+            });
+            resolvedWatchedTwice += 1;
+          }
+        }
         return {
           run_key: input.run_key,
           clean: input.clean,
@@ -111,6 +136,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
           provisional_subjects: input.provisional_subjects ?? [],
           resolved_fetch_failures: resolvedFetchFailures,
           resolved_stale_holdings: resolvedStaleHoldings,
+          resolved_watched_twice: resolvedWatchedTwice,
         } satisfies RecordFindingsOutput;
       },
     })) as RecordFindingsOutput;

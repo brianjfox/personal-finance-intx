@@ -302,6 +302,7 @@ function normalizeAccount(
       type: acct.type,
       currency: acct.currency,
       masked_number: acct.masked_number ?? null,
+      ...(acct.watched_addresses !== undefined ? { watched_addresses: acct.watched_addresses } : {}),
     },
   });
 
