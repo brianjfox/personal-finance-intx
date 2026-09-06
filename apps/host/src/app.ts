@@ -221,7 +221,8 @@ export interface App {
   /** The position's live tax lots, oldest first, with a suggested default basis for the unknown ones (issue #57). */
   lotsFor(accountId: string, symbol: string): Promise<LotRow[]>;
   /** Record the operator's cost basis (and optionally the true acquisition date) for one lot. */
-  setLotBasis(o: { accountId: string; lotId: string; costBasis: string; acquiredAt?: string }): { lot: LotRow };
+  /** Enter a basis for one lot -- or, with `lotIds`, for every fill of a folded row (issue #103), the total split by quantity. */
+  setLotBasis(o: { accountId: string; lotId: string; lotIds?: string[]; costBasis: string; acquiredAt?: string }): { lot: LotRow };
   /** Add a lot by hand for an institution that reports none (issue #62): quantity, date acquired, total cost. */
   addLot(o: { accountId: string; symbol: string; quantity: string; acquiredAt: string; costBasis: string }): { lot: LotRow };
   /** Rename a connection (e.g. a property's address). Real-estate accounts keep their own name via saveManagedAccount. */
@@ -484,6 +485,15 @@ export interface LotRow {
   currency: string;
   /** Default offered when entering a basis: the lot's value on the transfer date, plus the market unit price looked up for that date. */
   suggested: { amount: string; source: string; unit_price: string | null; unit_source: string | null } | null;
+  /**
+   * How many ledger lots this row stands for (issue #103): an exchange
+   * fills one order in pieces and reports each fill as a lot, so same-day
+   * fills with the same basis state fold into one row. `lot_id` is the
+   * first fill's; `lot_ids` names every fill, for a basis entry that
+   * covers them all. 1 and [lot_id] for an ordinary lot.
+   */
+  fills: number;
+  lot_ids: string[];
 }
 
 const symbol_ = (p: LotPayload): string => p.instrument.symbol;
@@ -501,7 +511,68 @@ function lotRow(factId: string, p: LotPayload, suggested: LotRow["suggested"]): 
     transferred_in: p.transferred_in,
     currency: p.currency,
     suggested,
+    fills: 1,
+    lot_ids: [p.lot_id],
   };
+}
+
+/**
+ * Fold consecutive same-day lots with the same basis state into one row
+ * (issue #103): quantities, known bases and arrival values sum; the
+ * suggested default is the summed arrival value when every fill has
+ * one, else the day's unit price times the total. Lots are already
+ * sorted oldest first, so one order's fills are adjacent.
+ */
+function foldLotRows(lots: { fact: { id: string }; p: LotPayload }[], unitPriceFor: (p: LotPayload) => { price: string | null; source: string | null }): LotRow[] {
+  const out: LotRow[] = [];
+  const sameOrder = (a: LotPayload, b: LotPayload): boolean =>
+    a.acquired_at === b.acquired_at && a.basis_known === b.basis_known && (a.basis_source ?? null) === (b.basis_source ?? null) && a.transferred_in === b.transferred_in;
+  let group: { fact: { id: string }; p: LotPayload }[] = [];
+  const flush = (): void => {
+    const first = group[0];
+    if (first === undefined) return;
+    const p = first.p;
+    // A lone lot keeps the institution's own figures verbatim; a folded order carries sums, money rounded to the cent.
+    const folded = group.length > 1;
+    const quantity = folded ? decimal.sum(group.map((g) => g.p.quantity)) : p.quantity;
+    const basis = p.basis_known && group.every((g) => g.p.cost_basis !== null) ? (folded ? decimal.round(decimal.sum(group.map((g) => g.p.cost_basis as string)), 2) : p.cost_basis) : null;
+    const arrival = group.every((g) => g.p.value_at_transfer != null) ? (folded ? decimal.round(decimal.sum(group.map((g) => g.p.value_at_transfer as string)), 2) : (p.value_at_transfer as string)) : null;
+    let suggested: LotRow["suggested"] = null;
+    if (!p.basis_known) {
+      // The UNIT price is looked up from the price provider for the date
+      // the lot arrived (the operator's request, issue #57); the aggregate
+      // default prefers the arrival value the institution itself reported,
+      // falling back to unit x quantity.
+      const { price: spot, source } = unitPriceFor(p);
+      const unitPrice = spot ?? (arrival !== null && !decimal.isZero(quantity) ? decimal.round(decimal.div(arrival, quantity), 2) : null);
+      const unitSource = spot !== null ? source : arrival !== null ? "from its value on arrival" : null;
+      const amount = arrival ?? (spot !== null ? decimal.round(decimal.mul(spot, quantity), 2) : null);
+      if (amount !== null) {
+        suggested = {
+          amount,
+          source: arrival !== null ? (group.length > 1 ? "their value on the day they arrived" : "its value on the day it arrived") : `${p.instrument.symbol} at $${spot ?? "?"} on ${p.acquired_at}`,
+          unit_price: unitPrice,
+          unit_source: unitSource,
+        };
+      }
+    }
+    out.push({
+      ...lotRow(first.fact.id, p, suggested),
+      quantity,
+      cost_basis: basis,
+      value_at_transfer: arrival,
+      fills: group.length,
+      lot_ids: group.map((g) => g.p.lot_id),
+    });
+    group = [];
+  };
+  for (const l of lots) {
+    const head = group[0];
+    if (head !== undefined && !sameOrder(head.p, l.p)) flush();
+    group.push(l);
+  }
+  flush();
+  return out;
 }
 
 /**
@@ -1250,37 +1321,32 @@ export function createApp(opts: AppOptions): App {
     },
     async lotsFor(accountId, symbol) {
       const rows = liveLotsOf(ledger, accountId, symbol);
-      const out: LotRow[] = [];
-      for (const { fact, p } of rows) {
-        let suggested: LotRow["suggested"] = null;
-        if (!p.basis_known) {
-          // The UNIT price is looked up from the price provider for the
-          // date the lot arrived (the operator's request, issue #57); the
-          // aggregate default prefers the arrival value the institution
-          // itself reported, falling back to unit x quantity.
-          const spot = await historicSpot(p.instrument.symbol, p.acquired_at);
-          const unitPrice = spot ?? (p.value_at_transfer != null && !decimal.isZero(p.quantity) ? decimal.round(decimal.div(p.value_at_transfer, p.quantity), 2) : null);
-          const unitSource = spot !== null ? "Coinbase" : p.value_at_transfer != null ? "from its value on arrival" : null;
-          const amount = p.value_at_transfer ?? (spot !== null ? decimal.round(decimal.mul(spot, p.quantity), 2) : null);
-          if (amount !== null) {
-            suggested = {
-              amount,
-              source: p.value_at_transfer != null ? "its value on the day it arrived" : `${p.instrument.symbol} at $${spot ?? "?"} on ${p.acquired_at}`,
-              unit_price: unitPrice,
-              unit_source: unitSource,
-            };
-          }
-        }
-        out.push(lotRow(fact.id, p, suggested));
+      // One spot lookup per (symbol, day) the rows need, ahead of the fold.
+      const spots = new Map<string, string | null>();
+      for (const { p } of rows) {
+        if (p.basis_known) continue;
+        const key = `${p.instrument.symbol}|${p.acquired_at}`;
+        if (!spots.has(key)) spots.set(key, await historicSpot(p.instrument.symbol, p.acquired_at));
       }
-      return out;
+      return foldLotRows(rows, (p) => {
+        const price = spots.get(`${p.instrument.symbol}|${p.acquired_at}`) ?? null;
+        return { price, source: price !== null ? "Coinbase" : null };
+      });
     },
-    setLotBasis({ accountId, lotId, costBasis, acquiredAt }) {
-      const prior = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0];
-      if (prior === undefined) throw new Error(`${accountId} has no lot ${lotId}`);
-      const p = prior.payload as LotPayload;
+    setLotBasis({ accountId, lotId, lotIds, costBasis, acquiredAt }) {
+      // A folded row names every fill it stands for (issue #103); the
+      // entered total is the ORDER's cost, split across the fills pro
+      // rata by quantity, to the cent, the remainder on the last fill.
+      const ids = lotIds !== undefined && lotIds.length > 0 ? [...new Set(lotIds)] : [lotId];
+      const priors = ids.map((id) => {
+        const prior = ledger.asOf({ kind: "lot", subject: accountId, key: id })[0];
+        if (prior === undefined) throw new Error(`${accountId} has no lot ${id}`);
+        return { id, prior, p: prior.payload as LotPayload };
+      });
+      const first = priors[0]!;
+      const p = first.p;
       const cleaned = costBasis.replace(/[$,\s]/g, "");
-      if (!/^\d+(\.\d+)?$/.test(cleaned)) throw new Error(`"${costBasis}" is not an amount -- enter the total cost of this lot, in ${p.currency}`);
+      if (!/^\d+(\.\d+)?$/.test(cleaned)) throw new Error(`"${costBasis}" is not an amount -- enter the total cost of ${ids.length > 1 ? "these lots" : "this lot"}, in ${p.currency}`);
       const basis = decimal.round(cleaned, 2);
       let acquired = p.acquired_at;
       if (acquiredAt !== undefined && acquiredAt.trim() !== "") {
@@ -1288,40 +1354,59 @@ export function createApp(opts: AppOptions): App {
         if (parsed === null) throw new Error(`"${acquiredAt}" is not a date I can read -- try 2020-02-01 or "Feb 1 2020"`);
         acquired = parsed;
       }
+      const totalQty = decimal.sum(priors.map((x) => x.p.quantity));
+      if (decimal.isZero(totalQty)) throw new Error(`${ids.length > 1 ? "these lots hold" : "this lot holds"} no ${symbol_(p)}`);
+      let allotted = "0";
+      const shares = priors.map((x, i) => {
+        if (i === priors.length - 1) return decimal.round(decimal.sub(basis, allotted), 2);
+        const share = decimal.round(decimal.div(decimal.mul(basis, x.p.quantity), totalQty), 2);
+        allotted = decimal.add(allotted, share);
+        return share;
+      });
       const now = clock();
-      const payload: LotPayload = { ...p, cost_basis: basis, basis_known: true, basis_source: "operator", acquired_at: acquired };
       ledger.commit({
-        batchId: `lot-basis:${accountId}:${lotId}:${now.toISOString()}`,
+        batchId: `lot-basis:${accountId}:${first.id}:${now.toISOString()}`,
         writer: "assets_manager",
-        note: `cost basis for ${lotId} entered by the operator`,
-        facts: [
-          {
-            kind: "lot",
-            subject: accountId,
-            key: lotId,
-            payload,
-            observed_at: now.toISOString(),
-            effective_at: now.toISOString(),
-            source_id: "operator",
-            source_doc_id: null,
-            supersedes: prior.id,
-            writer: "assets_manager",
-            provisional: false,
-          },
-        ],
+        note: ids.length > 1 ? `cost basis for ${String(ids.length)} fills (${first.id} …) entered by the operator` : `cost basis for ${first.id} entered by the operator`,
+        facts: priors.map((x, i) => ({
+          kind: "lot" as const,
+          subject: accountId,
+          key: x.id,
+          payload: { ...x.p, cost_basis: shares[i]!, basis_known: true, basis_source: "operator" as const, acquired_at: acquired } satisfies LotPayload,
+          observed_at: now.toISOString(),
+          effective_at: now.toISOString(),
+          source_id: "operator",
+          source_doc_id: null,
+          supersedes: x.prior.id,
+          writer: "assets_manager" as const,
+          provisional: false,
+        })),
       });
       fillPositionBasis(ledger, accountId, symbol_(p), now, clock);
       ledger.appendJournal({
         at: now.toISOString(),
         kind: "system",
         subject: accountId,
-        summary: `cost basis of lot ${lotId} (${p.quantity} ${symbol_(p)}) set to ${basis} ${p.currency} by the operator${acquired !== p.acquired_at ? `; acquired ${acquired}` : ""}`,
-        detail: { lot_id: lotId, cost_basis: basis, acquired_at: acquired, was: { cost_basis: p.cost_basis, acquired_at: p.acquired_at } },
-        refs: [prior.id],
+        summary:
+          ids.length > 1
+            ? `cost basis of ${String(ids.length)} fills of ${symbol_(p)} acquired ${p.acquired_at} (${totalQty} ${symbol_(p)}, from lot ${first.id}) set to ${basis} ${p.currency} in total by the operator, split by quantity${acquired !== p.acquired_at ? `; acquired ${acquired}` : ""}`
+            : `cost basis of lot ${first.id} (${p.quantity} ${symbol_(p)}) set to ${basis} ${p.currency} by the operator${acquired !== p.acquired_at ? `; acquired ${acquired}` : ""}`,
+        detail: {
+          lot_id: first.id,
+          lot_ids: ids,
+          cost_basis: basis,
+          acquired_at: acquired,
+          split: priors.map((x, i) => ({ lot_id: x.id, quantity: x.p.quantity, cost_basis: shares[i]! })),
+          was: { cost_basis: ids.length > 1 ? (priors.every((x) => x.p.cost_basis !== null) ? decimal.sum(priors.map((x) => x.p.cost_basis as string)) : null) : p.cost_basis, acquired_at: p.acquired_at },
+        },
+        refs: priors.map((x) => x.prior.id),
         author: "operator",
       });
-      const fresh = ledger.asOf({ kind: "lot", subject: accountId, key: lotId })[0]!;
-      return { lot: lotRow(fresh.id, fresh.payload as LotPayload, null) };
+      const fresh = ids.map((id) => {
+        const f = ledger.asOf({ kind: "lot", subject: accountId, key: id })[0]!;
+        return { fact: { id: f.id }, p: f.payload as LotPayload };
+      });
+      return { lot: foldLotRows(fresh, () => ({ price: null, source: null }))[0]! };
     },
     addLot({ accountId, symbol, quantity, acquiredAt, costBasis }) {
       const pos = ledger.asOf({ kind: "position", subject: accountId, key: symbol.trim().toUpperCase() })[0];
