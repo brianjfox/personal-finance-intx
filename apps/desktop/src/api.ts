@@ -19,6 +19,8 @@ export interface LotRow {
   fact_id: string; lot_id: string; quantity: string; acquired_at: string; cost_basis: string | null; basis_known: boolean;
   basis_source: "operator" | null; value_at_transfer: string | null; transferred_in: boolean; currency: string;
   suggested: { amount: string; source: string; unit_price: string | null; unit_source: string | null } | null;
+  /** Same-day fills of one order fold into one row: how many, and every fill's id (issue #103). */
+  fills: number; lot_ids: string[];
 }
 export interface Fact {
   id: string; kind: string; subject: string; key: string; payload: Record<string, unknown>; observed_at: string; effective_at: string;
@@ -270,8 +272,14 @@ export const api = {
   lots: (account: string, symbol: string) => get<LotRow[]>(`/api/lots?account=${encodeURIComponent(account)}&symbol=${encodeURIComponent(symbol)}`),
   addLot: (account_id: string, symbol: string, quantity: string, acquired_at: string, cost_basis: string) =>
     post<{ lot: LotRow }>("/api/lot/add", { account_id, symbol, quantity, acquired_at, cost_basis }),
-  setLotBasis: (account_id: string, lot_id: string, cost_basis: string, acquired_at?: string) =>
-    post<{ lot: LotRow }>("/api/lot/basis", { account_id, lot_id, cost_basis, ...(acquired_at !== undefined && acquired_at !== "" ? { acquired_at } : {}) }),
+  setLotBasis: (account_id: string, lot_id: string, cost_basis: string, acquired_at?: string, lot_ids?: string[]) =>
+    post<{ lot: LotRow }>("/api/lot/basis", {
+      account_id,
+      lot_id,
+      ...(lot_ids !== undefined && lot_ids.length > 1 ? { lot_ids } : {}),
+      cost_basis,
+      ...(acquired_at !== undefined && acquired_at !== "" ? { acquired_at } : {}),
+    }),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
   queue: () => get<Finding[]>("/api/queue"),
   findings: () => get<Finding[]>("/api/findings"),

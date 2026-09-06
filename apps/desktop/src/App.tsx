@@ -3609,7 +3609,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
     setBusy(true);
     setError(null);
     try {
-      await api.setLotBasis(accountId, r.lot_id, basis, acquired);
+      await api.setLotBasis(accountId, r.lot_id, basis, acquired, r.lot_ids);
       setEditing(null);
       await load();
       onChanged();
@@ -3624,7 +3624,14 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720, maxHeight: "82vh", display: "flex", flexDirection: "column", overflow: "hidden", alignItems: "stretch", textAlign: "left" }}>
         <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
         <p className="small muted" style={{ marginTop: 0 }} title={accountId}>
-          {chopMiddle(accountId, 32)} · {rows !== null && rows.length > 0 && <>{rows.length} lot{rows.length === 1 ? "" : "s"} · </>}oldest first; sales consume from the top
+          {chopMiddle(accountId, 32)} ·{" "}
+          {rows !== null && rows.length > 0 && (
+            <>
+              {rows.length} lot{rows.length === 1 ? "" : "s"}
+              {rows.reduce((n, r) => n + r.fills, 0) > rows.length && <> from {rows.reduce((n, r) => n + r.fills, 0)} fills (an order's same-day fills show as one lot)</>} ·{" "}
+            </>
+          )}
+          oldest first; sales consume from the top
         </p>
         {rows === null && <p className="muted">Loading…</p>}
         {rows !== null && rows.length === 0 && (
@@ -3640,7 +3647,11 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
             <tbody>
               {rows.map((r) => (
                 <tr key={r.lot_id}>
-                  <td className="small">{r.acquired_at}{r.transferred_in && <div className="small muted">transferred in</div>}</td>
+                  <td className="small">
+                    {r.acquired_at}
+                    {r.fills > 1 && <div className="small muted" title={r.lot_ids.join(", ")}>{r.fills} fills · one order</div>}
+                    {r.transferred_in && <div className="small muted">transferred in</div>}
+                  </td>
                   <td className="num">{maskDigits(r.quantity)}</td>
                   <td className="num">
                     {r.basis_known ? (
@@ -3655,7 +3666,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
                   <td style={{ textAlign: "right" }}>
                     {editing === r.lot_id ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                        <input value={basis} onChange={(e) => setBasis(e.target.value)} placeholder={`total cost in ${r.currency}`} style={{ width: 180 }} autoFocus />
+                        <input value={basis} onChange={(e) => setBasis(e.target.value)} placeholder={r.fills > 1 ? `total cost of all ${r.fills} fills in ${r.currency}` : `total cost in ${r.currency}`} style={{ width: 180 }} autoFocus />
                         {unitOf(basis, r.quantity) !== null && (
                           <div className="small muted">= {money(unitOf(basis, r.quantity), r.currency)} per {symbol}</div>
                         )}

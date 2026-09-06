@@ -59,6 +59,8 @@ const LotAddBody = type({
 const LotBasisBody = type({
   account_id: "string > 0",
   lot_id: "string > 0",
+  /** Every fill of a folded row (issue #103); the total splits across them by quantity. */
+  "lot_ids?": "string[]",
   cost_basis: "string > 0",
   "acquired_at?": "string",
 });
@@ -360,7 +362,15 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/lot/basis" && req.method === "POST") {
           const body = LotBasisBody(await req.json());
           if (body instanceof type.errors) return json({ error: body.summary }, 400);
-          return json(app.setLotBasis({ accountId: body.account_id, lotId: body.lot_id, costBasis: body.cost_basis, ...(body.acquired_at !== undefined ? { acquiredAt: body.acquired_at } : {}) }));
+          return json(
+            app.setLotBasis({
+              accountId: body.account_id,
+              lotId: body.lot_id,
+              ...(body.lot_ids !== undefined ? { lotIds: body.lot_ids } : {}),
+              costBasis: body.cost_basis,
+              ...(body.acquired_at !== undefined ? { acquiredAt: body.acquired_at } : {}),
+            }),
+          );
         }
         if (p === "/api/positions") {
           return json(q.get("consolidated") === "1" ? views.consolidatedPositions(app.ledger, asOf) : views.positions(app.ledger, asOf));
