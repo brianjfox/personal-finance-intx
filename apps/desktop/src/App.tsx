@@ -4738,6 +4738,9 @@ function PlanEditor({ plan, onSaved }: { plan: import("./api").PlanStatus["plan"
   const [noSell, setNoSell] = useState((plan?.constraints.do_not_sell ?? []).join(", "));
   const [maxPos, setMaxPos] = useState(plan?.constraints.max_position_weight != null ? asPct(plan.constraints.max_position_weight) : "");
   const [maxOrder, setMaxOrder] = useState(plan?.constraints.max_order_value ?? "");
+  // A new plan wakes the Market Manager after the nightly; a plan written
+  // before the option keeps what it did (off) until the box is ticked.
+  const [autoPropose, setAutoPropose] = useState(plan === null ? true : plan.auto_propose === true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const total = rows.reduce((s, r) => s + (Number(r.pct) || 0), 0);
@@ -4755,6 +4758,7 @@ function PlanEditor({ plan, onSaved }: { plan: import("./api").PlanStatus["plan"
           ...(maxOrder.trim() !== "" ? { max_order_value: String(maxOrder).replace(/[$,\s]/g, "") } : {}),
         },
         ...(notes.trim() !== "" ? { notes: notes.trim() } : {}),
+        auto_propose: autoPropose,
       });
       onSaved();
     } catch (e) {
@@ -4800,6 +4804,14 @@ function PlanEditor({ plan, onSaved }: { plan: import("./api").PlanStatus["plan"
         <input style={{ width: 110 }} placeholder="$ (optional)" value={maxOrder} onChange={(e) => setMaxOrder(e.target.value)} />
       </div>
       <textarea rows={2} style={{ width: "100%" }} placeholder="Notes to your future self about why these targets (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      <label className="small" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+        <input type="checkbox" checked={autoPropose} onChange={(e) => setAutoPropose(e.target.checked)} />
+        After a clean nightly, wake the Market Manager when a class is outside the band
+      </label>
+      <p className="small muted" style={{ margin: "4px 0 0 24px" }}>
+        The same proposal the Propose button starts: drafted, audited, and parked in your queue — never while a decision is
+        pending, and not again for the same drift picture inside a week. Nothing executes.
+      </p>
       {error !== null && <div className="banner" style={{ marginTop: 8 }}>{error}</div>}
       <div className="actions" style={{ marginTop: 12 }}>
         <button disabled={busy} onClick={() => void save()}>{busy ? "saving…" : plan === null ? "Write the plan" : "Save the plan"}</button>
@@ -4878,6 +4890,12 @@ function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: (
               </>
             )}
             {plan.notes !== undefined && plan.notes !== "" && <> · {plan.notes}</>}
+          </p>
+          <p className="small muted" style={{ marginTop: 4 }}>
+            {plan.auto_propose === true ? "The nightly wakes the Market Manager when a class is outside the band." : "Proposals start only when you press Propose."}
+            {status?.auto_propose != null && plan.auto_propose === true && (
+              <> Last night: {status.auto_propose.outcome === "started" ? "woke it" : "did not"} — {status.auto_propose.note}.</>
+            )}
           </p>
           {drift !== null && drift.candidates.length > 0 && (
             <p className="small muted">

@@ -96,6 +96,19 @@ export interface PlanStatus {
     targets: Array<{ asset_class: string; weight: string }>;
     constraints: { max_position_weight?: string | null; do_not_sell?: string[]; max_order_value?: string | null; tax_cash_horizon_days?: number };
     notes?: string;
+    /** Wake the Market Manager after a clean nightly when a class is out of band (absent = off). */
+    auto_propose?: boolean;
+  } | null;
+  /** What the nightly last did about drift, when the plan opts in. */
+  auto_propose: {
+    at: string;
+    nightly_run: string;
+    outcome: "started" | "skipped";
+    proposal_run: string | null;
+    signature: string | null;
+    note: string;
+    last_started_at: string | null;
+    last_started_signature: string | null;
   } | null;
   drift: {
     as_of: string;
@@ -286,7 +299,7 @@ export const api = {
   journalFull: () => get<JournalEntry[]>("/api/journal"),
   approvals: () => get<QueuedApproval[]>("/api/approvals"),
   planStatus: () => get<PlanStatus>("/api/plan"),
-  savePlan: (plan: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string }) =>
+  savePlan: (plan: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string; auto_propose?: boolean }) =>
     post<NonNullable<PlanStatus["plan"]>>("/api/plan", plan),
   instructions: () => get<InstructionRow[]>("/api/instructions"),
   propose: () => post<{ runId: string; state: "queued" | "terminal"; status: string; reason?: string }>("/api/proposal"),
