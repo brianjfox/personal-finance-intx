@@ -32,6 +32,7 @@ import {
   type TransactionPayload,
 } from "@fin/contracts";
 import type { Ledger, StoredFact } from "@fin/ledger";
+import type { AccountPayload } from "@fin/contracts";
 
 import { DEFAULT_THRESHOLDS, type ActionContext, type ActionHandler, type Thresholds } from "../context";
 import type { NormalizeOutput, ProposedFact } from "../normalize/normalize";
@@ -47,6 +48,8 @@ export interface ReconcileOutput {
   provisional_subjects: string[];
   /** Passed through from normalize: institutions whose open fetch_failed findings record_findings resolves. */
   answered: string[];
+  /** Fingerprints of every address_watched_twice condition that still holds tonight (issue #112): record_findings resolves the open findings whose condition is gone. */
+  still_watched_twice: string[];
   /** Hand-entered holdings reported tonight: record_findings resolves their open stale_balance findings as moot (D-049). */
   manual_subjects: string[];
   stats: Record<string, number>;
@@ -73,6 +76,7 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
   detectMissingCostBasis(ctx);
   detectCryptoSwaps(ctx);
   detectPositionBalanceMismatch(ctx);
+  const stillWatchedTwice = detectAddressesWatchedTwice(ctx);
 
   const fresh = suppressKnown(findings, ledger);
   const provisional = [...new Set(fresh.filter((f) => f.holds).map((f) => f.subject))].sort();
@@ -85,6 +89,7 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
     findings: fresh,
     provisional_subjects: provisional,
     answered: input.answered ?? [],
+    still_watched_twice: stillWatchedTwice,
     manual_subjects: [...new Set(input.accounts.filter((a) => a.manual === true).map((a) => a.account_id))].sort(),
     stats,
   };
@@ -234,6 +239,54 @@ function detectNewAccounts(ctx: DetectorContext): void {
       holds: false,
     });
   }
+}
+
+/**
+ * Two OPEN wallet accounts that watch the same address are one balance
+ * counted twice (issue #112): the household added an address by hand
+ * and later imported the same device, say. Neither account is wrong on
+ * its own, so per-institution checks pass; this looks across them. The
+ * ledger's open accounts are overlaid with tonight's proposed account
+ * facts, so a one-institution refresh sees the whole picture too.
+ * Returns the fingerprints of every condition still standing, so
+ * record_findings can close the ones that are gone.
+ */
+function detectAddressesWatchedTwice(ctx: DetectorContext): string[] {
+  const accounts = new Map<string, AccountPayload>();
+  for (const f of ctx.ledger.asOf({ kind: "account" })) accounts.set(f.subject, f.payload as AccountPayload);
+  for (const pf of proposed(ctx, "account")) accounts.set(pf.fact.subject, pf.fact.payload as AccountPayload);
+  const byAddress = new Map<string, AccountPayload[]>();
+  for (const a of accounts.values()) {
+    if ((a.closed_at ?? null) !== null || (a.merged_into ?? null) !== null) continue;
+    for (const addr of a.watched_addresses ?? []) {
+      const list = byAddress.get(addr) ?? [];
+      list.push(a);
+      byAddress.set(addr, list);
+    }
+  }
+  const short = (v: string): string => (v.length > 14 ? `${v.slice(0, 6)}…${v.slice(-4)}` : v);
+  const standing: string[] = [];
+  for (const [addr, list] of [...byAddress.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    // Code-point order, not locale collation: "acct.ledger.wallet" must sort before "acct.ledger_btc.wallet" on every machine.
+    const distinct = [...new Map(list.map((a) => [a.account_id, a])).values()].sort((x, y) => (x.account_id < y.account_id ? -1 : x.account_id > y.account_id ? 1 : 0));
+    if (distinct.length < 2) continue;
+    const ids = distinct.map((a) => a.account_id);
+    const named = distinct.map((a) => `${a.account_id} (${a.institution_id})`).join(" and ");
+    const subject = ids[ids.length - 1] as string;
+    const detail = { address: addr, accounts: ids };
+    standing.push(`address_watched_twice|${subject}|${JSON.stringify(Object.keys(detail).sort().map((k) => [k, detail[k as keyof typeof detail]]))}`);
+    emit(ctx, {
+      kind: "break",
+      code: "address_watched_twice",
+      severity: "high",
+      subject,
+      summary: `address ${short(addr)} is watched by ${named}: one balance, counted ${String(distinct.length)} times in net worth -- remove all but one of those entries on Credentials`,
+      detail,
+      requires_human: true,
+      holds: false,
+    });
+  }
+  return standing;
 }
 
 // --- 1. transfers booked as income / duplicates ------------------------

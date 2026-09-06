@@ -86,6 +86,8 @@ export const AccountPayload = type({
   currency: Currency,
   /** Last four (or similar) only. Full account numbers never enter the ledger. */
   "masked_number?": "string | null",
+  /** A watch-only wallet's public addresses/xpubs in comparable form (issue #112), so two accounts watching the same funds can be told apart from two wallets. */
+  "watched_addresses?": "string[]",
   "opened_at?": IsoDate.or("null"),
   "closed_at?": IsoDate.or("null"),
   /** Set when the account was folded into another (a relink minted a second subject for the same real account): the surviving subject. Fetches for this subject re-home there. */

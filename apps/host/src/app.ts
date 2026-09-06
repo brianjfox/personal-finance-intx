@@ -51,6 +51,8 @@ import {
   COINBASE_SERVICE,
   KRAKEN_SERVICE,
   detectWalletHolding,
+  shortAddress,
+  walletAddressKey,
   parseCoinbaseCredential,
   parseCoinbaseKey,
   defaultSecretStore,
@@ -1922,6 +1924,23 @@ export function createApp(opts: AppOptions): App {
         const label = h.label ?? d.label;
         return { kind: d.kind, value: d.value, ...(label !== undefined ? { label } : {}) };
       });
+      // One address, one entry (issue #112): an address another wallet
+      // entry already watches would count the same funds twice, so it is
+      // refused by name -- as is the same address twice in one list.
+      const seen = new Map<string, string>();
+      for (const h of holdings) {
+        const key = walletAddressKey(h);
+        if (seen.has(key)) throw new Error(`${shortAddress(h.value)} is listed twice`);
+        seen.set(key, h.value);
+      }
+      for (const e of loaded.entries) {
+        if (e.adapter !== "wallet") continue;
+        const theirs = ((e.options?.["holdings"] as WalletHolding[] | undefined) ?? []).map(walletAddressKey);
+        for (const key of theirs) {
+          const mine = seen.get(key);
+          if (mine !== undefined) throw new Error(`${shortAddress(mine)} is already watched by ${e.name} (${e.institution_id}) -- remove it there first, or leave it out here`);
+        }
+      }
       const entry = addInstitutionEntry(dataDir, {
         name: o.name ?? "Self-custody wallet",
         adapter: "wallet",

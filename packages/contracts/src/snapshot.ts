@@ -86,6 +86,12 @@ export const SnapshotAccount = type({
    * not apply (D-049).
    */
   "manual?": "boolean",
+  /**
+   * For a watch-only wallet: the public addresses and xpubs this account
+   * reads, in comparable form (issue #112). Two open accounts that share
+   * one are the same funds counted twice; the reconciler says so.
+   */
+  "watched_addresses?": "string[]",
 });
 export type SnapshotAccount = typeof SnapshotAccount.infer;
 

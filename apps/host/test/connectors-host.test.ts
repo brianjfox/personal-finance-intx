@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { COINBASE_SERVICE, ENABLEBANKING_SERVICE, memorySecretStore, PLAID_SERVICE } from "@fin/institutions";
+import { addInstitutionEntry, COINBASE_SERVICE, ENABLEBANKING_SERVICE, memorySecretStore, PLAID_SERVICE } from "@fin/institutions";
 import { views } from "@fin/ledger";
 
 import { createApp } from "../src/app";
@@ -286,6 +286,28 @@ describe("watch-only wallet connect flow (mock chain APIs)", () => {
       expect(ob.institutions[0]).toMatchObject({ institution_id: "inst.ledger", adapter: "wallet", enabled: true });
       // The chain responses are vault evidence like any statement.
       expect(app.ledger.listDocuments().some((d) => d.filename.startsWith("wallet-"))).toBe(true);
+
+      // Issue #112: an address another entry already watches is refused by name, so is the same address twice in one list;
+      // Ethereum's checksum case does not make it a different address.
+      await expect(app.connectWallet({ name: "Ledger again", holdings: [{ value: BTC }] })).rejects.toThrow(/bc1qar…5mdq is already watched by Ledger \(inst\.ledger\)/);
+      await expect(app.connectWallet({ name: "Ledger again", holdings: [{ value: ETH.toLowerCase() }] })).rejects.toThrow(/already watched by Ledger/);
+      const DOGE_FREE_BTC = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+      await expect(app.connectWallet({ name: "Twice", holdings: [{ value: DOGE_FREE_BTC }, { value: DOGE_FREE_BTC }] })).rejects.toThrow(/listed twice/);
+      expect(app.institutionsOverview().institutions).toHaveLength(1);
+
+      // Slip a second entry past the guard (a pre-#112 registry): the nightly names the pair; removing one entry closes the finding.
+      addInstitutionEntry(app.dataDir, { name: "Ledger BTC", adapter: "wallet", options: { holdings: [{ kind: "btc_address", value: BTC }], btc_api: `${base}/btc`, price_api: base } });
+      app.reloadInstitutions();
+      expect((await app.runNightly({ runId: "n_dup" })).terminalStatus).toBe("completed");
+      const open = app.ledger.openFindings({}).filter((f) => f.code === "address_watched_twice");
+      expect(open).toHaveLength(1);
+      expect(open[0]!.summary).toContain("bc1qar…5mdq is watched by acct.ledger.wallet (inst.ledger) and acct.ledger_btc.wallet (inst.ledger_btc)");
+      expect(open[0]!.detail).toMatchObject({ accounts: ["acct.ledger.wallet", "acct.ledger_btc.wallet"] });
+      expect(app.removeInstitution("inst.ledger_btc")).toBe(true);
+      expect((await app.runNightly({ runId: "n_after" })).terminalStatus).toBe("completed");
+      expect(app.ledger.openFindings({}).filter((f) => f.code === "address_watched_twice")).toHaveLength(0);
+      const closed = app.ledger.allFindings(50).find((f) => f.code === "address_watched_twice")!;
+      expect(closed.resolved).toBe(true);
     } finally {
       app.close();
     }
