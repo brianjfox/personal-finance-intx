@@ -80,13 +80,17 @@ function seeded(plan: InvestmentPlan = PLAN): Harness {
   return h;
 }
 
-/** Scripted Market Manager: canonical draft via the shared canonicalizer; tamper or decline on demand. */
-function scriptedMM(behavior: (attempt: number) => "canonical" | "tampered" | "second-candidate" | "decline"): StepInvoker {
+/** Scripted Market Manager: canonical draft via the shared canonicalizer; tamper or decline on demand; or the post-#101 reply, its CHOICE alone. */
+function scriptedMM(behavior: (attempt: number) => "canonical" | "tampered" | "second-candidate" | "decline" | "choice" | "choice-second"): StepInvoker {
   return async (req) => {
     const input = req.input as DriftReport & { attempt?: number };
     const attempt = input.attempt ?? 1;
     if (behavior(attempt) === "decline") {
       return { output: { reply: `NOTHING: attempt ${String(attempt)} -- the only sensible candidate sells the whole equity sleeve at once.`, turn: { role: "assistant" } } };
+    }
+    if (behavior(attempt) === "choice" || behavior(attempt) === "choice-second") {
+      const choice = { candidate_index: behavior(attempt) === "choice-second" ? 1 : 0, thesis: `attempt ${String(attempt)}: rebalance toward the written plan`, confidence: 0.7 };
+      return { output: { reply: JSON.stringify(choice), turn: { role: "assistant" } } };
     }
     const idx = behavior(attempt) === "second-candidate" ? 1 : 0;
     const draft = buildProposalDraft(input, idx, {
@@ -163,6 +167,45 @@ describe("phase 4: proposal -> audit -> approval -> prepared instruction", () =>
     expect(journal).toContain("PREPARED (not sent -- execution is disabled)");
     // Decided: the queue is empty.
     expect(approvalQueue(h.ledger, new Date(NOW))).toHaveLength(0);
+  });
+
+  test("the reply is the choice, not the draft (#101): the intake rebuilds the draft and the Auditor clears the same figures", async () => {
+    const h = seeded();
+    await h.run(NIGHTLY, {});
+    const wf = buildProposalWorkflow({ model: "scripted" });
+    const run = h.start({ definition: wf.definition, stepPrincipals: wf.stepPrincipals }, {}, { runId: "prop-choice", invokeStep: scriptedMM(() => "choice") });
+    await waitFor(() => approvalQueue(h.ledger, new Date(NOW)).length === 1);
+    const q = approvalQueue(h.ledger, new Date(NOW))[0]!;
+    expect(q.recommendation.id).toBe(recommendationId("prop-choice", 1));
+    expect(q.recommendation.action).toMatchObject({ verb: "BUY", instrument: "BND", quantity: "300", amount: { amount: "30000.00", currency: "USD" } });
+    expect(q.recommendation.thesis).toBe("attempt 1: rebalance toward the written plan");
+    expect(q.recommendation.evidence.length).toBeGreaterThan(0);
+    for (const id of q.recommendation.evidence) expect(h.ledger.getFact(id)).not.toBeNull();
+    expect(q.verdict.cleared).toBe(true);
+    await run.signal(APPROVAL_SIGNAL, { recommendation_id: q.recommendation.id, decision: "reject", signed_by: "b" }, approvalSignalId(q.recommendation.id));
+    await run.complete;
+  });
+
+  test("a SELL over 1,000 same-day fills (#101): the recommendation carries one conceptual lot, and it clears", async () => {
+    const h = harness({ now: NOW });
+    const acct = brokerage(NOW);
+    const aapl = acct.positions!.find((p) => p.instrument.symbol === "AAPL")!;
+    // 1,000 fills of 0.1 AAPL on one day in 2020: one order, one conceptual lot.
+    aapl.lots = Array.from({ length: 1000 }, (_, i) => ({ lot_id: `aapl-fill-${String(i).padStart(4, "0")}`, quantity: "0.1", acquired_at: "2020-02-01", cost_basis: "12" }));
+    h.setAdapters([fixtureAdapter("inst.broker", { accounts: [acct] })]);
+    h.setInvestmentPlan(PLAN);
+    await h.run(NIGHTLY, {});
+    const wf = buildProposalWorkflow({ model: "scripted" });
+    const run = h.start({ definition: wf.definition, stepPrincipals: wf.stepPrincipals }, {}, { runId: "prop-fills", invokeStep: scriptedMM(() => "choice-second") });
+    await waitFor(() => approvalQueue(h.ledger, new Date(NOW)).length === 1);
+    const q = approvalQueue(h.ledger, new Date(NOW))[0]!;
+    // Equity is 25pp over: 25,000 of value at 300 = 83 whole shares, consumed FIFO from 830 of the 1,000 fills.
+    expect(q.recommendation.action).toMatchObject({ verb: "SELL", instrument: "AAPL", quantity: "83" });
+    expect(q.recommendation.tax_lots).toEqual([{ lot_id: "aapl-fill-0000", treatment: "LTCG", fills: 830, quantity: "83", acquired_at: "2020-02-01" }]);
+    expect(q.verdict.cleared).toBe(true);
+    expect(q.verdict.caveats ?? []).toHaveLength(0);
+    await run.signal(APPROVAL_SIGNAL, { recommendation_id: q.recommendation.id, decision: "reject", signed_by: "b" }, approvalSignalId(q.recommendation.id));
+    await run.complete;
   });
 
   test("reject: journaled, closed, no instruction", async () => {

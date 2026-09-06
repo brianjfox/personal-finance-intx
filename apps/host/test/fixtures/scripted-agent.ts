@@ -105,13 +105,14 @@ async function runMarketScript(
   const plan = await call("read_plan_targets", {});
   const decline = /^decline(?::\s*(.*))?$/i.exec(String(plan["notes"] ?? "").trim());
   if (decline !== null) return decline[1] !== undefined && decline[1] !== "" ? `NOTHING: ${decline[1]}` : "NOTHING";
-  const draft = await call("emit_proposal", {
+  const emitted = await call("emit_proposal", {
     run_key: runKey,
     candidate_index: 0,
     thesis: `attempt ${String(o.attempt ?? 1)}: rebalance toward the written plan`,
     confidence: 0.7,
   });
-  return JSON.stringify(draft);
+  // Rule 3 (issue #101): the reply is the tool's `reply` object -- the choice, not the draft.
+  return JSON.stringify(emitted["reply"]);
 }
 
 async function runScript(text: string, call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>): Promise<string> {

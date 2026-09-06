@@ -4,8 +4,8 @@
 // a draft FROM a drift candidate so the model NEVER types a figure. No
 // credential tool, no execution tool, no ledger write of any kind.
 
-import { ACKNOWLEDGEMENTS, assertType, InvestmentPlan, type Acknowledgement, type PositionPayload } from "@fin/contracts";
-import { buildProposalDraft, cashOnHand, computeDrift } from "@fin/actions";
+import { ACKNOWLEDGEMENTS, assertType, InvestmentPlan, type Acknowledgement, type DriftReport, type PositionPayload, type ProposalChoice, type ProposalDraft } from "@fin/contracts";
+import { buildProposalDraft, cashOnHand, computeDrift, summarizeTaxLots } from "@fin/actions";
 import { views } from "@fin/ledger";
 import { defineTool, type BaseEnv } from "@intx/agent";
 
@@ -68,6 +68,28 @@ const readPlan: FinTool = {
   handler: async (_args, fin) => ({ result: planOf(fin) as unknown as Record<string, unknown>, fact_ids: [], evidence: false }),
 };
 
+/**
+ * What the MODEL sees of a drift report (issue #101): every figure, but
+ * the evidence ids as a count and each candidate's lot list as counts by
+ * treatment. A 1,000-lot position otherwise pushes the result past the
+ * runtime's tool-output cap, and the model reads a truncation marker
+ * instead of the candidates. The evidence ids still travel in full as
+ * the turn's `fact_ids`, and the intake rebuilds the full draft itself.
+ */
+function modelViewOfDrift(report: DriftReport): Record<string, unknown> {
+  const { evidence, candidates, ...rest } = report;
+  return {
+    ...rest,
+    evidence_count: evidence.length,
+    candidates: candidates.map((c) => ({ ...c, ...(c.tax_lots !== undefined ? { tax_lots: summarizeTaxLots(c.tax_lots) } : {}) })),
+  };
+}
+
+function modelViewOfDraft(draft: ProposalDraft): Record<string, unknown> {
+  const { evidence, tax_lots, ...rest } = draft;
+  return { ...rest, evidence_count: evidence.length, ...(tax_lots !== undefined ? { tax_lots: summarizeTaxLots(tax_lots) } : {}) };
+}
+
 const rebalance: FinTool = {
   definition: {
     name: "compute_rebalance",
@@ -79,7 +101,7 @@ const rebalance: FinTool = {
     const runKey = String(args["run_key"] ?? "");
     if (runKey === "") throw new Error("compute_rebalance: run_key is required");
     const report = driftNow(fin, runKey);
-    return { result: report as unknown as Record<string, unknown>, fact_ids: report.evidence };
+    return { result: modelViewOfDrift(report), fact_ids: report.evidence };
   },
 };
 
@@ -87,7 +109,7 @@ const emitProposal: FinTool = {
   definition: {
     name: "emit_proposal",
     description:
-      "Canonicalize ONE drift candidate into a proposal draft: pass the candidate_index from compute_rebalance plus your thesis and confidence. The returned draft carries the candidate's exact figures and the evidence fact ids -- reply with EXACTLY this JSON and nothing else. 'No evidence, no proposal.' If the Auditor blocked a prior draft for consuming short-term lots and you judge the trade worth that treatment now, pass acknowledgements: [\"short_term_lots\"] and say why in the thesis; the Auditor then clears with a caveat the operator sees before signing.",
+      "Canonicalize ONE drift candidate into a proposal draft: pass the candidate_index from compute_rebalance plus your thesis and confidence. The result shows the draft (the candidate's exact figures; lots and evidence as counts) and a `reply` object -- your ENTIRE reply must be exactly that `reply` JSON and nothing else; the intake rebuilds the full draft from it with the same engine. 'No evidence, no proposal.' If the Auditor blocked a prior draft for consuming short-term lots and you judge the trade worth that treatment now, pass acknowledgements: [\"short_term_lots\"] and say why in the thesis; the Auditor then clears with a caveat the operator sees before signing.",
     inputSchema: OBJECT_SCHEMA(
       {
         run_key: { type: "string" },
@@ -111,7 +133,13 @@ const emitProposal: FinTool = {
       now: fin.clock(),
       acknowledgements: acks as Acknowledgement[],
     });
-    return { result: draft as unknown as Record<string, unknown>, fact_ids: draft.evidence };
+    const reply: ProposalChoice = {
+      candidate_index: draft.candidate_index,
+      thesis: draft.thesis,
+      confidence: draft.confidence,
+      ...(draft.acknowledgements !== undefined ? { acknowledgements: draft.acknowledgements } : {}),
+    };
+    return { result: { draft: modelViewOfDraft(draft), reply }, fact_ids: draft.evidence };
   },
 };
 

@@ -22,6 +22,7 @@ import {
   assertType,
   decimal,
   InvestmentPlan,
+  ProposalChoice,
   ProposalDraft,
   type Approval,
   type AuditBlock,
@@ -50,7 +51,7 @@ import {
 import { CAP, type ActionContext, type ActionHandler } from "../context";
 import { washSales, realizedGains, type DatedLot, type DatedTransaction } from "../tax/math";
 import { cashOnHand } from "./cash";
-import { computeDrift, type DriftInputs } from "./drift";
+import { buildProposalDraft, computeDrift, type DriftInputs } from "./drift";
 
 const DEFAULT_TAX_CASH_HORIZON_DAYS = 60;
 
@@ -137,7 +138,7 @@ export function auditIntakeHandler(actx: ActionContext): ActionHandler {
       effectId: `intake:${String(attempt)}`,
       capability: CAP.recordRecommendation,
       run: async () => {
-        const draft = parseDraft(input.reply);
+        const draft = draftFromReply(actx, input.run_key, input.reply);
         // "No evidence, no proposal" -- and every id must resolve.
         for (const id of draft.evidence) {
           if (actx.ledger.getFact(id) === null) {
@@ -214,15 +215,40 @@ export function isDeclinedReply(reply: string): boolean {
 }
 
 /** Tolerate prose/code fences around the JSON: heal harmony scaffolding, then parse the outermost object. */
-export function parseDraft(reply: string): ProposalDraft {
+function outermostObject(reply: string): unknown {
   const text = healModelReply(reply);
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) {
     throw new Error("audit.intake: the drafting model's reply carries no JSON object to parse -- a small local model may not manage the draft format; assign a stronger provider to Strategy on the Credentials page");
   }
-  const raw: unknown = JSON.parse(text.slice(start, end + 1));
-  return assertType(ProposalDraft, raw, "proposal draft");
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+/** A reply that carries a full draft (the pre-#101 contract, still tolerated): parsed and validated as one. */
+export function parseDraft(reply: string): ProposalDraft {
+  return assertType(ProposalDraft, outermostObject(reply), "proposal draft");
+}
+
+/**
+ * The draft the intake records (issue #101). The Market Manager's reply
+ * is its CHOICE -- candidate index, thesis, confidence, acknowledgements
+ * -- and the draft is rebuilt here from the same deterministic engine
+ * `emit_proposal` ran, over the same ledger, so nothing the model typed
+ * can be a figure. A reply that carries a whole draft (a scripted model,
+ * an older prompt) is still accepted as one and validated as before.
+ */
+export function draftFromReply(actx: ActionContext, runKey: string, reply: string): ProposalDraft {
+  const raw = outermostObject(reply);
+  if (typeof raw === "object" && raw !== null && "action" in raw) return assertType(ProposalDraft, raw, "proposal draft");
+  const choice = assertType(ProposalChoice, raw, "proposal choice");
+  const drift = computeDrift(driftInputs(actx, runKey));
+  return buildProposalDraft(drift, choice.candidate_index, {
+    thesis: choice.thesis,
+    confidence: choice.confidence,
+    now: actx.clock(),
+    ...(choice.acknowledgements !== undefined ? { acknowledgements: choice.acknowledgements } : {}),
+  });
 }
 
 // --- review: the four slide-16 blocks -----------------------------------
