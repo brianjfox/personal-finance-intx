@@ -16,6 +16,7 @@ import {
   type LotPayload,
   type PositionPayload,
   type ProposalDraft,
+  type TaxLotRef,
 } from "@fin/contracts";
 import type { StoredFact } from "@fin/ledger";
 
@@ -140,7 +141,16 @@ export function computeDrift(inputs: DriftInputs): DriftReport {
   };
 }
 
-/** FIFO lot consumption for a SELL, labelling each consumed lot LT/ST. */
+/**
+ * FIFO lot consumption for a SELL, labelling each consumed lot LT/ST --
+ * then folded to CONCEPTUAL lots for planning (issue #101): an exchange
+ * fills one order in many pieces and reports each as its own lot, so
+ * consecutive fills of the same day (the ledger's lot dates carry no
+ * time) with the same treatment become one reference carrying the first
+ * fill's id, the fill count, the total quantity consumed, and the day.
+ * The Auditor reads treatments, the operator reads a list they can
+ * scan, and the draft stays a size a model can hold.
+ */
 function fifoLotTreatments(
   lots: StoredFact[],
   subject: string,
@@ -155,7 +165,7 @@ function fifoLotTreatments(
     .filter((l) => !decimal.isZero(l.quantity)) // consumed lots are superseded at 0 (issue #53)
     .sort((a, b) => a.acquired_at.localeCompare(b.acquired_at));
   if (mine.length === 0) return [{ lot_id: "unknown", treatment: "unknown" }];
-  const out: NonNullable<CandidateOrder["tax_lots"]> = [];
+  const out: TaxLotRef[] = [];
   let remaining = decimal.parseDecimal(quantity);
   for (const lot of mine) {
     if (remaining <= 0n) break;
@@ -164,10 +174,29 @@ function fifoLotTreatments(
     // A lot whose basis the institution could not know (a transfer in)
     // has an acquisition date that is the ARRIVAL date, not the true one:
     // its treatment is unknown, which the Auditor passes on as a caveat.
-    out.push({ lot_id: lot.lot_id, treatment: !lot.basis_known ? "unknown" : today > addYears(lot.acquired_at, 1) ? "LTCG" : "STCG" });
+    const treatment: TaxLotRef["treatment"] = !lot.basis_known ? "unknown" : today > addYears(lot.acquired_at, 1) ? "LTCG" : "STCG";
+    const prev = out[out.length - 1];
+    if (prev !== undefined && prev.acquired_at === lot.acquired_at && prev.treatment === treatment) {
+      prev.fills = (prev.fills ?? 1) + 1;
+      prev.quantity = decimal.add(prev.quantity ?? "0", decimal.formatDecimal(take));
+      continue;
+    }
+    out.push({ lot_id: lot.lot_id, treatment, fills: 1, quantity: decimal.formatDecimal(take), acquired_at: lot.acquired_at });
   }
   if (remaining > 0n) out.push({ lot_id: "unknown", treatment: "unknown" });
   return out;
+}
+
+/** The lot list as counts -- what a model needs to judge a candidate, at a size it can always see. */
+export function summarizeTaxLots(lots: readonly TaxLotRef[] | undefined): { lots: number; fills: number; by_treatment: Record<TaxLotRef["treatment"], number> } | undefined {
+  if (lots === undefined) return undefined;
+  const by_treatment: Record<TaxLotRef["treatment"], number> = { LTCG: 0, STCG: 0, none: 0, unknown: 0 };
+  let fills = 0;
+  for (const l of lots) {
+    by_treatment[l.treatment] += 1;
+    fills += l.fills ?? 1;
+  }
+  return { lots: lots.length, fills, by_treatment };
 }
 
 function formatPp(fraction: string): string {

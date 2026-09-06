@@ -52,6 +52,23 @@ export type InvestmentPlan = typeof InvestmentPlan.infer;
 
 // --- the deterministic drift report ------------------------------------
 
+/**
+ * One lot a SELL would consume -- or, for planning, one CONCEPTUAL lot:
+ * an exchange fills an order in pieces, and each fill arrives as its own
+ * lot, so same-day fills of one instrument in one account with the same
+ * treatment collapse into a single reference (issue #101). `lot_id` is
+ * then the first fill's, `fills` how many were folded in, `quantity` the
+ * total, `acquired_at` the day.
+ */
+export const TaxLotRef = type({
+  lot_id: "string",
+  treatment: "'LTCG' | 'STCG' | 'none' | 'unknown'",
+  "fills?": "number.integer >= 1",
+  "quantity?": Decimal,
+  "acquired_at?": "string",
+});
+export type TaxLotRef = typeof TaxLotRef.infer;
+
 export const CandidateOrder = type({
   index: "number.integer >= 0",
   side: "'BUY' | 'SELL'",
@@ -62,7 +79,7 @@ export const CandidateOrder = type({
   est_value: Decimal,
   /** Deterministic one-line rationale ("equity 6.2pp over target"). */
   rationale: "string",
-  "tax_lots?": type({ lot_id: "string", treatment: "'LTCG' | 'STCG' | 'none' | 'unknown'" }).array(),
+  "tax_lots?": TaxLotRef.array(),
 });
 export type CandidateOrder = typeof CandidateOrder.infer;
 
@@ -118,7 +135,7 @@ export const ProposalDraft = type({
   }),
   thesis: "string > 0",
   evidence: Id.array().atLeastLength(1),
-  "tax_lots?": type({ lot_id: "string", treatment: "'LTCG' | 'STCG' | 'none' | 'unknown'" }).array(),
+  "tax_lots?": TaxLotRef.array(),
   /** Conditions the Market Manager accepts on the record (issue #51): e.g. `short_term_lots` turns the Auditor's short-term-lot block into a caveat. */
   "acknowledgements?": Acknowledgement.array(),
   confidence: "0 <= number <= 1",
@@ -127,6 +144,22 @@ export const ProposalDraft = type({
   as_of: IsoDateTime,
 });
 export type ProposalDraft = typeof ProposalDraft.infer;
+
+/**
+ * What the Market Manager's reply carries (issue #101): its CHOICE, not
+ * the draft. A draft can run to tens of thousands of characters (one
+ * lot per exchange fill, one evidence id per position), which no model
+ * can retype verbatim; the intake rebuilds the draft from this choice
+ * with the same deterministic engine `emit_proposal` used, so the
+ * figures are the engine's either way.
+ */
+export const ProposalChoice = type({
+  candidate_index: "number.integer >= 0",
+  thesis: "string > 0",
+  confidence: "0 <= number <= 1",
+  "acknowledgements?": Acknowledgement.array(),
+});
+export type ProposalChoice = typeof ProposalChoice.infer;
 
 export const AUDIT_CONDITIONS = ["unreproducible", "wash_sale", "plan_conflict", "tax_cash"] as const;
 export type AuditCondition = (typeof AUDIT_CONDITIONS)[number];

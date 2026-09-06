@@ -12,7 +12,7 @@ import { type } from "arktype";
 import { Principal } from "./principals";
 import { Provenance } from "./provenance";
 import { Decimal, Id, IsoDateTime, Money, Subject } from "./scalars";
-import { Acknowledgement } from "./plan";
+import { Acknowledgement, TaxLotRef } from "./plan";
 
 export const ProposedAction = type({
   verb: "'BUY' | 'SELL' | 'HOLD' | 'REBALANCE' | 'TRANSFER' | 'PAY' | 'HARVEST' | 'REVIEW' | 'OTHER'",
@@ -23,10 +23,6 @@ export const ProposedAction = type({
 });
 export type ProposedAction = typeof ProposedAction.infer;
 
-export const TaxLotRef = type({
-  lot_id: "string",
-  treatment: "'LTCG' | 'STCG' | 'none' | 'unknown'",
-});
 
 /** A proposed action with a thesis, evidence and an expiry (deck slide 12). */
 export const Recommendation = type({

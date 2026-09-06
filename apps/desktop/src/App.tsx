@@ -3962,7 +3962,14 @@ function ApprovalItem({ q, onChanged, openFact }: { q: import("./api").QueuedApp
             {(rec.tax_lots ?? []).length > 0 && (
               <div className="evrow">
                 <span style={{ color: "var(--t3)", display: "inline-flex" }}><Icon name="tag" /></span>
-                <span>Tax lot{(rec.tax_lots ?? []).length > 1 ? "s" : ""}: <code>{(rec.tax_lots ?? []).map((l) => `${l.lot_id} (${l.treatment})`).join(", ")}</code></span>
+                <span>
+                  Tax lot{(rec.tax_lots ?? []).length > 1 ? "s" : ""}:{" "}
+                  <code>
+                    {(rec.tax_lots ?? [])
+                      .map((l) => `${l.lot_id}${(l.fills ?? 1) > 1 ? ` +${String((l.fills ?? 1) - 1)} fills` : ""}${l.acquired_at !== undefined ? ` ${l.acquired_at}` : ""}${l.quantity !== undefined ? ` × ${l.quantity}` : ""} (${l.treatment})`)
+                      .join(", ")}
+                  </code>
+                </span>
               </div>
             )}
             <div className="evrow"><span className="muted">{rec.subject}</span></div>
