@@ -61,7 +61,9 @@ const LotBasisBody = type({
   lot_id: "string > 0",
   /** Every fill of a folded row (issue #103); the total splits across them by quantity. */
   "lot_ids?": "string[]",
-  cost_basis: "string > 0",
+  /** One of the two (issue #106): the lot's total cost, or the price paid per unit. */
+  "cost_basis?": "string > 0",
+  "unit_price?": "string > 0",
   "acquired_at?": "string",
 });
 
@@ -367,7 +369,8 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
               accountId: body.account_id,
               lotId: body.lot_id,
               ...(body.lot_ids !== undefined ? { lotIds: body.lot_ids } : {}),
-              costBasis: body.cost_basis,
+              ...(body.cost_basis !== undefined ? { costBasis: body.cost_basis } : {}),
+              ...(body.unit_price !== undefined ? { unitPrice: body.unit_price } : {}),
               ...(body.acquired_at !== undefined ? { acquiredAt: body.acquired_at } : {}),
             }),
           );

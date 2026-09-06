@@ -21,6 +21,11 @@ export interface LotRow {
   suggested: { amount: string; source: string; unit_price: string | null; unit_source: string | null } | null;
   /** Same-day fills of one order fold into one row: how many, and every fill's id (issue #103). */
   fills: number; lot_ids: string[];
+  /** Issue #106: the asset's price today, its basis per unit, what it traded at that day (one cited source), and the household's own prices that day. */
+  price_now: string | null; unit_basis: string | null;
+  day_price: { date: string; open: string; high: string; low: string; close: string; average: string; source: string } | null;
+  own_trades: { unit_price: string; count: number } | null;
+  priced_lots: { unit_price: string; count: number } | null;
 }
 export interface Fact {
   id: string; kind: string; subject: string; key: string; payload: Record<string, unknown>; observed_at: string; effective_at: string;
@@ -272,12 +277,13 @@ export const api = {
   lots: (account: string, symbol: string) => get<LotRow[]>(`/api/lots?account=${encodeURIComponent(account)}&symbol=${encodeURIComponent(symbol)}`),
   addLot: (account_id: string, symbol: string, quantity: string, acquired_at: string, cost_basis: string) =>
     post<{ lot: LotRow }>("/api/lot/add", { account_id, symbol, quantity, acquired_at, cost_basis }),
-  setLotBasis: (account_id: string, lot_id: string, cost_basis: string, acquired_at?: string, lot_ids?: string[]) =>
+  /** Enter a basis as the total (`cost_basis`) or per unit (`unit_price`); one of the two. */
+  setLotBasis: (account_id: string, lot_id: string, entry: { cost_basis?: string; unit_price?: string }, acquired_at?: string, lot_ids?: string[]) =>
     post<{ lot: LotRow }>("/api/lot/basis", {
       account_id,
       lot_id,
       ...(lot_ids !== undefined && lot_ids.length > 1 ? { lot_ids } : {}),
-      cost_basis,
+      ...(entry.unit_price !== undefined && entry.unit_price.trim() !== "" ? { unit_price: entry.unit_price } : { cost_basis: entry.cost_basis ?? "" }),
       ...(acquired_at !== undefined && acquired_at !== "" ? { acquired_at } : {}),
     }),
   positionsConsolidated: () => get<ConsolidatedPosition[]>("/api/positions?consolidated=1"),
