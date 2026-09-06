@@ -3504,7 +3504,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
         {tab === "accounts" && (
           <div style={{ overflowX: "auto" }}>
             <table>
-              <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th>Basis</th><Th k="observed" label="Observed" /><th>Status</th></tr></thead>
+              <thead><tr><Th k="account" label="Account" /><Th k="type" label="Type" /><Th k="value" label="Value" num /><th title="where the account's value comes from">Valued from</th><Th k="observed" label="Observed" /><th>Status</th></tr></thead>
               <tbody>
                 {lines.map((l) => (
                   <tr key={l.account_id} className={l.provisional ? "prov" : ""}>
@@ -3515,7 +3515,7 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
                       {l.fact_ids.length > 1 && <span className="small muted"> (+{l.fact_ids.length - 1} facts)</span>}
                       {l.currency !== nw.currency && <div className="small muted">{moneyNative(l.value, l.currency)}</div>}
                     </td>
-                    <td className="small muted">{l.basis}</td>
+                    <td className="small muted">{valuedFrom(l.basis)}</td>
                     <td className="small">{when(l.observed_at)}</td>
                     <td>
                       {l.provisional ? (
@@ -3533,6 +3533,22 @@ function Dashboard({ tick, openFact }: { tick: number; openFact: (id: string) =>
       </section>
     </div>
   );
+}
+
+/** The net-worth line's `basis` tag in words: where the account's value came from (issue #110). */
+function valuedFrom(basis: string): string {
+  switch (basis) {
+    case "balance.total":
+      return "stated balance";
+    case "balance.owed":
+      return "amount owed";
+    case "positions":
+      return "positions";
+    case "none":
+      return "—";
+    default:
+      return basis;
+  }
 }
 
 type PositionSortKey = "symbol" | "qty" | "price" | "value";
