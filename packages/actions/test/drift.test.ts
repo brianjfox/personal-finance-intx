@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import type { InvestmentPlan, LotPayload, PositionPayload } from "@fin/contracts";
 import type { StoredFact } from "@fin/ledger";
 
-import { computeDrift } from "../src/market/drift";
+import { computeDrift, summarizeTaxLots } from "../src/market/drift";
 
 let seq = 0;
 function position(subject: string, symbol: string, asset_class: PositionPayload["instrument"]["asset_class"], quantity: string, price: string): StoredFact {
@@ -114,9 +114,31 @@ describe("computeDrift SELL lot treatments (#53)", () => {
     expect(sell).toMatchObject({ symbol: "BTC", quantity: "3" });
     // Oldest first by acquisition date: moved (2023-11-03, unknown basis), old (LTCG), new (STCG).
     expect(sell.tax_lots).toEqual([
-      { lot_id: "cb:moved", treatment: "unknown" },
-      { lot_id: "cb:old", treatment: "LTCG" },
+      { lot_id: "cb:moved", treatment: "unknown", fills: 1, quantity: "2", acquired_at: "2023-11-03" },
+      { lot_id: "cb:old", treatment: "LTCG", fills: 1, quantity: "1", acquired_at: "2024-01-11" },
     ]);
+  });
+
+  test("same-day fills of one order collapse into one conceptual lot for planning (#101)", () => {
+    // Coinbase filled a 5 BTC order in 250 pieces on 2025-09-28 (all long-term by 2026-11), and 3 pieces on 2026-06-01 (short-term).
+    const fills = Array.from({ length: 250 }, (_, i) => lot("acct.cb", "BTC", `cb:fill-${String(i).padStart(3, "0")}`, "0.02", "2025-09-28", "1200"));
+    const recent = Array.from({ length: 3 }, (_, i) => lot("acct.cb", "BTC", `cb:recent-${String(i)}`, "1", "2026-06-01", "100000"));
+    const report = computeDrift({
+      runKey: "t",
+      now: new Date("2026-11-01T12:00:00.000Z"),
+      plan: { ...PLAN, targets: [{ asset_class: "crypto", weight: "0.1" }, { asset_class: "bond", weight: "0.9" }] },
+      positions: [position("acct.cb", "BTC", "crypto", "8", "100000"), position("acct.b", "BND", "bond", "100", "100")],
+      lots: [...recent, ...fills],
+    });
+    const sell = report.candidates.find((c) => c.side === "SELL")!;
+    expect(sell.quantity).toBe("7"); // 5 from the fills, 2 from the recent lots
+    expect(sell.tax_lots).toEqual([
+      { lot_id: "cb:fill-000", treatment: "LTCG", fills: 250, quantity: "5", acquired_at: "2025-09-28" },
+      { lot_id: "cb:recent-0", treatment: "STCG", fills: 2, quantity: "2", acquired_at: "2026-06-01" },
+    ]);
+    expect(summarizeTaxLots(sell.tax_lots)).toEqual({ lots: 2, fills: 252, by_treatment: { LTCG: 1, STCG: 1, none: 0, unknown: 0 } });
+    // The whole report stays a size a model can read in one tool result.
+    expect(JSON.stringify(report.candidates).length).toBeLessThan(2000);
   });
 });
 

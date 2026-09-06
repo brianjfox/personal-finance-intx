@@ -87,7 +87,7 @@ export interface Recommendation {
   id: string; from: string; subject: string;
   action: { verb: string; instrument?: string | null; quantity?: string | null; amount?: { amount: string; currency: string } | null; detail?: string };
   thesis: string; evidence: string[]; as_of: string; confidence: number; requires: string[]; expires: string;
-  tax_lots?: Array<{ lot_id: string; treatment: string }>;
+  tax_lots?: Array<{ lot_id: string; treatment: string; fills?: number; quantity?: string; acquired_at?: string }>;
 }
 export interface PlanStatus {
   plan: {
