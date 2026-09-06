@@ -57,9 +57,15 @@ jobs:
         run: ./scripts/build-host.sh bun-windows-x64 apps/desktop/src-tauri/binaries/fin-host-x86_64-pc-windows-msvc.exe
       # NSIS only: the config's ["app", "dmg"] targets are the macOS
       # build; --bundles overrides per-run without touching them.
-      # Unsigned per DECISIONS.md D-038 (SmartScreen will warn).
+      # Unsigned per DECISIONS.md D-038 (SmartScreen will warn). The
+      # updater's minisign key is a different thing: tauri.conf.json
+      # carries its public half (D-047), so `tauri build` refuses to run
+      # without the private half -- the same secrets release.yml uses.
       - name: Tauri build (NSIS)
         working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bunx @tauri-apps/cli@^2 build --bundles nsis
       - uses: actions/upload-artifact@v7
         with:
