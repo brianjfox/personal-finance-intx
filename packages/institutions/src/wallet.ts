@@ -12,6 +12,13 @@
 //                  segwit zpub reports 0 -- paste addresses instead)
 //   eth_address -> JSON-RPC eth_getBalance (native ETH only in v1)
 //
+// Movements (issue #95): Bitcoin and Litecoin addresses read their
+// confirmed transactions from the same explorer API, a legacy xpub from
+// blockchain.info's multiaddr rows; each becomes a transfer valued at the
+// day's spot. Ethereum and Solana expose balances only over a bare RPC --
+// history needs an indexer -- so those carry no transactions, and the raw
+// snapshot says so.
+//
 // Prices come from Coinbase's public spot endpoint. Satoshis and wei are
 // converted with BigInt string math -- floats never touch a quantity.
 
@@ -19,6 +26,7 @@ import { decimal } from "@fin/contracts";
 import { type } from "arktype";
 
 import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
+import { chainTransactions, esploraMovements, historicSpotFetcher, windowStart, type ChainMovement, type EsploraTx, type SnapshotTxn } from "./crypto-flows";
 
 export const WALLET_VIA = "adapter.wallet@1";
 
@@ -40,6 +48,10 @@ export interface WalletOptions {
   sol_rpc?: string;
   price_api?: string;
   fetchImpl?: typeof fetch;
+  /** Emit the window's on-chain movements as transactions (issue #95). Default on. */
+  transactions?: boolean;
+  /** Safety bound on explorer history pages per address. */
+  max_history_pages?: number;
 }
 
 export const WALLET_DEFAULTS = {
@@ -80,6 +92,15 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
       httpSink = ctx.http ?? null;
       const asOf = ctx.now.toISOString();
       const raw: Record<string, unknown> = {};
+      const lookback = ctx.lookback_days ?? 30;
+      const since = windowStart(ctx.now, lookback);
+      const sinceSec = Math.floor(new Date(since).getTime() / 1000);
+      const wantTx = opts.transactions !== false;
+      const pageCap = opts.max_history_pages ?? 20;
+      const esploraTxs: Record<"btc_address" | "ltc_address", EsploraTx[]> = { btc_address: [], ltc_address: [] };
+      const xpubMoves: ChainMovement[] = [];
+      const txNotes: Record<string, unknown> = { window_days: lookback, since };
+      const unsupported = new Set<string>();
       let sats = 0n;
       let wei = 0n;
       let litoshis = 0n;
@@ -93,6 +114,24 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
           const bal = BigInt(a.chain_stats.funded_txo_sum) - BigInt(a.chain_stats.spent_txo_sum);
           if (h.kind === "btc_address") sats += bal;
           else litoshis += bal;
+          if (wantTx) {
+            // Newest first; `/txs/chain/<last txid>` pages further back.
+            // Stop once a page has passed the window's start. Best effort:
+            // an explorer without history leaves the balance standing and
+            // says so in the raw snapshot.
+            let path = `${api}/address/${encodeURIComponent(h.value)}/txs`;
+            try {
+              for (let pages = 0; pages < pageCap; pages++) {
+                const page = await getJson<EsploraTx[]>(path);
+                esploraTxs[h.kind].push(...page);
+                const oldest = page.filter((t) => t.status.confirmed).at(-1);
+                if (page.length === 0 || oldest === undefined || (oldest.status.block_time ?? 0) < sinceSec) break;
+                path = `${api}/address/${encodeURIComponent(h.value)}/txs/chain/${oldest.txid}`;
+              }
+            } catch (e) {
+              txNotes[`error:${h.value}`] = `history walk failed: ${e instanceof Error ? e.message : String(e)}`;
+            }
+          }
         } else if (h.kind === "sol_address") {
           const a = await getJson<{ result?: { value?: number }; error?: { message?: string } }>(cfg.sol_rpc, {
             method: "POST",
@@ -102,10 +141,24 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
           if (a.result?.value === undefined) throw new Error(`wallet ${opts.institution_id}: getBalance failed: ${a.error?.message ?? "no result"}`);
           raw[h.value] = a;
           lamports += BigInt(a.result.value);
+          unsupported.add("sol_address");
         } else if (h.kind === "btc_xpub") {
-          const a = await getJson<{ wallet: { final_balance: number } }>(`${cfg.btc_xpub_api}/multiaddr?active=${encodeURIComponent(h.value)}&n=0`);
-          raw[h.value.slice(0, 20)] = a.wallet;
-          sats += BigInt(a.wallet.final_balance);
+          // n=50 rows a page when movements are wanted; the balance is the same either way.
+          let offset = 0;
+          for (let pages = 0; ; pages++) {
+            const a = await getJson<{ wallet: { final_balance: number }; txs?: Array<{ hash: string; time: number; result: number; block_height?: number | null }> }>(
+              `${cfg.btc_xpub_api}/multiaddr?active=${encodeURIComponent(h.value)}&n=${wantTx ? "50" : "0"}${offset > 0 ? `&offset=${String(offset)}` : ""}`,
+            );
+            if (pages === 0) {
+              raw[h.value.slice(0, 20)] = a.wallet;
+              sats += BigInt(a.wallet.final_balance);
+            }
+            const rows = a.txs ?? [];
+            for (const t of rows) if (t.block_height != null && t.block_height > 0) xpubMoves.push({ txid: t.hash, time: t.time, net: BigInt(t.result) });
+            const oldest = rows.at(-1);
+            if (!wantTx || rows.length < 50 || oldest === undefined || oldest.time < sinceSec || pages + 1 >= pageCap) break;
+            offset += rows.length;
+          }
         } else {
           const a = await getJson<{ result?: string; error?: { message?: string } }>(cfg.eth_rpc, {
             method: "POST",
@@ -115,6 +168,7 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
           if (a.result === undefined) throw new Error(`wallet ${opts.institution_id}: eth_getBalance failed: ${a.error?.message ?? "no result"}`);
           raw[h.value] = a;
           wei += BigInt(a.result);
+          unsupported.add("eth_address");
         }
       }
 
@@ -150,6 +204,27 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
         });
       }
 
+      // Movements, valued at the day's spot (issue #95). A transaction
+      // between two of this wallet's own addresses nets to its fee.
+      const transactions: SnapshotTxn[] = [];
+      if (wantTx) {
+        const priceAt = historicSpotFetcher(doFetch, cfg.price_api);
+        const mine = (kind: "btc_address" | "ltc_address"): Set<string> => new Set(opts.holdings.filter((h) => h.kind === kind).map((h) => h.value));
+        const btcMoves = [...esploraMovements(esploraTxs.btc_address, mine("btc_address")), ...xpubMoves];
+        const chains: Array<[ChainMovement[], string, string, number]> = [
+          [btcMoves, "BTC", "Bitcoin", 8],
+          [esploraMovements(esploraTxs.ltc_address, mine("ltc_address")), "LTC", "Litecoin", 8],
+        ];
+        for (const [moves, symbol, name, decimals] of chains) {
+          if (moves.length === 0) continue;
+          const f = await chainTransactions(moves, symbol, name, decimals, scaleDown, since, priceAt);
+          transactions.push(...f.rows);
+          txNotes[symbol] = { rows: f.rows.length, unvalued: f.unvalued };
+        }
+        if (unsupported.size > 0) txNotes["unsupported"] = [...unsupported].sort().map((k) => `${k}: balances only -- history needs an indexer`);
+        transactions.sort((x, y) => x.posted_at.localeCompare(y.posted_at) || x.txn_id.localeCompare(y.txn_id));
+      }
+
       const total = decimal.sum(positions.map((p) => p.market_value ?? "0"));
       const account = {
         account_id: `acct.${instSlug}.wallet`,
@@ -159,12 +234,13 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
         as_of: asOf,
         balances: [{ balance_type: "total", amount: total }],
         ...(positions.length > 0 ? { positions } : {}),
+        ...(transactions.length > 0 ? { transactions } : {}),
       };
       const draft = validateDraftSnapshot(
         { institution_id: opts.institution_id, fetched_at: asOf, via: WALLET_VIA, accounts: [account] },
         `wallet ${opts.institution_id}`,
       );
-      const rawBody = JSON.stringify({ holdings: opts.holdings.map((h) => ({ ...h })), responses: raw }, null, 2);
+      const rawBody = JSON.stringify({ holdings: opts.holdings.map((h) => ({ ...h })), responses: raw, ...(wantTx ? { transactions: txNotes } : {}) }, null, 2);
       return {
         raw: [{ bytes: new TextEncoder().encode(rawBody), filename: `wallet-${asOf.slice(0, 10)}.json`, mime: "application/json", kind: "snapshot" }],
         snapshot: draft,

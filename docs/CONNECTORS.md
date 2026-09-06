@@ -124,6 +124,15 @@ net must match the balance Coinbase reports (to 1e-8) or the lots are
 withheld and the raw snapshot says why; dollar stablecoins get no lots.
 A lot that did not change since the last fetch writes no new fact.
 
+**Transactions.** The same history feeds the account's transaction
+facts over the rolling window (30 days; a year for a fresh connection):
+fiat deposits and withdrawals, buys, sells, sends, receives, Pro and
+Exchange transfers, and staking payouts, each valued by Coinbase's own
+USD figure for the row and worded as Coinbase words it. A sold-out
+wallet still reports the window's movement. Buys, sells, and converts
+are in-account conversions and stay out of cash flow (D-034); what
+counts is the fiat that arrived or left and the coins sent or received.
+
 ## Kraken (crypto holdings)
 
 Create an API key in Kraken (Settings → API) with only the **Query
@@ -155,6 +164,15 @@ withheld and the fetch log says why. Without the ledger permission the
 walk fails quietly and positions stay lot-less — add lots by hand from
 the Positions page instead.
 
+**Transactions.** The ledger walk also yields the window's movements,
+one per Kraken reference: a fiat-funded trade is a buy or sell with the
+fiat leg beside it, a crypto-to-crypto trade is a swap, deposits and
+withdrawals are transfers, staking payouts are income. Kraken states no
+fiat value for crypto legs, so those are valued at the day's spot from
+the public price endpoint and the description says so; a leg with no
+price is counted in the raw snapshot, not guessed. Without the ledger
+permission there are no transactions either.
+
 ## Watch-only wallets (Ledger, Trezor, any address)
 
 A hardware wallet is read WITHOUT the device: paste public addresses
@@ -177,6 +195,15 @@ Recognized and named but not yet supported: Dogecoin, XRP, Tron,
 Cardano, Bitcoin Cash, Cosmos-family. Prices from Coinbase's public
 spot endpoint. Satoshis, litoshis, wei, and lamports convert through
 BigInt string math — quantities never touch floats.
+
+**Transactions.** Bitcoin and Litecoin addresses read their confirmed
+transactions from the same explorer API (netted across the wallet's own
+addresses, so change back to you is not a receive), a legacy xpub from
+blockchain.info's rows; each becomes a transfer valued at the day's spot
+and worded as such. A send to one of the household's other accounts
+pairs up through the normalizer's transfer matching. Ethereum and
+Solana expose balances only over a bare RPC — history needs an indexer
+— so those carry no transactions, and the raw snapshot says so.
 
 **Privacy trade-off, stated plainly**: each nightly discloses the
 watched addresses to the public chain-data services. The endpoints are

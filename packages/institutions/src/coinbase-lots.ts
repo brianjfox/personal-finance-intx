@@ -24,6 +24,8 @@ export interface CoinbaseTxn {
   native_amount?: { amount: string; currency: string } | null;
   advanced_trade_fill?: { commission?: string | null; fill_price?: string | null; product_id?: string | null; order_side?: string | null } | null;
   buy?: { total?: { amount: string; currency: string } | null; fee?: { amount: string; currency: string } | null } | null;
+  /** Coinbase's own wording for the row ("Bought Bitcoin", "Sent Bitcoin — To BTC address"). */
+  details?: { title?: string | null; subtitle?: string | null; header?: string | null } | null;
 }
 
 export interface DerivedLot {
