@@ -1,6 +1,7 @@
 export * from "./adapter";
 export * from "./coinbase";
 export * from "./coinbase-lots";
+export * from "./crypto-flows";
 export * from "./csv";
 export * from "./jsondrop";
 export * from "./kraken";

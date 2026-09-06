@@ -14,6 +14,7 @@ import { decimal } from "@fin/contracts";
 
 import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import { deriveCoinbaseLots, type CoinbaseTxn, type DerivedLot } from "./coinbase-lots";
+import { coinbaseTransactions, windowStart, type SnapshotTxn } from "./crypto-flows";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
 export const COINBASE_VIA = "adapter.coinbase@1";
@@ -34,6 +35,8 @@ export interface CoinbaseOptions {
   lots?: boolean;
   /** Safety bound on the history walk per currency (100 transactions a page). */
   max_history_pages?: number;
+  /** Emit the window's movements as transactions (issue #95). Default on. */
+  transactions?: boolean;
 }
 
 /** The transactions a lot walk consumed, for the raw snapshot's audit trail. */
@@ -165,30 +168,71 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
         cursor = page.has_next === true && page.cursor != null && page.cursor !== "" ? page.cursor : null;
       } while (cursor !== null);
 
+      // The rolling transaction window (D-034/D-035): the host widens it
+      // for a fresh connection; the registry's option wins over both.
+      const lookback = ctx.lookback_days ?? 30;
+      const since = windowStart(ctx.now, lookback);
+      const wantTx = opts.transactions !== false;
+
+      // One walk of a currency wallet's history, newest first as Coinbase
+      // serves it. `full` reads to the beginning (lots need every row);
+      // otherwise it stops once a page has passed the window's start.
+      const cap = opts.max_history_pages ?? 400;
+      const walk = async (a: CbAccount, full: boolean): Promise<{ txns: CoinbaseTxn[]; pages: number }> => {
+        const txns: CoinbaseTxn[] = [];
+        let pages = 0;
+        let next: string | null = `/v2/accounts/${encodeURIComponent(a.uuid)}/transactions?limit=100`;
+        while (next !== null) {
+          if (pages >= cap) throw new Error(`history longer than ${String(cap)} pages`);
+          const page: { data?: CoinbaseTxn[]; pagination?: { next_uri?: string | null } } = await authed(next, ctx.now);
+          pages += 1;
+          const data = page.data ?? [];
+          txns.push(...data);
+          const oldest = data.at(-1)?.created_at;
+          if (!full && (oldest === undefined || oldest < since)) break;
+          next = page.pagination?.next_uri != null && page.pagination.next_uri !== "" ? page.pagination.next_uri : null;
+        }
+        return { txns, pages };
+      };
+
       // Lots from the account's transaction history (issue #53): the v2
       // account id equals the v3 uuid. Best effort -- a failed or
       // non-reconciling walk leaves the position without lots and says
       // so in the raw snapshot; it never fails the fetch or ships a lot
       // set that does not add up to the balance.
       const lotNotes: Record<string, LotWalkNote> = {};
-      const lotsFor = async (a: CbAccount, qty: string): Promise<DerivedLot[] | undefined> => {
-        if (opts.lots === false) return undefined;
-        const cap = opts.max_history_pages ?? 400;
-        const txns: CoinbaseTxn[] = [];
-        let pages = 0;
-        let next: string | null = `/v2/accounts/${encodeURIComponent(a.uuid)}/transactions?limit=100`;
+      const transactions: SnapshotTxn[] = [];
+      const txNotes: Record<string, { rows: number; unvalued: number; error?: string }> = {};
+      /** The window's movements from a walked history, appended to the account. */
+      const flows = (a: CbAccount, txns: readonly CoinbaseTxn[]): void => {
+        if (!wantTx) return;
+        const f = coinbaseTransactions(txns, a.currency, since);
+        transactions.push(...f.rows);
+        if (f.rows.length > 0 || f.unvalued > 0) txNotes[a.currency] = { rows: f.rows.length, unvalued: f.unvalued };
+      };
+      /** Transactions only (no lots wanted for this wallet): a windowed walk, best effort. */
+      const flowsOnly = async (a: CbAccount): Promise<void> => {
+        if (!wantTx) return;
         try {
-          while (next !== null) {
-            if (pages >= cap) throw new Error(`history longer than ${String(cap)} pages`);
-            const page: { data?: CoinbaseTxn[]; pagination?: { next_uri?: string | null } } = await authed(next, ctx.now);
-            pages += 1;
-            txns.push(...(page.data ?? []));
-            next = page.pagination?.next_uri != null && page.pagination.next_uri !== "" ? page.pagination.next_uri : null;
-          }
+          flows(a, (await walk(a, false)).txns);
         } catch (e) {
-          lotNotes[a.currency] = { pages, transactions: txns.length, net: "?", balance: qty, counted: {}, withheld: `history walk failed: ${e instanceof Error ? e.message : String(e)}` };
+          txNotes[a.currency] = { rows: 0, unvalued: 0, error: `history walk failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      };
+      const lotsFor = async (a: CbAccount, qty: string): Promise<DerivedLot[] | undefined> => {
+        if (opts.lots === false) {
+          await flowsOnly(a);
           return undefined;
         }
+        let txns: CoinbaseTxn[];
+        let pages = 0;
+        try {
+          ({ txns, pages } = await walk(a, true));
+        } catch (e) {
+          lotNotes[a.currency] = { pages, transactions: 0, net: "?", balance: qty, counted: {}, withheld: `history walk failed: ${e instanceof Error ? e.message : String(e)}` };
+          return undefined;
+        }
+        flows(a, txns);
         const d = deriveCoinbaseLots(txns, "USD");
         const note: LotWalkNote = { pages, transactions: txns.length, net: d.net, balance: qty, counted: d.counted };
         // Coinbase rounds the balance it reports (9 places seen) while the
@@ -205,11 +249,19 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
       const prices: Record<string, string | null> = {};
       for (const a of accounts) {
         const qty = decimal.add(dec(a.available_balance?.value), dec(a.hold?.value));
-        if (decimal.isZero(qty)) continue;
+        if (decimal.isZero(qty)) {
+          // Nothing held now, but the wallet may have moved inside the
+          // window (sold out last week): its recent history still counts.
+          if (a.active !== false) await flowsOnly(a);
+          continue;
+        }
         // USD folds straight into cash; other fiat becomes a cash-class
-        // position priced by its -USD spot rate (never face value).
+        // position priced by its -USD spot rate (never face value). The
+        // fiat wallet's deposits and withdrawals are the household's real
+        // cash-flow legs here.
         if (a.currency === "USD") {
           cash = decimal.add(cash, qty);
+          await flowsOnly(a);
           continue;
         }
         // Spot price in USD from the public price endpoint; unpriced assets
@@ -225,8 +277,11 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
           price = null;
         }
         prices[a.currency] = price;
-        // No lots for fiat or dollar stablecoins: nothing to hold-period.
-        const lots = FIAT.has(a.currency) || STABLE.has(a.currency) ? undefined : await lotsFor(a, qty);
+        // No lots for fiat or dollar stablecoins: nothing to hold-period --
+        // but their movements still count.
+        let lots: DerivedLot[] | undefined;
+        if (FIAT.has(a.currency) || STABLE.has(a.currency)) await flowsOnly(a);
+        else lots = await lotsFor(a, qty);
         // The position's basis is the sum of its lots' -- only when every
         // remaining lot's basis is known; one transferred-in lot makes the
         // whole figure unknown rather than understated.
@@ -253,12 +308,13 @@ export function coinbaseAdapter(opts: CoinbaseOptions): InstitutionAdapter {
           ...(decimal.isZero(cash) ? [] : [{ balance_type: "cash", amount: cash }]),
         ],
         ...(positions.length > 0 ? { positions } : {}),
+        ...(transactions.length > 0 ? { transactions: transactions.sort((x, y) => x.posted_at.localeCompare(y.posted_at) || x.txn_id.localeCompare(y.txn_id)) } : {}),
       };
       const draft = validateDraftSnapshot(
         { institution_id: opts.institution_id, fetched_at: asOf, via: COINBASE_VIA, accounts: [account] },
         `coinbase ${opts.institution_id}`,
       );
-      const raw = JSON.stringify({ accounts, prices, lots: lotNotes }, null, 2);
+      const raw = JSON.stringify({ accounts, prices, lots: lotNotes, transactions: { window_days: lookback, since, by_currency: txNotes } }, null, 2);
       return {
         raw: [{ bytes: new TextEncoder().encode(raw), filename: `coinbase-${asOf.slice(0, 10)}.json`, mime: "application/json", kind: "snapshot" }],
         snapshot: draft,

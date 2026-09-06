@@ -15,6 +15,7 @@ import { decimal } from "@fin/contracts";
 
 import { loggingFetch, validateDraftSnapshot, type FetchOutput, type HttpLogSink, type InstitutionAdapter } from "./adapter";
 import type { LotWalkNote } from "./coinbase";
+import { historicSpotFetcher, krakenTransactions, windowStart, type SnapshotTxn } from "./crypto-flows";
 import { deriveKrakenLots, type KrakenLedgerEntry } from "./kraken-lots";
 import { defaultSecretStore, type SecretStore } from "./secrets";
 
@@ -35,6 +36,8 @@ export interface KrakenOptions {
   max_history_pages?: number;
   /** Pause between ledger pages, ms (Kraken's private-API rate limit); tests set 0. */
   page_pause_ms?: number;
+  /** Emit the window's movements as transactions (issue #95). Default on. */
+  transactions?: boolean;
 }
 
 /** Dollar stablecoins: positions, but no tax lots are derived for them. */
@@ -141,24 +144,34 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
         }
       };
 
+      // The rolling transaction window (D-034/D-035).
+      const lookback = ctx.lookback_days ?? 30;
+      const since = windowStart(ctx.now, lookback);
+      const wantTx = opts.transactions !== false;
+      const wantLots = opts.lots !== false;
+
       // Tax lots from the account ledger (issue #64): best effort -- a
       // failed walk (e.g. a funds-only key without "Query ledger
       // entries") leaves positions lot-less and says why in the raw
       // snapshot; it never fails the fetch. Per symbol, the derived net
-      // must match the aggregated balance or the lots are withheld.
+      // must match the aggregated balance or the lots are withheld. The
+      // same walk feeds the window's transactions (issue #95); when only
+      // those are wanted the walk starts at the window instead of 1970.
       const lotNotes: Record<string, LotWalkNote> = {};
       let derived: Map<string, import("./coinbase-lots").LotDerivation> | null = null;
       let walkPages = 0;
       let walkEntries = 0;
-      if (opts.lots !== false) {
+      const entries: KrakenLedgerEntry[] = [];
+      let walkError: string | null = null;
+      if (wantLots || wantTx) {
         const cap = opts.max_history_pages ?? 200;
         const pause = opts.page_pause_ms ?? 1200;
-        const entries: KrakenLedgerEntry[] = [];
+        const startParam = wantLots ? {} : { start: String(Math.floor(new Date(since).getTime() / 1000)) };
         try {
           let expected = Infinity;
           for (let ofs = 0; entries.length < expected; ofs += 50) {
             if (walkPages >= cap) throw new Error(`ledger longer than ${String(cap)} pages`);
-            const page = await priv<{ count: number; ledger: Record<string, Omit<KrakenLedgerEntry, "id">> }>("/0/private/Ledgers", { ofs: String(ofs) });
+            const page = await priv<{ count: number; ledger: Record<string, Omit<KrakenLedgerEntry, "id">> }>("/0/private/Ledgers", { ofs: String(ofs), ...startParam });
             walkPages += 1;
             expected = page.count;
             const rows = Object.entries(page.ledger ?? {}).map(([id, e]) => ({ id, ...e }));
@@ -167,10 +180,21 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
             if (entries.length < expected && pause > 0) await new Promise((res) => setTimeout(res, pause));
           }
           walkEntries = entries.length;
-          derived = deriveKrakenLots(entries, normalizeKrakenAsset);
+          if (wantLots) derived = deriveKrakenLots(entries, normalizeKrakenAsset);
         } catch (e) {
           derived = null;
-          lotNotes["*"] = { pages: walkPages, transactions: entries.length, net: "?", balance: "?", counted: {}, withheld: `ledger walk failed: ${e instanceof Error ? e.message : String(e)}` };
+          walkError = `ledger walk failed: ${e instanceof Error ? e.message : String(e)}`;
+          if (wantLots) lotNotes["*"] = { pages: walkPages, transactions: entries.length, net: "?", balance: "?", counted: {}, withheld: walkError };
+        }
+      }
+      let transactions: SnapshotTxn[] = [];
+      let txNote: { window_days: number; since: string; rows: number; unvalued: number; error?: string } | null = null;
+      if (wantTx) {
+        if (walkError !== null) txNote = { window_days: lookback, since, rows: 0, unvalued: 0, error: walkError };
+        else {
+          const f = await krakenTransactions(entries, normalizeKrakenAsset, since, historicSpotFetcher(doFetch, priceApi));
+          transactions = f.rows.sort((x, y) => x.posted_at.localeCompare(y.posted_at) || x.txn_id.localeCompare(y.txn_id));
+          txNote = { window_days: lookback, since, rows: f.rows.length, unvalued: f.unvalued };
         }
       }
       const lotsFor = (symbol: string, qty: string): import("./coinbase-lots").DerivedLot[] | undefined => {
@@ -217,12 +241,13 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
           ...(decimal.isZero(cash) ? [] : [{ balance_type: "cash", amount: cash }]),
         ],
         ...(positions.length > 0 ? { positions } : {}),
+        ...(transactions.length > 0 ? { transactions } : {}),
       };
       const draft = validateDraftSnapshot(
         { institution_id: opts.institution_id, fetched_at: asOf, via: KRAKEN_VIA, accounts: [account] },
         `kraken ${opts.institution_id}`,
       );
-      const raw = JSON.stringify({ balances: body.result ?? {}, lots: lotNotes }, null, 2);
+      const raw = JSON.stringify({ balances: body.result ?? {}, lots: lotNotes, ...(txNote !== null ? { transactions: txNote } : {}) }, null, 2);
       return {
         raw: [{ bytes: new TextEncoder().encode(raw), filename: `kraken-${asOf.slice(0, 10)}.json`, mime: "application/json", kind: "snapshot" }],
         snapshot: draft,

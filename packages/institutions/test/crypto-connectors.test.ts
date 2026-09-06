@@ -123,6 +123,30 @@ describe("coinbase adapter (mock API)", () => {
           ],
         });
       }
+      // Movements in the window (issue #95). The USD wallet's page has a
+      // row older than the window and a next_uri: a 30-day walk must stop
+      // at the window's edge and not follow it (the JWT count says so).
+      if (url.pathname === "/v2/accounts/u-usd/transactions") {
+        // Only a walk whose window reaches past January should ask for this page.
+        if (url.searchParams.get("starting_after") === "old") return Response.json({ pagination: { next_uri: null }, data: [] });
+        return Response.json({
+          pagination: { next_uri: "/v2/accounts/u-usd/transactions?limit=100&starting_after=old" },
+          data: [
+            { id: "fd1", type: "fiat_deposit", status: "completed", created_at: "2026-08-10T09:00:00Z", amount: { amount: "1000.00", currency: "USD" }, native_amount: { amount: "1000.00", currency: "USD" }, details: { title: "Deposited USD", subtitle: "From Chase ••••1234" } },
+            { id: "fw0", type: "fiat_withdrawal", status: "completed", created_at: "2026-01-01T00:00:00Z", amount: { amount: "-50.00", currency: "USD" }, native_amount: { amount: "-50.00", currency: "USD" } },
+          ],
+        });
+      }
+      // A sold-out wallet (zero balance now) still reports the window's movement.
+      if (url.pathname === "/v2/accounts/u-zero/transactions") {
+        return Response.json({
+          pagination: { next_uri: null },
+          data: [
+            { id: "dg1", type: "send", status: "completed", created_at: "2026-08-15T12:00:00Z", amount: { amount: "-100", currency: "DOGE" }, native_amount: { amount: "-10.00", currency: "USD" }, details: { title: "Sent Dogecoin", subtitle: "To DOGE address" } },
+            { id: "dg0", type: "send", status: "pending", created_at: "2026-08-16T12:00:00Z", amount: { amount: "-1", currency: "DOGE" }, native_amount: { amount: "-0.10", currency: "USD" } },
+          ],
+        });
+      }
       if (url.pathname.startsWith("/v2/accounts/")) return Response.json({ pagination: { next_uri: null }, data: [] });
       return new Response("not found", { status: 404 });
     });
@@ -139,7 +163,10 @@ describe("coinbase adapter (mock API)", () => {
     const { base, jwts } = mock();
     const adapter = coinbaseAdapter({ institution_id: "inst.coinbase", base_url: base, secrets: secrets() });
     const out = await adapter.fetch({ now: NOW });
-    expect(jwts.length).toBe(4); // two account pages + BTC's two history pages (USDC is a stablecoin: no walk), each signature verified by the mock
+    // Two account pages + BTC's two lot-walk pages + one windowed page each
+    // for USD, DOGE (sold out), and USDC (stablecoin: movements, no lots);
+    // the USD wallet's next_uri past the window is NOT followed.
+    expect(jwts.length).toBe(7);
     // Lots (issue #53): oldest first, the Pro-migration deposit (unknown basis) is consumed by the sell
     // before the bought lot; 0.75 of the bought lot remains at its unit cost (40,040) -> 30,030.
     const btc = out.snapshot.accounts[0]!.positions!.find((p) => p.instrument.symbol === "BTC")!;
@@ -161,6 +188,26 @@ describe("coinbase adapter (mock API)", () => {
     expect(bal.get("cash")).toBe("1200.5");
     expect(bal.get("total")).toBe("46500.58"); // 45000.08 + 300 + 1200.50
     expect(out.raw[0]?.filename).toBe("coinbase-2026-08-25.json");
+
+    // Transactions (issue #95): the window's rows only, completed only,
+    // Coinbase's own USD value and wording, positive = into the account.
+    expect(acct.transactions).toEqual([
+      { txn_id: "fd1", posted_at: "2026-08-10T09:00:00.000Z", amount: "1000.00", type: "transfer_in", description: "Deposited USD — From Chase ••••1234", instrument: null, quantity: null, raw_category: "fiat_deposit" },
+      { txn_id: "dg1", posted_at: "2026-08-15T12:00:00.000Z", amount: "-10", type: "transfer_out", description: "Sent Dogecoin — To DOGE address", instrument: { symbol: "DOGE", name: "DOGE", asset_class: "crypto" }, quantity: "-100", raw_category: "send" },
+    ]);
+    const txNotes = (JSON.parse(new TextDecoder().decode(out.raw[0]!.bytes)) as { transactions: { window_days: number; by_currency: Record<string, { rows: number; unvalued: number }> } }).transactions;
+    expect(txNotes.window_days).toBe(30);
+    expect(txNotes.by_currency["USD"]).toEqual({ rows: 1, unvalued: 0 });
+    expect(txNotes.by_currency["DOGE"]).toEqual({ rows: 1, unvalued: 0 });
+  });
+
+  test("the host's widened window reaches further back; transactions can be switched off", async () => {
+    const { base } = mock();
+    const wide = await coinbaseAdapter({ institution_id: "inst.coinbase", base_url: base, secrets: secrets() }).fetch({ now: NOW, lookback_days: 365 });
+    // Inside a year: the January withdrawal joins; BTC's 2024/2025 fills stay out (older than the window).
+    expect(wide.snapshot.accounts[0]!.transactions!.map((t) => t.txn_id)).toEqual(["fw0", "fd1", "dg1"]);
+    const off = await coinbaseAdapter({ institution_id: "inst.coinbase", base_url: base, secrets: secrets(), transactions: false }).fetch({ now: NOW });
+    expect(off.snapshot.accounts[0]!.transactions).toBeUndefined();
   });
 
   test("missing key fails in plain words", async () => {
@@ -185,9 +232,26 @@ describe("watch-only wallet adapter (mock chain APIs)", () => {
       if (url.pathname === "/btc/address/bc1qaddr1") {
         return Response.json({ chain_stats: { funded_txo_sum: 160000000, spent_txo_sum: 10000000 } }); // 1.5 BTC
       }
+      // Confirmed history, newest first (issue #95): a receive, a send with
+      // change back to us (net = spent - change, fee included), a pending row.
+      if (url.pathname === "/btc/address/bc1qaddr1/txs") {
+        return Response.json([
+          { txid: "txC", status: { confirmed: false }, vin: [], vout: [{ scriptpubkey_address: "bc1qaddr1", value: 1 }] },
+          { txid: "txA", status: { confirmed: true, block_time: Date.parse("2026-08-22T10:00:00Z") / 1000 }, vin: [{ prevout: { scriptpubkey_address: "bc1qother", value: 20000000 } }], vout: [{ scriptpubkey_address: "bc1qaddr1", value: 10000000 }, { scriptpubkey_address: "bc1qother", value: 9990000 }] },
+          { txid: "txB", status: { confirmed: true, block_time: Date.parse("2026-08-20T10:00:00Z") / 1000 }, vin: [{ prevout: { scriptpubkey_address: "bc1qaddr1", value: 5000000 } }], vout: [{ scriptpubkey_address: "bc1qpayee", value: 2900000 }, { scriptpubkey_address: "bc1qaddr1", value: 2000000 }] },
+        ]);
+      }
+      if (url.pathname === "/btc/address/bc1qaddr1/txs/chain/txB") return Response.json([]);
       if (url.pathname === "/multiaddr") {
         expect(url.searchParams.get("active")).toBe("xpub6TESTLEGACY");
-        return Response.json({ wallet: { final_balance: 25000000 } }); // 0.25 BTC
+        expect(url.searchParams.get("n")).toBe("50");
+        return Response.json({
+          wallet: { final_balance: 25000000 }, // 0.25 BTC
+          txs: [
+            { hash: "x1", time: Date.parse("2026-08-18T08:00:00Z") / 1000, result: 5000000, block_height: 900000 },
+            { hash: "x0", time: Date.parse("2025-08-18T08:00:00Z") / 1000, result: 20000000, block_height: 850000 }, // outside the window
+          ],
+        });
       }
       if (url.pathname === "/rpc" && req.method === "POST") {
         const b = (await req.json()) as { method: string; params: [string, string] };
@@ -219,6 +283,18 @@ describe("watch-only wallet adapter (mock chain APIs)", () => {
     expect(pos.get("ETH")).toMatchObject({ quantity: "2", price: "2500.50", market_value: "5001.00" });
     expect(acct.balances).toEqual([{ balance_type: "total", amount: "110001" }]);
     expect(out.raw[0]?.filename).toBe("wallet-2026-08-25.json");
+
+    // Movements (issue #95): confirmed on-chain rows in the window, valued
+    // at the day's spot, oldest first; the pending row and last year's
+    // xpub row are left out; ETH carries none and the raw notes say why.
+    expect(acct.transactions).toEqual([
+      { txn_id: "x1", posted_at: "2026-08-18T08:00:00.000Z", amount: "3000.00", type: "transfer_in", description: "Received 0.05 BTC on-chain · valued at the day's spot", instrument: { symbol: "BTC", name: "Bitcoin", asset_class: "crypto" }, quantity: "0.05", raw_category: "receive" },
+      { txn_id: "txB", posted_at: "2026-08-20T10:00:00.000Z", amount: "-1800", type: "transfer_out", description: "Sent 0.03 BTC on-chain (fee included) · valued at the day's spot", instrument: { symbol: "BTC", name: "Bitcoin", asset_class: "crypto" }, quantity: "-0.03", raw_category: "send" },
+      { txn_id: "txA", posted_at: "2026-08-22T10:00:00.000Z", amount: "6000.00", type: "transfer_in", description: "Received 0.1 BTC on-chain · valued at the day's spot", instrument: { symbol: "BTC", name: "Bitcoin", asset_class: "crypto" }, quantity: "0.1", raw_category: "receive" },
+    ]);
+    const notes = (JSON.parse(new TextDecoder().decode(out.raw[0]!.bytes)) as { transactions: { BTC: { rows: number; unvalued: number }; unsupported: string[] } }).transactions;
+    expect(notes.BTC).toEqual({ rows: 3, unvalued: 0 });
+    expect(notes.unsupported).toEqual(["eth_address: balances only -- history needs an indexer"]);
   });
 
   test("a dead chain API is a plain-words fetch failure, not a wrong zero", async () => {
@@ -360,6 +436,24 @@ describe("kraken adapter (mock API)", () => {
       if (url.pathname === "/v2/prices/BTC-USD/spot") return Response.json({ data: { amount: "60000" } });
       if (url.pathname === "/v2/prices/SOL-USD/spot") return Response.json({ data: { amount: "200" } });
       if (url.pathname === "/v2/prices/EUR-USD/spot") return Response.json({ data: { amount: "1.10" } });
+      if (url.pathname === "/0/private/Ledgers" && req.method === "POST") {
+        const postData = await req.text();
+        const nonce = new URLSearchParams(postData).get("nonce") ?? "";
+        if (req.headers.get("API-Sign") !== krakenSign("/0/private/Ledgers", nonce, postData, SECRET)) return Response.json({ error: ["EAPI:Invalid signature"] });
+        const t = (iso: string): number => Date.parse(iso) / 1000;
+        // Sibling entries share a refid; fees are in the entry's own asset.
+        const ledger = {
+          L8: { refid: "D0", time: t("2025-01-01T00:00:00Z"), type: "deposit", subtype: "", asset: "ZUSD", amount: "100000.00", fee: "0" },
+          L1: { refid: "T1", time: t("2026-08-01T09:00:00Z"), type: "trade", subtype: "", asset: "ZUSD", amount: "-30000.00", fee: "30.00" },
+          L2: { refid: "T1", time: t("2026-08-01T09:00:00Z"), type: "trade", subtype: "", asset: "XXBT", amount: "0.5", fee: "0" },
+          L3: { refid: "D1", time: t("2026-08-10T09:00:00Z"), type: "deposit", subtype: "", asset: "XXBT", amount: "0.25", fee: "0" },
+          L4: { refid: "W1", time: t("2026-08-12T09:00:00Z"), type: "withdrawal", subtype: "", asset: "ZUSD", amount: "-500.00", fee: "0" },
+          L5: { refid: "S1", time: t("2026-08-15T09:00:00Z"), type: "staking", subtype: "", asset: "SOL.S", amount: "0.1", fee: "0" },
+          L6: { refid: "I1", time: t("2026-08-16T09:00:00Z"), type: "transfer", subtype: "spottostaking", asset: "SOL", amount: "-10", fee: "0" },
+          L7: { refid: "I1", time: t("2026-08-16T09:00:00Z"), type: "transfer", subtype: "stakingfromspot", asset: "SOL.S", amount: "10", fee: "0" },
+        };
+        return Response.json({ error: [], result: { count: Object.keys(ledger).length, ledger } });
+      }
       if (url.pathname === "/0/private/Balance" && req.method === "POST") {
         const postData = await req.text();
         const nonce = new URLSearchParams(postData).get("nonce") ?? "";
@@ -379,7 +473,7 @@ describe("kraken adapter (mock API)", () => {
       [`${KRAKEN_SERVICE}/api_key:inst.kraken`]: "key-1",
       [`${KRAKEN_SERVICE}/private_key:inst.kraken`]: SECRET,
     });
-    const adapter = krakenAdapter({ institution_id: "inst.kraken", base_url: base, price_api: base, secrets });
+    const adapter = krakenAdapter({ institution_id: "inst.kraken", base_url: base, price_api: base, secrets, page_pause_ms: 0 });
     const out = await adapter.fetch({ now: NOW });
     expect(seenNonces).toHaveLength(1);
     const acct = out.snapshot.accounts[0]!;
@@ -393,6 +487,26 @@ describe("kraken adapter (mock API)", () => {
     expect(bal.get("total")).toBe("48310.5"); // 45000 + 2000 + 110 + 1200.50
     expect(out.raw[0]?.filename).toBe("kraken-2026-08-25.json");
 
+    // Lots (issue #64) from the same ledger: the fiat-funded trade (30,000 +
+    // 30 fee) and the transferred-in deposit net to the 0.75 BTC held.
+    expect(pos.get("BTC")?.lots).toEqual([
+      { lot_id: "kr:L2", quantity: "0.5", acquired_at: "2026-08-01", cost_basis: "30030.00", transferred_in: false },
+      { lot_id: "kr:L3", quantity: "0.25", acquired_at: "2026-08-10", cost_basis: null, transferred_in: true },
+    ]);
+
+    // Transactions (issue #95): one movement per refid inside the window;
+    // last year's deposit and the internal spot<->staking shuffle are out;
+    // crypto legs valued at the day's spot, the fiat leg by itself.
+    expect(acct.transactions).toEqual([
+      { txn_id: "T1", posted_at: "2026-08-01T09:00:00.000Z", amount: "30030", type: "buy", description: "Bought 0.5 BTC for USD", instrument: { symbol: "BTC", name: "BTC", asset_class: "crypto" }, quantity: "0.5", raw_category: "trade" },
+      { txn_id: "T1:fiat", posted_at: "2026-08-01T09:00:00.000Z", amount: "-30030", type: "buy", description: "Paid for 0.5 BTC", instrument: null, quantity: null, raw_category: "trade" },
+      { txn_id: "L3", posted_at: "2026-08-10T09:00:00.000Z", amount: "15000.00", type: "transfer_in", description: "Deposit 0.25 BTC · valued at the day's spot", instrument: { symbol: "BTC", name: "BTC", asset_class: "crypto" }, quantity: "0.25", raw_category: "deposit" },
+      { txn_id: "L4", posted_at: "2026-08-12T09:00:00.000Z", amount: "-500", type: "transfer_out", description: "Withdrawal 500 USD", instrument: null, quantity: null, raw_category: "withdrawal" },
+      { txn_id: "L5", posted_at: "2026-08-15T09:00:00.000Z", amount: "20.00", type: "income", description: "Staking reward 0.1 SOL · valued at the day's spot", instrument: { symbol: "SOL", name: "SOL", asset_class: "crypto" }, quantity: "0.1", raw_category: "staking" },
+    ]);
+    const notes = JSON.parse(new TextDecoder().decode(out.raw[0]!.bytes)) as { transactions: { window_days: number; rows: number; unvalued: number } };
+    expect(notes.transactions).toMatchObject({ window_days: 30, rows: 5, unvalued: 0 });
+
     // A refused key surfaces Kraken's own error, in plain words.
     const badSecrets = memorySecretStore({
       [`${KRAKEN_SERVICE}/api_key:inst.kraken`]: "wrong",
@@ -405,5 +519,58 @@ describe("kraken adapter (mock API)", () => {
   test("missing key fails in plain words", async () => {
     const adapter = krakenAdapter({ institution_id: "inst.kraken", base_url: "http://127.0.0.1:9", secrets: memorySecretStore() });
     expect(adapter.fetch({ now: NOW })).rejects.toThrow(/not connected.*Kraken API key/);
+  });
+});
+
+describe("crypto flows mapping (issue #95)", () => {
+  const { coinbaseTransactions, krakenTransactions } = require("../src/crypto-flows") as typeof import("../src/crypto-flows");
+  const SINCE = "2026-07-26T12:00:00.000Z";
+
+  test("coinbase: convert is a swap leg, payouts are income, an unvalued row is counted not guessed", () => {
+    const f = coinbaseTransactions(
+      [
+        { id: "c1", type: "trade", status: "completed", created_at: "2026-08-01T00:00:00Z", amount: { amount: "1.5", currency: "ETH" }, native_amount: { amount: "4500", currency: "USD" } },
+        { id: "c2", type: "staking_reward", status: "completed", created_at: "2026-08-02T00:00:00Z", amount: { amount: "0.01", currency: "ETH" }, native_amount: { amount: "30", currency: "USD" } },
+        { id: "c3", type: "send", status: "completed", created_at: "2026-08-03T00:00:00Z", amount: { amount: "-0.5", currency: "ETH" }, native_amount: null },
+        { id: "c4", type: "advanced_trade_fill", status: "completed", created_at: "2026-08-04T00:00:00Z", amount: { amount: "-1", currency: "ETH" }, native_amount: { amount: "-3000", currency: "USD" } },
+      ],
+      "ETH",
+      SINCE,
+    );
+    expect(f.unvalued).toBe(1);
+    expect(f.rows.map((r) => [r.txn_id, r.type, r.amount, r.quantity])).toEqual([
+      ["c1", "swap", "4500", "1.5"],
+      ["c2", "income", "30", "0.01"],
+      ["c4", "sell", "-3000", "-1"],
+    ]);
+  });
+
+  test("kraken: a crypto-to-crypto trade is one swap; a leg with no price is counted, not guessed", async () => {
+    const t = Date.parse("2026-08-05T00:00:00Z") / 1000;
+    const priceAt = async (sym: string) => (sym === "ETH" ? "3000" : null);
+    const f = await krakenTransactions(
+      [
+        { id: "a", refid: "X1", time: t, type: "trade", asset: "DOT", amount: "-100", fee: "0" },
+        { id: "b", refid: "X1", time: t, type: "trade", asset: "XETH", amount: "0.2", fee: "0.001" },
+        { id: "c", refid: "D9", time: t + 60, type: "deposit", asset: "ADA", amount: "500", fee: "0" },
+      ],
+      (code) => (code === "XETH" ? "ETH" : code),
+      SINCE,
+      priceAt,
+    );
+    expect(f.unvalued).toBe(1); // ADA: no price
+    expect(f.rows).toEqual([
+      {
+        txn_id: "X1",
+        posted_at: "2026-08-05T00:00:00.000Z",
+        amount: "597.00",
+        type: "swap",
+        description: "Swapped 100 DOT for 0.199 ETH · valued at the day's spot",
+        instrument: { symbol: "ETH", name: "ETH", asset_class: "crypto" },
+        quantity: "0.199",
+        raw_category: "trade",
+        swap_from: { instrument: { symbol: "DOT", name: "DOT", asset_class: "crypto" }, quantity: "100" },
+      },
+    ]);
   });
 });
