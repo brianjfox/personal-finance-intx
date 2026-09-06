@@ -68,6 +68,7 @@ const PlanBody = type({
   targets: type({ asset_class: "string > 0", weight: "string > 0" }).array(),
   "constraints?": "Record<string, unknown>",
   "notes?": "string",
+  "auto_propose?": "boolean",
 });
 
 const ResolveBody = type({

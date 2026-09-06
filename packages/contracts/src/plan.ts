@@ -41,6 +41,12 @@ export const InvestmentPlan = type({
   targets: PlanTarget.array().atLeastLength(1),
   constraints: PlanConstraints,
   "notes?": "string",
+  /**
+   * Wake the Market Manager after a clean nightly when a class is out of
+   * band (issue #97). Absent = off: a plan written before the option
+   * keeps proposing only on the operator's press.
+   */
+  "auto_propose?": "boolean",
 });
 export type InvestmentPlan = typeof InvestmentPlan.infer;
 
