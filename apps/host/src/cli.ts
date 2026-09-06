@@ -70,6 +70,29 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string>
   return { cmd, flags, rest };
 }
 
+/**
+ * The process whose life this host follows (issue #104): FIN_PARENT_PID
+ * when set (the shell, or a test), else the parent at startup. `null`
+ * when there is no such parent -- launched by launchd or with
+ * FIN_PARENT_WATCH=0 -- so a daemon is never asked to follow pid 1.
+ */
+function watchedParent(): number | null {
+  if (process.env["FIN_PARENT_WATCH"] === "0") return null;
+  const env = Number(process.env["FIN_PARENT_PID"] ?? "");
+  const pid = Number.isInteger(env) && env > 1 ? env : process.ppid;
+  return pid > 1 ? pid : null;
+}
+
+/** A parent still exists when a signal-0 probe reaches it and, with no override, we are still its child (reparenting to launchd is how a parent's death looks). */
+function parentAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  return process.env["FIN_PARENT_PID"] !== undefined || process.ppid === pid;
+}
+
 async function main(argv: string[]): Promise<number> {
   const { cmd, flags, rest } = parseArgs(argv);
   const rootDir = flags["data"] ?? defaultDataDir();
@@ -417,15 +440,37 @@ async function main(argv: string[]): Promise<number> {
         console.log(lanEnabled ? lanBanner() : "LAN mode off: loopback only.");
       };
       let server = startListener();
-      console.log(JSON.stringify({ listening: server.url.href, lan: lanEnabled ? lanAddresses() : [], dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir }));
+      console.log(JSON.stringify({ listening: server.url.href, lan: lanEnabled ? lanAddresses() : [], dataDir: rootDir, users: users.list().map((u) => u.id), resumed: resumed.map((r) => `${r.user}/${r.runId}:${r.status}`), gui: guiDir, parent: watchedParent() }));
       if (lanEnabled) console.log(lanBanner());
-      await new Promise<void>((resolve) => {
-        process.on("SIGINT", () => resolve());
-        process.on("SIGTERM", () => resolve());
+      // The shell owns this process's life (D-043), and a stop must be a
+      // stop (issue #104): a signal, or the parent going away -- the
+      // shell was killed without running its exit path -- ends the
+      // process within a few seconds, whatever is still open. A graceful
+      // listener stop waited on the GUI's long-lived connections, and the
+      // scheduler's timers then kept the event loop alive: the host
+      // outlived its shell as an orphan that shrugged off SIGTERM.
+      const why = await new Promise<string>((resolve) => {
+        for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => resolve(sig));
+        const parent = watchedParent();
+        if (parent !== null) {
+          const watch = setInterval(() => {
+            if (!parentAlive(parent)) resolve(`parent process ${String(parent)} is gone`);
+          }, 2000);
+          watch.unref();
+        }
       });
-      await server.stop();
-      users.closeAll();
-      return 0;
+      console.log(JSON.stringify({ stopping: why }));
+      const deadline = setTimeout(() => {
+        console.error("serve: shutdown took more than 5 s; exiting now");
+        process.exit(0);
+      }, 5000);
+      deadline.unref();
+      try {
+        await server.stop(true);
+        users.closeAll();
+      } finally {
+        process.exit(0);
+      }
     }
     case "merge-accounts": {
       // Repair for ledgers that relinked an institution before normalize
