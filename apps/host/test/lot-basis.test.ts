@@ -47,6 +47,7 @@ describe("operator-entered lot basis", () => {
       inferenceSource: stubSource,
       // No network in tests: the market price for the arrival date.
       historicSpot: async (sym, date) => (sym === "BTC" && date === "2023-11-03" ? "34250.10" : null),
+      historicDay: async () => null, // no candle in these tests: the spot is the day's unit price
     });
     try {
       expect((await app.runNightly({ runId: "n1" })).terminalStatus).toBe("completed");
@@ -109,6 +110,7 @@ describe("operator-entered lot basis", () => {
       pollMs: 20,
       inferenceSource: stubSource,
       historicSpot: async (sym, date) => (sym === "BTC" && date === "2023-11-03" ? "34250.10" : null),
+      historicDay: async () => null, // no candle in these tests: the spot is the day's unit price
     });
     try {
       expect((await app.runNightly({ runId: "n1" })).terminalStatus).toBe("completed");
@@ -140,6 +142,79 @@ describe("operator-entered lot basis", () => {
       expect(n2.terminalStatus).toBe("completed");
       const nextNight = await app.lotsFor("acct.cb.coinbase", "BTC");
       expect(nextNight[0]).toMatchObject({ fills: 4, cost_basis: "100.01", basis_source: "operator" });
+    } finally {
+      app.close();
+    }
+  });
+
+  test("each row reads its day: the candle's average from one cited source, the household's own trades, priced lots, today's price; a basis entered per unit (#106)", async () => {
+    const dataDir = tmp();
+    const now = new Date();
+    const acct: SnapshotAccount = {
+      ...account(now),
+      balances: [{ balance_type: "total", amount: "90000" }],
+      positions: [
+        {
+          instrument: { symbol: "BTC", asset_class: "crypto" },
+          quantity: "1.5",
+          price: "60000",
+          market_value: "90000",
+          cost_basis: null,
+          lots: [
+            { lot_id: "cb:f1", quantity: "0.25", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "8500" },
+            { lot_id: "cb:f2", quantity: "0.25", acquired_at: "2023-11-03", cost_basis: null, transferred_in: true, value_at_transfer: "8500" },
+            // A lot of the same day the operator already priced, and a known lot on another day.
+            { lot_id: "cb:p", quantity: "0.5", acquired_at: "2023-11-03", cost_basis: "17000" },
+            { lot_id: "cb:k", quantity: "0.5", acquired_at: "2024-01-11", cost_basis: "40000" },
+          ],
+        },
+      ],
+      // The household bought 0.5 BTC that day for 17,250 and sold 0.1 for 3,500: weighted 34,583.33 per BTC over 0.6.
+      transactions: [
+        { txn_id: "t1", posted_at: "2023-11-03T10:00:00.000Z", amount: "-17250", type: "buy", description: "Bought BTC", instrument: { symbol: "BTC", asset_class: "crypto" }, quantity: "0.5" },
+        { txn_id: "t2", posted_at: "2023-11-03T15:00:00.000Z", amount: "3500", type: "sell", description: "Sold BTC", instrument: { symbol: "BTC", asset_class: "crypto" }, quantity: "-0.1" },
+      ],
+    };
+    const app = createApp({
+      dataDir,
+      adapters: [fixtureAdapter("inst.cb", { accounts: [acct] })],
+      pollMs: 20,
+      inferenceSource: stubSource,
+      historicSpot: async (sym, date) => (sym === "BTC" && date === "2023-11-03" ? "34954.60" : null),
+      // The exchange's daily candle for the day; none published for the other day.
+      historicDay: async (sym, date) =>
+        sym === "BTC" && date === "2023-11-03"
+          ? { date, open: "34947.92", high: "34954.60", low: "34100.00", close: "34731.27", average: "34683.45", source: "Coinbase Exchange daily candle" }
+          : null,
+    });
+    try {
+      expect((await app.runNightly({ runId: "n1" })).terminalStatus).toBe("completed");
+      const rows = await app.lotsFor("acct.cb.coinbase", "BTC");
+      expect(rows.map((r) => r.lot_id)).toEqual(["cb:f1", "cb:p", "cb:k"]);
+      const fills = rows[0]!;
+      expect(fills).toMatchObject({ fills: 2, quantity: "0.5", basis_known: false, unit_basis: null, price_now: "60000" });
+      // The day, from one cited source, with its range; the default unit price is the day's average, not the spot.
+      expect(fills.day_price).toEqual({ date: "2023-11-03", open: "34947.92", high: "34954.60", low: "34100.00", close: "34731.27", average: "34683.45", source: "Coinbase Exchange daily candle" });
+      expect(fills.suggested).toMatchObject({ amount: "17000.00", unit_price: "34683.45", unit_source: "Coinbase Exchange daily candle" });
+      // The household's own trades that day, quantity-weighted: (17250 + 3500) / (0.5 + 0.1).
+      expect(fills.own_trades).toEqual({ unit_price: "34583.33", count: 2 });
+      // The other lot of that day the operator priced: 17000 / 0.5.
+      expect(fills.priced_lots).toEqual({ unit_price: "34000.00", count: 1 });
+      // The priced lot reads its own basis per unit and weighs no "other" lots (the fills are unpriced).
+      expect(rows[1]).toMatchObject({ lot_id: "cb:p", unit_basis: "34000.00", priced_lots: null, own_trades: { unit_price: "34583.33", count: 2 } });
+      // No candle for 2024-01-11: the row says so, and falls back to nothing rather than a blended figure.
+      expect(rows[2]).toMatchObject({ lot_id: "cb:k", unit_basis: "80000.00", day_price: null, own_trades: null, priced_lots: null, price_now: "60000" });
+
+      // Enter the basis per unit for the two fills: each fill is unit x quantity, to the cent.
+      const r = app.setLotBasis({ accountId: "acct.cb.coinbase", lotId: "cb:f1", lotIds: ["cb:f1", "cb:f2"], unitPrice: "$34,683.45" });
+      expect(r.lot).toMatchObject({ fills: 2, cost_basis: "17341.72", unit_basis: "34683.44", basis_source: "operator" });
+      const f1 = app.ledger.asOf({ kind: "lot", subject: "acct.cb.coinbase", key: "cb:f1" })[0]!.payload as LotPayload;
+      const f2 = app.ledger.asOf({ kind: "lot", subject: "acct.cb.coinbase", key: "cb:f2" })[0]!.payload as LotPayload;
+      expect([f1.cost_basis, f2.cost_basis]).toEqual(["8670.86", "8670.86"]);
+      expect(app.ledger.listJournal(10).some((j) => j.summary.includes("at 34683.45 per BTC") && j.detail["unit_price"] === "34683.45")).toBe(true);
+      // Neither figure given is refused in plain words.
+      expect(() => app.setLotBasis({ accountId: "acct.cb.coinbase", lotId: "cb:k", unitPrice: "cheap" })).toThrow(/not a price/);
+      expect(() => app.setLotBasis({ accountId: "acct.cb.coinbase", lotId: "cb:k" })).toThrow(/not an amount/);
     } finally {
       app.close();
     }
