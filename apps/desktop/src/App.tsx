@@ -4630,6 +4630,29 @@ function ChatPanel({ agent, openFact, intro, layout = "inline" }: { agent: ChatA
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  /** A reply slower than the request's wait (issue #118): keep the question on screen and poll the transcript until the answer is in it. */
+  const awaitReply = async (messageId: string): Promise<void> => {
+    for (let i = 0; i < 150 && alive.current; i += 1) {
+      await new Promise((r) => setTimeout(r, 4000));
+      if (!alive.current) return;
+      try {
+        const ts = await api.chatTranscript(agent);
+        if (ts.some((x) => x.message_id === messageId)) {
+          setTurns(ts);
+          return;
+        }
+      } catch {
+        /* the next poll tries again */
+      }
+    }
+  };
   const scrollToComposer = () => {
     requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" }));
   };
@@ -4654,8 +4677,9 @@ function ChatPanel({ agent, openFact, intro, layout = "inline" }: { agent: ChatA
     setError(null);
     scrollToComposer();
     try {
-      await api.chatSend(agent, t);
+      const r = await api.chatSend(agent, t);
       load();
+      if (r.turn === null) await awaitReply(r.message_id);
     } catch (e) {
       setError(String(e));
       setText(t); // the draft comes back rather than being lost
@@ -4799,19 +4823,22 @@ function StrategyPage({ tab, setTab, tick, onChanged, openFact }: { tab: Strateg
   // Both tabs wrap the header in the SAME container -- same max-width,
   // same padding -- so the title and tabs render at identical pixels and
   // nothing jumps when switching.
-  if (tab === "chat") {
-    return (
-      <>
-        <div className="page page-mid" style={{ paddingBottom: 0, flex: "none", width: "100%" }}>{head}</div>
-        <ChatPage openFact={openFact} />
-      </>
-    );
-  }
+  // The chat stays MOUNTED across the two tabs, hidden rather than
+  // removed (issue #118): a question in flight, its spinner, and the
+  // transcript reload when the reply lands all live in its state, and
+  // switching to Plan & Rebalancing to read a finished proposal must not
+  // throw them away.
   return (
-    <div className="page page-mid" style={{ width: "100%" }}>
-      {head}
-      <PlanSection tick={tick} onChanged={onChanged} openFact={openFact} />
-    </div>
+    <>
+      {tab === "chat" && <div className="page page-mid" style={{ paddingBottom: 0, flex: "none", width: "100%" }}>{head}</div>}
+      <ChatPage openFact={openFact} hidden={tab !== "chat"} />
+      {tab === "plan" && (
+        <div className="page page-mid" style={{ width: "100%" }}>
+          {head}
+          <PlanSection tick={tick} onChanged={onChanged} openFact={openFact} />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -5025,10 +5052,10 @@ function PlanSection({ tick, onChanged, openFact }: { tick: number; onChanged: (
   );
 }
 
-function ChatPage({ openFact }: { openFact: (id: string) => void }) {
+function ChatPage({ openFact, hidden = false }: { openFact: (id: string) => void; hidden?: boolean }) {
   const [agent, setAgent] = useState<ChatAgentName>("strategist");
   return (
-    <div className="chatwrap">
+    <div className="chatwrap" style={hidden ? { display: "none" } : undefined}>
       <div className="chat-head">
         <div className="who">
           <span className="icon-tile blue" style={{ width: 40, height: 40, borderRadius: 12 }}><Icon name="sparkle" /></span>
