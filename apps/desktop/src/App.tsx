@@ -3570,6 +3570,9 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
   const [rows, setRows] = useState<import("./api").LotRow[] | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [basis, setBasis] = useState("");
+  const [unit, setUnit] = useState("");
+  /** Which of the two the operator typed last: it is what the host receives; the other is shown derived. */
+  const [entered, setEntered] = useState<"total" | "unit">("total");
   const [acquired, setAcquired] = useState("");
   const [adding, setAdding] = useState(false);
   const [addQty, setAddQty] = useState("");
@@ -3585,8 +3588,42 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
   const startEdit = (r: import("./api").LotRow) => {
     setEditing(r.lot_id);
     setBasis(r.cost_basis ?? r.suggested?.amount ?? "");
+    setUnit(r.unit_basis ?? r.suggested?.unit_price ?? "");
+    setEntered("total");
     setAcquired("");
     setError(null);
+  };
+  const cleanNum = (v: string): number | null => {
+    const n = Number(String(v).replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) && v.trim() !== "" ? n : null;
+  };
+  /** Typing a total derives the unit price; typing a unit price derives the total. */
+  const typeTotal = (r: import("./api").LotRow, v: string) => {
+    setBasis(v);
+    setEntered("total");
+    const n = cleanNum(v);
+    const q = Number(r.quantity);
+    setUnit(n !== null && q > 0 ? (n / q).toFixed(2) : "");
+  };
+  const typeUnit = (r: import("./api").LotRow, v: string) => {
+    setUnit(v);
+    setEntered("unit");
+    const n = cleanNum(v);
+    const q = Number(r.quantity);
+    setBasis(n !== null && q > 0 ? (n * q).toFixed(2) : "");
+  };
+  /** Today's unit price, coloured against what the lot cost per unit (or the day's average when the basis is unknown). */
+  const today = (r: import("./api").LotRow) => {
+    if (r.price_now === null) return <span className="muted">—</span>;
+    const ref = r.unit_basis ?? r.day_price?.average ?? null;
+    const cmp = ref === null ? 0 : Math.sign(Number(r.price_now) - Number(ref));
+    const pct = ref !== null && Number(ref) > 0 ? ((Number(r.price_now) / Number(ref) - 1) * 100).toFixed(1) : null;
+    return (
+      <span style={cmp > 0 ? { color: "var(--good)", fontWeight: 600 } : cmp < 0 ? { color: "var(--bad)", fontWeight: 600 } : undefined} title={ref === null ? "no acquisition price to compare against" : `against ${r.unit_basis !== null ? "the basis per unit" : "the day's average"} of ${money(ref, r.currency)}`}>
+        {money(r.price_now, r.currency)}
+        {pct !== null && <span className="small" style={{ marginLeft: 4 }}>{cmp > 0 ? "▲" : cmp < 0 ? "▼" : ""}{Math.abs(Number(pct))}%</span>}
+      </span>
+    );
   };
   const addLot = async () => {
     setBusy(true);
@@ -3609,7 +3646,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
     setBusy(true);
     setError(null);
     try {
-      await api.setLotBasis(accountId, r.lot_id, basis, acquired, r.lot_ids);
+      await api.setLotBasis(accountId, r.lot_id, entered === "unit" ? { unit_price: unit } : { cost_basis: basis }, acquired, r.lot_ids);
       setEditing(null);
       await load();
       onChanged();
@@ -3643,7 +3680,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
         {rows !== null && rows.length > 0 && (
           <div style={{ overflowY: "auto", flex: "1 1 auto", minHeight: 0 }}>
           <table>
-            <thead><tr><th>Acquired</th><th className="num">Quantity</th><th className="num">Cost basis</th><th></th></tr></thead>
+            <thead><tr><th>Acquired</th><th className="num">Quantity</th><th className="num">Cost basis</th><th className="num">Per {symbol} then</th><th className="num">Per {symbol} today</th><th></th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.lot_id}>
@@ -3663,28 +3700,55 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
                       <span className="pill medium">unknown</span>
                     )}
                   </td>
+                  <td className="num small">
+                    {r.unit_basis !== null ? (
+                      <div title="what this lot cost per unit">{money(r.unit_basis, r.currency)} paid</div>
+                    ) : (
+                      <div className="muted">basis unknown</div>
+                    )}
+                    {r.day_price !== null ? (
+                      <div className="muted" title={`${r.day_price.source}: open ${r.day_price.open}, high ${r.day_price.high}, low ${r.day_price.low}, close ${r.day_price.close} on ${r.day_price.date}`}>
+                        day avg {money(r.day_price.average, r.currency)} · {r.day_price.low}–{r.day_price.high}
+                      </div>
+                    ) : r.suggested?.unit_price != null ? (
+                      <div className="muted" title={r.suggested.unit_source ?? undefined}>spot {money(r.suggested.unit_price, r.currency)}{r.suggested.unit_source !== null && <> · {r.suggested.unit_source}</>}</div>
+                    ) : (
+                      <div className="muted">no price found for that day</div>
+                    )}
+                    {r.own_trades !== null && <div className="muted" title="the quantity-weighted price of your own buys and sells of this asset that day">your trades {money(r.own_trades.unit_price, r.currency)} ({r.own_trades.count})</div>}
+                    {r.priced_lots !== null && <div className="muted" title="the quantity-weighted basis of other lots acquired that day whose basis is known">other lots {money(r.priced_lots.unit_price, r.currency)} ({r.priced_lots.count})</div>}
+                  </td>
+                  <td className="num">{today(r)}</td>
                   <td style={{ textAlign: "right" }}>
                     {editing === r.lot_id ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                        <input value={basis} onChange={(e) => setBasis(e.target.value)} placeholder={r.fills > 1 ? `total cost of all ${r.fills} fills in ${r.currency}` : `total cost in ${r.currency}`} style={{ width: 180 }} autoFocus />
-                        {unitOf(basis, r.quantity) !== null && (
-                          <div className="small muted">= {money(unitOf(basis, r.quantity), r.currency)} per {symbol}</div>
-                        )}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input value={unit} onChange={(e) => typeUnit(r, e.target.value)} placeholder={`per ${symbol}`} style={{ width: 120, fontWeight: entered === "unit" ? 600 : 400 }} autoFocus />
+                          <span className="small muted">×&nbsp;{maskDigits(r.quantity)}&nbsp;=</span>
+                          <input value={basis} onChange={(e) => typeTotal(r, e.target.value)} placeholder={r.fills > 1 ? `total of ${r.fills} fills` : "total"} style={{ width: 130, fontWeight: entered === "total" ? 600 : 400 }} />
+                        </div>
+                        <div className="small muted">{entered === "unit" ? `Saving the price per ${symbol}; the total is derived.` : "Saving the total; the price per unit is derived."}</div>
                         {r.suggested !== null && !r.basis_known && (
                           <div className="small muted">
                             <div>Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
-                            {r.suggested.unit_price !== null && (
-                              <div>
-                                Market price on {r.acquired_at}: {money(r.suggested.unit_price, r.currency)} per {symbol}
-                                {r.suggested.unit_source !== null && <> · {r.suggested.unit_source}</>}
-                              </div>
-                            )}
+                          </div>
+                        )}
+                        {r.day_price !== null && (
+                          <div className="small muted">
+                            {r.acquired_at}: avg {money(r.day_price.average, r.currency)}, open {money(r.day_price.open, r.currency)}, high {money(r.day_price.high, r.currency)}, low {money(r.day_price.low, r.currency)}, close {money(r.day_price.close, r.currency)} · {r.day_price.source}
+                            {" "}<button className="linklike" onClick={() => typeUnit(r, r.day_price!.average)}>use the day's average</button>
+                          </div>
+                        )}
+                        {r.own_trades !== null && (
+                          <div className="small muted">
+                            Your trades that day: {money(r.own_trades.unit_price, r.currency)} per {symbol} ({r.own_trades.count}){" "}
+                            <button className="linklike" onClick={() => typeUnit(r, r.own_trades!.unit_price)}>use it</button>
                           </div>
                         )}
                         <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
                         <div style={{ display: "flex", gap: 8 }}>
                           <button className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
-                          <button disabled={busy || basis.trim() === ""} onClick={() => void save(r)}>Save</button>
+                          <button disabled={busy || (entered === "unit" ? unit.trim() === "" : basis.trim() === "")} onClick={() => void save(r)}>Save</button>
                         </div>
                       </div>
                     ) : (
