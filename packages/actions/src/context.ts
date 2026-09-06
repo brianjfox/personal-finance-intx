@@ -42,11 +42,18 @@ export interface Thresholds {
   staleBalanceDays: number;
   /** Transfer legs across household accounts match within this many days. */
   transferWindowDays: number;
+  /**
+   * Same-instrument legs pair on quantity when the sent quantity exceeds
+   * the received one by at most this fraction of the received (the
+   * network or withdrawal fee); 0.02 = 2%. Issue #99.
+   */
+  transferFeeTolerance: number;
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
   staleBalanceDays: 3,
   transferWindowDays: 3,
+  transferFeeTolerance: 0.02,
 };
 
 export type ActionHandler = (input: unknown, ctx: EffectContext, signal: AbortSignal) => Promise<unknown>;
