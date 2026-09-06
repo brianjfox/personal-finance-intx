@@ -5,7 +5,7 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import { api, factHeadline, findingSummary, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
@@ -3658,7 +3658,7 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
   };
   return (
     <div className="modal-scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720, maxHeight: "82vh", display: "flex", flexDirection: "column", overflow: "hidden", alignItems: "stretch", textAlign: "left" }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 960, width: "min(960px, 94vw)", maxHeight: "82vh", display: "flex", flexDirection: "column", overflow: "hidden", alignItems: "stretch", textAlign: "left" }}>
         <h3 style={{ marginTop: 0 }}>Tax lots — {symbol}</h3>
         <p className="small muted" style={{ marginTop: 0 }} title={accountId}>
           {chopMiddle(accountId, 32)} ·{" "}
@@ -3683,7 +3683,8 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
             <thead><tr><th>Acquired</th><th className="num">Quantity</th><th className="num">Cost basis</th><th className="num">Per {symbol} then</th><th className="num">Per {symbol} today</th><th></th></tr></thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.lot_id}>
+                <Fragment key={r.lot_id}>
+                <tr>
                   <td className="small">
                     {r.acquired_at}
                     {r.fills > 1 && <div className="small muted" title={r.lot_ids.join(", ")}>{r.fills} fills · one order</div>}
@@ -3719,43 +3720,52 @@ function LotsModal({ accountId, symbol, onClose, onChanged }: { accountId: strin
                     {r.priced_lots !== null && <div className="muted" title="the quantity-weighted basis of other lots acquired that day whose basis is known">other lots {money(r.priced_lots.unit_price, r.currency)} ({r.priced_lots.count})</div>}
                   </td>
                   <td className="num">{today(r)}</td>
-                  <td style={{ textAlign: "right" }}>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                     {editing === r.lot_id ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <input value={unit} onChange={(e) => typeUnit(r, e.target.value)} placeholder={`per ${symbol}`} style={{ width: 120, fontWeight: entered === "unit" ? 600 : 400 }} autoFocus />
-                          <span className="small muted">×&nbsp;{maskDigits(r.quantity)}&nbsp;=</span>
-                          <input value={basis} onChange={(e) => typeTotal(r, e.target.value)} placeholder={r.fills > 1 ? `total of ${r.fills} fills` : "total"} style={{ width: 130, fontWeight: entered === "total" ? 600 : 400 }} />
-                        </div>
-                        <div className="small muted">{entered === "unit" ? `Saving the price per ${symbol}; the total is derived.` : "Saving the total; the price per unit is derived."}</div>
-                        {r.suggested !== null && !r.basis_known && (
-                          <div className="small muted">
-                            <div>Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
-                          </div>
-                        )}
-                        {r.day_price !== null && (
-                          <div className="small muted">
-                            {r.acquired_at}: avg {money(r.day_price.average, r.currency)}, open {money(r.day_price.open, r.currency)}, high {money(r.day_price.high, r.currency)}, low {money(r.day_price.low, r.currency)}, close {money(r.day_price.close, r.currency)} · {r.day_price.source}
-                            {" "}<button className="linklike" onClick={() => typeUnit(r, r.day_price!.average)}>use the day's average</button>
-                          </div>
-                        )}
-                        {r.own_trades !== null && (
-                          <div className="small muted">
-                            Your trades that day: {money(r.own_trades.unit_price, r.currency)} per {symbol} ({r.own_trades.count}){" "}
-                            <button className="linklike" onClick={() => typeUnit(r, r.own_trades!.unit_price)}>use it</button>
-                          </div>
-                        )}
-                        <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
-                          <button disabled={busy || (entered === "unit" ? unit.trim() === "" : basis.trim() === "")} onClick={() => void save(r)}>Save</button>
-                        </div>
-                      </div>
+                      <button className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
                     ) : (
                       <button className="secondary" onClick={() => startEdit(r)}>{r.basis_known ? "Edit" : "Enter basis"}</button>
                     )}
                   </td>
                 </tr>
+                {/* The editor takes a full-width row under the lot it edits: the action cell is too narrow for two inputs, the day's figures and the buttons (issue #108). */}
+                {editing === r.lot_id && (
+                      <tr>
+                        <td colSpan={6} style={{ background: "var(--prov)" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <input value={unit} onChange={(e) => typeUnit(r, e.target.value)} placeholder={`per ${symbol}`} style={{ width: 120, fontWeight: entered === "unit" ? 600 : 400 }} autoFocus />
+                              <span className="small muted">×&nbsp;{maskDigits(r.quantity)}&nbsp;=</span>
+                              <input value={basis} onChange={(e) => typeTotal(r, e.target.value)} placeholder={r.fills > 1 ? `total of ${r.fills} fills` : "total"} style={{ width: 130, fontWeight: entered === "total" ? 600 : 400 }} />
+                            </div>
+                            <div className="small muted">{entered === "unit" ? `Saving the price per ${symbol}; the total is derived.` : "Saving the total; the price per unit is derived."}</div>
+                            {r.suggested !== null && !r.basis_known && (
+                              <div className="small muted">
+                                <div>Default: {money(r.suggested.amount, r.currency)} — {r.suggested.source}</div>
+                              </div>
+                            )}
+                            {r.day_price !== null && (
+                              <div className="small muted">
+                                {r.acquired_at}: avg {money(r.day_price.average, r.currency)}, open {money(r.day_price.open, r.currency)}, high {money(r.day_price.high, r.currency)}, low {money(r.day_price.low, r.currency)}, close {money(r.day_price.close, r.currency)} · {r.day_price.source}
+                                {" "}<button className="linklike" onClick={() => typeUnit(r, r.day_price!.average)}>use the day's average</button>
+                              </div>
+                            )}
+                            {r.own_trades !== null && (
+                              <div className="small muted">
+                                Your trades that day: {money(r.own_trades.unit_price, r.currency)} per {symbol} ({r.own_trades.count}){" "}
+                                <button className="linklike" onClick={() => typeUnit(r, r.own_trades!.unit_price)}>use it</button>
+                              </div>
+                            )}
+                            <input value={acquired} onChange={(e) => setAcquired(e.target.value)} placeholder={`acquired ${r.acquired_at} — correct it?`} style={{ width: 180 }} />
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button className="secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+                              <button disabled={busy || (entered === "unit" ? unit.trim() === "" : basis.trim() === "")} onClick={() => void save(r)}>Save</button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
