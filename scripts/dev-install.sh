@@ -46,7 +46,20 @@ if [ -d "$DEST" ]; then
   echo "dev-install: stopping the running app"
   pkill -f "$DEST/Contents/MacOS/financial-interchange" 2>/dev/null || true
   for _ in $(seq 1 20); do pgrep -f "$DEST/Contents/MacOS/" >/dev/null || break; sleep 1; done
-  pkill -f "$DEST/Contents/MacOS/" 2>/dev/null || true
+  # The host follows its shell out (issue #104); anything still here gets
+  # SIGTERM, then SIGKILL, and a survivor is reported, never papered over.
+  if pgrep -f "$DEST/Contents/MacOS/" >/dev/null; then
+    pkill -f "$DEST/Contents/MacOS/" 2>/dev/null || true
+    for _ in $(seq 1 10); do pgrep -f "$DEST/Contents/MacOS/" >/dev/null || break; sleep 1; done
+  fi
+  if pgrep -f "$DEST/Contents/MacOS/" >/dev/null; then
+    echo "dev-install: a process from the old bundle survived SIGTERM (issue #104): $(pgrep -f "$DEST/Contents/MacOS/" | tr '\n' ' '); sending SIGKILL"
+    pkill -9 -f "$DEST/Contents/MacOS/" 2>/dev/null || true
+    sleep 1
+  fi
+  if pgrep -f "$DEST/Contents/MacOS/" >/dev/null; then
+    echo "dev-install: WARNING: still running after SIGKILL: $(pgrep -f "$DEST/Contents/MacOS/" | tr '\n' ' ')" >&2
+  fi
   rm -rf "$DEST"
 fi
 ditto "$SRC" "$DEST"
