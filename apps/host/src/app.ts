@@ -146,6 +146,23 @@ export interface AppOptions {
   keychainSweepOnWipe?: () => boolean;
 }
 
+/** `<dataDir>/auto-propose.json`: what the nightly last did about drift (issue #97). */
+export interface AutoProposeState {
+  /** When the nightly last considered proposing. */
+  at: string;
+  /** The nightly run that considered it. */
+  nightly_run: string;
+  /** "started" with the proposal run id, or "skipped" with why. */
+  outcome: "started" | "skipped";
+  proposal_run: string | null;
+  /** The drift picture: candidate sides and instruments, e.g. "BUY BND|SELL AAPL". */
+  signature: string | null;
+  note: string;
+  /** When a proposal was last STARTED automatically, and for which picture -- the dedupe key. */
+  last_started_at: string | null;
+  last_started_signature: string | null;
+}
+
 export interface RunSummary {
   runId: string;
   workflow: string;
@@ -345,10 +362,10 @@ export interface App {
   activeChatRun(agent: ChatAgent): Promise<{ runId: string } | null>;
   /** The written investment plan from `<dataDir>/plan.json`, or null. */
   plan(): InvestmentPlan | null;
-  /** The plan plus the deterministic drift report against current positions (drift null when no plan, or when it cannot compute). */
-  planStatus(): { plan: InvestmentPlan | null; drift: DriftReport | null };
+  /** The plan plus the deterministic drift report against current positions (drift null when no plan, or when it cannot compute), and the last automatic wake (issue #97). */
+  planStatus(): { plan: InvestmentPlan | null; drift: DriftReport | null; auto_propose: AutoProposeState | null };
   /** Write the investment plan (GUI editor): validates the contract plus plain-words checks, stamps as_of today, persists plan.json. */
-  savePlan(input: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string }): InvestmentPlan;
+  savePlan(input: { band: string; targets: Array<{ asset_class: string; weight: string }>; constraints?: Record<string, unknown>; notes?: string; auto_propose?: boolean }): InvestmentPlan;
   /**
    * Start a rebalance-proposal run: drift -> Market Manager draft ->
    * Auditor -> (cleared) the approval queue. Resolves once the run is
@@ -841,13 +858,119 @@ export function createApp(opts: AppOptions): App {
     return p;
   }
 
+  /** The deterministic drift report for a plan against current holdings, or null when it cannot compute (no positions yet, say). */
+  function currentDrift(p: InvestmentPlan): DriftReport | null {
+    try {
+      const now = clock();
+      return computeDrift({
+        runKey: `plan-view:${now.toISOString()}`,
+        now,
+        plan: p,
+        positions: views.livePositionFacts(ledger),
+        lots: views.liveLotFacts(ledger),
+        cash: cashOnHand(ledger),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  // --- The nightly wakes the Market Manager (issue #97) --------------------
+  //
+  // BUILD_PLAN §6's notify step is "where Tax, Risk and Market would
+  // wake"; this is the Market half, done by the host that already drives
+  // both runs: after a CLEAN full nightly, when the plan opts in and the
+  // drift report has candidates, start the same proposal workflow the
+  // Strategy page's button starts. The chain enters that workflow at its
+  // first step (drift), upstream of the approve gate, so no new path to
+  // execution exists -- the topology walker's property is untouched.
+  // Bounded: never while a decision is pending or a proposal is running,
+  // never twice for the same drift picture inside a week. Every wake and
+  // every skip is journaled, so a quiet night is explicable.
+  const autoProposePath = path.join(dataDir, "auto-propose.json");
+  const autoProposeState = (): AutoProposeState | null => {
+    if (!fs.existsSync(autoProposePath)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(autoProposePath, "utf8")) as AutoProposeState;
+    } catch {
+      return null;
+    }
+  };
+  const AUTO_PROPOSE_REARM_MS = 7 * 86_400_000;
+  const driftSignature = (d: DriftReport): string =>
+    [...new Set(d.candidates.map((c) => `${c.side} ${c.symbol}`))].sort().join("|");
+  const stepRan = (events: readonly { kind: string }[], stepId: string): boolean =>
+    events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
+
+  async function proposeAfterNightly(nightlyRunId: string, result: RunResult): Promise<void> {
+    const p = plan();
+    if (p === null || p.auto_propose !== true) return; // not opted in: nothing to record
+    const prev = autoProposeState();
+    const now = clock().toISOString();
+    const record = (outcome: AutoProposeState["outcome"], note: string, extra: { proposal_run?: string; signature?: string | null } = {}): void => {
+      const state: AutoProposeState = {
+        at: now,
+        nightly_run: nightlyRunId,
+        outcome,
+        proposal_run: extra.proposal_run ?? null,
+        signature: extra.signature ?? null,
+        note,
+        last_started_at: outcome === "started" ? now : (prev?.last_started_at ?? null),
+        last_started_signature: outcome === "started" ? (extra.signature ?? null) : (prev?.last_started_signature ?? null),
+      };
+      fs.writeFileSync(autoProposePath, JSON.stringify(state, null, 2));
+      ledger.appendJournal({
+        at: now,
+        kind: "system",
+        subject: null,
+        summary: outcome === "started" ? `nightly ${nightlyRunId} woke the Market Manager: ${note}` : `nightly ${nightlyRunId} did not wake the Market Manager: ${note}`,
+        detail: { nightly_run: nightlyRunId, outcome, proposal_run: state.proposal_run, signature: state.signature },
+        refs: [],
+        author: "scheduler",
+      });
+    };
+    if (result.terminalStatus !== "completed") return record("skipped", `the nightly ended ${result.terminalStatus}`);
+    const events = await host.readLog(nightlyRunId).catch(() => []);
+    if (!stepRan(events, "notify")) return record("skipped", "the nightly held an account for review; proposals wait for clean data");
+    const drift = currentDrift(p);
+    if (drift === null) return record("skipped", "the drift report could not be computed against the plan");
+    if (drift.candidates.length === 0) return record("skipped", "every asset class is inside the plan's band", { signature: "" });
+    const signature = driftSignature(drift);
+    const pending = approvalQueue(ledger, clock());
+    if (pending.length > 0) {
+      return record("skipped", `${String(pending.length)} recommendation${pending.length === 1 ? "" : "s"} already await${pending.length === 1 ? "s" : ""} your decision`, { signature });
+    }
+    if ([...standing.keys()].some((id) => id.startsWith("proposal_"))) return record("skipped", "a proposal run is still going", { signature });
+    if (prev?.last_started_signature === signature && prev.last_started_at !== null && Date.parse(now) - Date.parse(prev.last_started_at) < AUTO_PROPOSE_REARM_MS) {
+      return record("skipped", `the drift picture (${signature}) is unchanged since the proposal of ${prev.last_started_at.slice(0, 10)}; it re-arms when the picture changes or after a week`, { signature });
+    }
+    // Wake: the same run the button starts, stamped with who asked. It
+    // parks at the approval gate or settles on its own; its own steps
+    // journal the outcome (queued, declined, exhausted).
+    const runId = `proposal_${newId("r").slice(2)}`;
+    record("started", `${String(drift.candidates.length)} candidate order${drift.candidates.length === 1 ? "" : "s"} (${signature}); proposal ${runId} started`, { proposal_run: runId, signature });
+    drive(buildProposalWorkflow({ model: model_() }).definition, runId, { run_key: runId, trigger: "nightly", nightly_run: nightlyRunId });
+  }
+
   function runNightlyOnce(o: { runId?: string; institutions?: string[] } = {}): Promise<RunResult> {
     const runId = o.runId ?? newId("nightly");
     const run = host.run(nightlyWorkflow, {
       runId,
       triggerPayload: { run_key: runId, ...(o.institutions !== undefined ? { institutions: o.institutions } : {}) },
     });
-    return run.complete;
+    // A full nightly may wake the Market Manager (issue #97); a one-
+    // institution refresh after a GUI edit never does. The decision (and
+    // its journal line) is made before the caller sees the result; the
+    // proposal run itself is driven detached, like the button's.
+    if (o.institutions !== undefined) return run.complete;
+    return run.complete.then(async (r) => {
+      try {
+        await proposeAfterNightly(runId, r);
+      } catch (e) {
+        process.stderr.write(`fin-host: nightly ${runId}: could not consider a proposal: ${String(e)}\n`);
+      }
+      return r;
+    });
   }
 
   /** Reconcile one institution and report the run plainly (used after every GUI edit/upload). */
@@ -875,6 +998,119 @@ export function createApp(opts: AppOptions): App {
     loaded = reloadRegistry();
     const run = await refreshInstitution(institutionId);
     return { institution_id: institutionId, ...run };
+  }
+
+  /**
+   * Start a rebalance-proposal run and resolve once it parks at the
+   * approval gate or settles. `trigger` rides along in the trigger
+   * payload (the drift step projects only run_key, so it is a record,
+   * not an input): the nightly stamps who woke the Market Manager.
+   */
+  async function startProposalRun(o: { timeoutMs?: number } = {}, trigger?: Record<string, unknown>): Promise<{ runId: string; state: "queued" | "terminal"; status: string; reason?: string }> {
+    if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
+    const runId = `proposal_${newId("r").slice(2)}`;
+    drive(buildProposalWorkflow({ model: model_() }).definition, runId, { run_key: runId, ...(trigger ?? {}) });
+    // The deepest step failure in the run, child runs included (the
+    // rework loop's body is a child run): what the GUI shows when a
+    // proposal run settles without queueing anything.
+    const deepestFailure = async (id: string, depth = 0): Promise<string | null> => {
+      if (depth > 4) return null;
+      let msg: string | null = null;
+      try {
+        for (const e of await host.readLog(id)) {
+          if (e.kind === "StepFailed") {
+            const err = (e as { error?: { message?: unknown } }).error;
+            const m = typeof err?.message === "string" ? err.message : "";
+            // Prefer the most specific message: loop wrappers restate
+            // the child's failure, so only take one when nothing better.
+            if (m !== "" && (msg === null || !/loop .* iteration .* ended/.test(m))) msg = m;
+          }
+          if (e.kind === "ChildSpawned") {
+            const child = (e as { childRunId?: unknown }).childRunId;
+            if (typeof child === "string") {
+              // The event carries the runtime's bare child id; the store
+              // key is namespaced by the parent run (issue #41). The bare
+              // id is ONLY for pre-fix runs whose namespaced log does not
+              // exist -- a clean namespaced child must never fall through
+              // to the stale flat `rework__0` an older install left behind
+              // (issue #43).
+              const scoped = `${id}.${child}`;
+              const cm = await deepestFailure(host.repoStore.hasRun(scoped) ? scoped : child, depth + 1);
+              if (cm !== null) msg = cm;
+            }
+          }
+        }
+      } catch {
+        /* a child log we cannot read: keep what we have */
+      }
+      return msg;
+    };
+    // A gate's skipped branch ALSO emits StepCompleted (its output says
+    // skipped): only a genuinely-run completion counts.
+    const genuinelyCompleted = (events: readonly { kind: string }[], stepId: string): boolean =>
+      events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
+    // The rework loop's per-iteration outputs (`rework[i]` StepCompleted,
+    // the body's step-outputs record) are where the Market Manager's
+    // decline reason and the Auditor's last verdict live.
+    const iterations = (events: readonly { kind: string }[]): { intake?: { reason?: unknown }; audit?: { blocks?: unknown } }[] =>
+      events
+        .filter((e) => e.kind === "StepCompleted" && /^rework\[\d+\]$/.test(String((e as { stepId?: string }).stepId ?? "")))
+        .map((e) => {
+          const ref = String(((e as { output?: { ref?: unknown } }).output ?? {}).ref ?? "");
+          if (!ref.startsWith("inline:")) return {};
+          try {
+            return JSON.parse(ref.slice("inline:".length)) as { intake?: { reason?: unknown }; audit?: { blocks?: unknown } };
+          } catch {
+            return {};
+          }
+        });
+    const blockText = (blocks: unknown): string =>
+      Array.isArray(blocks)
+        ? blocks.map((b) => (typeof b === "string" ? b : typeof (b as { detail?: unknown }).detail === "string" ? String((b as { detail: string }).detail) : String((b as { condition?: unknown }).condition ?? ""))).filter((s) => s !== "").join("; ")
+        : "";
+    const terminal = async (status: string): Promise<{ runId: string; state: "terminal"; status: string; reason?: string }> => {
+      const events = await host.readLog(runId).catch(() => []);
+      const completed = (stepId: string): boolean => genuinelyCompleted(events, stepId);
+      // The designed no-proposal endings read as answers, not failures.
+      if (completed("nothing")) {
+        return { runId, state: "terminal", status, reason: "the drift report had no candidate orders — every asset class is inside the plan's band, or nothing held is actionable — so there was nothing to propose" };
+      }
+      if (completed("declined")) {
+        const last = iterations(events).at(-1);
+        const why = typeof last?.intake?.reason === "string" ? last.intake.reason.trim() : "";
+        return { runId, state: "terminal", status, reason: `the Market Manager reviewed the drift and declined to propose${why === "" ? " (it gave no reason)" : `: ${why}`}` };
+      }
+      if (completed("exhausted")) {
+        const its = iterations(events);
+        const last = blockText(its.at(-1)?.audit?.blocks);
+        const failure = await deepestFailure(runId);
+        const reason =
+          failure ?? (last !== "" ? `the Auditor blocked every draft (${String(its.length)} attempt${its.length === 1 ? "" : "s"}); the last verdict: ${last}` : "every draft was blocked by the Auditor — the journal records each verdict");
+        return { runId, state: "terminal", status, reason };
+      }
+      const reason = await deepestFailure(runId);
+      return { runId, state: "terminal", status, ...(reason !== null ? { reason } : {}) };
+    };
+    // Resolve once the run either parks at the approval gate (queued)
+    // or settles (declined/blocked/exhausted/failed).
+    const deadline = Date.now() + (o.timeoutMs ?? 600_000);
+    for (;;) {
+      const s = await summarize(runId);
+      if (s.status !== "running") return terminal(s.status);
+      const events = await host.readLog(runId);
+      // Settled wins over parked: a failed loop can still arm the gate
+      // (issue #41's race reported such runs as queued while the
+      // approvals list stayed empty).
+      const settled = ["exhausted", "expired", "nothing", "declined"].some((step) => genuinelyCompleted(events, step));
+      if (settled) return terminal(s.status);
+      const parked = events.some(
+        (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
+      );
+      if (parked) return { runId, state: "queued", status: "running" };
+      if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  
   }
 
   return {
@@ -1789,6 +2025,7 @@ export function createApp(opts: AppOptions): App {
         targets: input.targets,
         constraints: input.constraints ?? {},
         ...(input.notes !== undefined && input.notes.trim() !== "" ? { notes: input.notes.trim() } : {}),
+        ...(input.auto_propose !== undefined ? { auto_propose: input.auto_propose } : {}),
       };
       const plan = assertType(InvestmentPlan, candidate, "investment plan");
       fs.writeFileSync(planPath, JSON.stringify(plan, null, 2));
@@ -1796,129 +2033,11 @@ export function createApp(opts: AppOptions): App {
     },
     planStatus() {
       const p = plan();
-      if (p === null) return { plan: null, drift: null };
-      try {
-        const now = clock();
-        return {
-          plan: p,
-          drift: computeDrift({
-            runKey: `plan-view:${now.toISOString()}`,
-            now,
-            plan: p,
-            positions: views.livePositionFacts(ledger),
-            lots: views.liveLotFacts(ledger),
-            cash: cashOnHand(ledger),
-          }),
-        };
-      } catch {
-        // A plan whose drift cannot compute (no positions yet, say) still shows.
-        return { plan: p, drift: null };
-      }
+      if (p === null) return { plan: null, drift: null, auto_propose: autoProposeState() };
+      return { plan: p, drift: currentDrift(p), auto_propose: autoProposeState() };
     },
     async startProposal(o = {}) {
-      if (plan() === null) throw new Error(`market: no ${planPath}; write the investment plan before proposing`);
-      const runId = `proposal_${newId("r").slice(2)}`;
-      drive(buildProposalWorkflow({ model: model_() }).definition, runId, { run_key: runId });
-      // The deepest step failure in the run, child runs included (the
-      // rework loop's body is a child run): what the GUI shows when a
-      // proposal run settles without queueing anything.
-      const deepestFailure = async (id: string, depth = 0): Promise<string | null> => {
-        if (depth > 4) return null;
-        let msg: string | null = null;
-        try {
-          for (const e of await host.readLog(id)) {
-            if (e.kind === "StepFailed") {
-              const err = (e as { error?: { message?: unknown } }).error;
-              const m = typeof err?.message === "string" ? err.message : "";
-              // Prefer the most specific message: loop wrappers restate
-              // the child's failure, so only take one when nothing better.
-              if (m !== "" && (msg === null || !/loop .* iteration .* ended/.test(m))) msg = m;
-            }
-            if (e.kind === "ChildSpawned") {
-              const child = (e as { childRunId?: unknown }).childRunId;
-              if (typeof child === "string") {
-                // The event carries the runtime's bare child id; the store
-                // key is namespaced by the parent run (issue #41). The bare
-                // id is ONLY for pre-fix runs whose namespaced log does not
-                // exist -- a clean namespaced child must never fall through
-                // to the stale flat `rework__0` an older install left behind
-                // (issue #43).
-                const scoped = `${id}.${child}`;
-                const cm = await deepestFailure(host.repoStore.hasRun(scoped) ? scoped : child, depth + 1);
-                if (cm !== null) msg = cm;
-              }
-            }
-          }
-        } catch {
-          /* a child log we cannot read: keep what we have */
-        }
-        return msg;
-      };
-      // A gate's skipped branch ALSO emits StepCompleted (its output says
-      // skipped): only a genuinely-run completion counts.
-      const genuinelyCompleted = (events: readonly { kind: string }[], stepId: string): boolean =>
-        events.some((e) => e.kind === "StepCompleted" && (e as { stepId?: string }).stepId === stepId && !JSON.stringify((e as { output?: unknown }).output ?? "").includes('\\"skipped\\":true'));
-      // The rework loop's per-iteration outputs (`rework[i]` StepCompleted,
-      // the body's step-outputs record) are where the Market Manager's
-      // decline reason and the Auditor's last verdict live.
-      const iterations = (events: readonly { kind: string }[]): { intake?: { reason?: unknown }; audit?: { blocks?: unknown } }[] =>
-        events
-          .filter((e) => e.kind === "StepCompleted" && /^rework\[\d+\]$/.test(String((e as { stepId?: string }).stepId ?? "")))
-          .map((e) => {
-            const ref = String(((e as { output?: { ref?: unknown } }).output ?? {}).ref ?? "");
-            if (!ref.startsWith("inline:")) return {};
-            try {
-              return JSON.parse(ref.slice("inline:".length)) as { intake?: { reason?: unknown }; audit?: { blocks?: unknown } };
-            } catch {
-              return {};
-            }
-          });
-      const blockText = (blocks: unknown): string =>
-        Array.isArray(blocks)
-          ? blocks.map((b) => (typeof b === "string" ? b : typeof (b as { detail?: unknown }).detail === "string" ? String((b as { detail: string }).detail) : String((b as { condition?: unknown }).condition ?? ""))).filter((s) => s !== "").join("; ")
-          : "";
-      const terminal = async (status: string): Promise<{ runId: string; state: "terminal"; status: string; reason?: string }> => {
-        const events = await host.readLog(runId).catch(() => []);
-        const completed = (stepId: string): boolean => genuinelyCompleted(events, stepId);
-        // The designed no-proposal endings read as answers, not failures.
-        if (completed("nothing")) {
-          return { runId, state: "terminal", status, reason: "the drift report had no candidate orders — every asset class is inside the plan's band, or nothing held is actionable — so there was nothing to propose" };
-        }
-        if (completed("declined")) {
-          const last = iterations(events).at(-1);
-          const why = typeof last?.intake?.reason === "string" ? last.intake.reason.trim() : "";
-          return { runId, state: "terminal", status, reason: `the Market Manager reviewed the drift and declined to propose${why === "" ? " (it gave no reason)" : `: ${why}`}` };
-        }
-        if (completed("exhausted")) {
-          const its = iterations(events);
-          const last = blockText(its.at(-1)?.audit?.blocks);
-          const failure = await deepestFailure(runId);
-          const reason =
-            failure ?? (last !== "" ? `the Auditor blocked every draft (${String(its.length)} attempt${its.length === 1 ? "" : "s"}); the last verdict: ${last}` : "every draft was blocked by the Auditor — the journal records each verdict");
-          return { runId, state: "terminal", status, reason };
-        }
-        const reason = await deepestFailure(runId);
-        return { runId, state: "terminal", status, ...(reason !== null ? { reason } : {}) };
-      };
-      // Resolve once the run either parks at the approval gate (queued)
-      // or settles (declined/blocked/exhausted/failed).
-      const deadline = Date.now() + (o.timeoutMs ?? 600_000);
-      for (;;) {
-        const s = await summarize(runId);
-        if (s.status !== "running") return terminal(s.status);
-        const events = await host.readLog(runId);
-        // Settled wins over parked: a failed loop can still arm the gate
-        // (issue #41's race reported such runs as queued while the
-        // approvals list stayed empty).
-        const settled = ["exhausted", "expired", "nothing", "declined"].some((step) => genuinelyCompleted(events, step));
-        if (settled) return terminal(s.status);
-        const parked = events.some(
-          (e) => e.kind === "SignalAwaited" && (e as { stepId?: string }).stepId === "approve" && (e as { signalName?: string }).signalName === APPROVAL_SIGNAL,
-        );
-        if (parked) return { runId, state: "queued", status: "running" };
-        if (Date.now() > deadline) throw new Error(`proposal ${runId} neither queued nor settled within the wait window; it is still running`);
-        await new Promise((r) => setTimeout(r, 250));
-      }
+      return startProposalRun(o);
     },
     approvalQueue() {
       return approvalQueue(ledger, clock());
