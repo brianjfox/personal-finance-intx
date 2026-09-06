@@ -201,7 +201,10 @@ transactions from the same explorer API (netted across the wallet's own
 addresses, so change back to you is not a receive), a legacy xpub from
 blockchain.info's rows; each becomes a transfer valued at the day's spot
 and worded as such. A send to one of the household's other accounts
-pairs up through the normalizer's transfer matching. Ethereum and
+pairs up through the normalizer's transfer matching: same-instrument
+legs pair on QUANTITY (the received quantity equals the sent one less a
+fee, within `transferFeeTolerance`, 2% by default), since the two sides
+value the leg differently (issue #99). Ethereum and
 Solana expose balances only over a bare RPC — history needs an indexer
 — so those carry no transactions, and the raw snapshot says so.
 

@@ -254,10 +254,18 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
       ...describe(
         figure(pair.amount, pair.currency),
         ` into ${pair.in_account} was booked as ${pair.in_raw_type} but matches a `,
-        figure(pair.amount, pair.currency),
+        // Legs paired on quantity carry different money figures (issue #99), so the outflow is named by what moved.
+        ...(pair.matched_on === "quantity" ? [`${pair.quantity} ${pair.instrument}`] : [figure(pair.amount, pair.currency)]),
         ` outflow from ${pair.out_account}; reclassified as an internal transfer -- confirm`,
       ),
-      detail: { transfer_group: pair.group, amount: pair.amount, out_account: pair.out_account, in_account: pair.in_account, in_raw_type: pair.in_raw_type },
+      detail: {
+        transfer_group: pair.group,
+        amount: pair.amount,
+        out_account: pair.out_account,
+        in_account: pair.in_account,
+        in_raw_type: pair.in_raw_type,
+        ...(pair.matched_on === "quantity" ? { matched_on: "quantity", instrument: pair.instrument, quantity: pair.quantity } : {}),
+      },
       evidence: [pair.out_ref, pair.in_ref].filter((r) => r.startsWith("ledger:")).map((r) => r.slice(7)),
       after_refs: [pair.out_ref, pair.in_ref].filter((r) => !r.startsWith("ledger:")),
       requires_human: true,

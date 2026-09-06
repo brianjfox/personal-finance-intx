@@ -67,6 +67,10 @@ export interface TransferPair {
   /** The institution's own type for each leg before reclassification. */
   out_raw_type: TransactionType;
   in_raw_type: TransactionType;
+  /** Present when the legs paired on quantity (same instrument, fee-tolerant) rather than on an equal amount. */
+  matched_on?: "amount" | "quantity";
+  instrument?: string | null;
+  quantity?: string | null;
 }
 
 export interface NormalizeOutput {
@@ -595,6 +599,14 @@ function samePayloadIgnoringClassification(a: TransactionPayload, b: Transaction
  * ledger's current transactions (a leg may have arrived on an earlier
  * night). Only proposed facts are rewritten; a ledger leg that now has a
  * partner is reported in the pair so reconciliation can surface it.
+ *
+ * "Equal size" is the amount for cash legs. For legs that carry an
+ * instrument (a coin sent from an exchange to a household wallet, a
+ * withdrawal to another exchange) the two sides value the leg
+ * differently -- the exchange's own figure on one, the day's spot on the
+ * other (D-051) -- so they pair on QUANTITY instead: the same instrument,
+ * the received quantity no more than what was sent, and the difference
+ * (the network or withdrawal fee) inside `transferFeeTolerance`. Issue #99.
  */
 function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Thresholds): TransferPair[] {
   interface Leg {
@@ -612,6 +624,20 @@ function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Th
     const p = pf.fact.payload as TransactionPayload;
     legs.push({ ref: pf.ref, id: null, account: p.account_id, amount: p.amount, posted: Date.parse(p.posted_at), type: p.type, payload: p });
   }
+  const instrumentOf = (l: Leg): string | null => l.payload.instrument?.symbol ?? null;
+  /** Same movement seen from both sides: equal amount, or the same instrument's quantity less a fee. */
+  const sameMovement = (o: Leg, i: Leg): "amount" | "quantity" | null => {
+    if (decimal.cmp(decimal.abs(o.amount), i.amount) === 0) return "amount";
+    const sym = instrumentOf(o);
+    if (sym === null || sym !== instrumentOf(i)) return null;
+    if (o.payload.quantity == null || i.payload.quantity == null) return null;
+    const sent = decimal.abs(o.payload.quantity);
+    const got = decimal.abs(i.payload.quantity);
+    // You cannot receive more than was sent; what is missing is the fee, and it must be small.
+    if (decimal.isZero(got) || decimal.cmp(got, sent) > 0) return null;
+    const fee = decimal.sub(sent, got);
+    return decimal.cmp(fee, decimal.mul(got, String(thresholds.transferFeeTolerance))) <= 0 ? "quantity" : null;
+  };
   const proposedKeys = new Set(legs.map((l) => `${l.account}|${l.payload.txn_id}`));
   for (const f of ledger.asOf({ kind: "transaction" })) {
     const p = f.payload as TransactionPayload;
@@ -631,14 +657,17 @@ function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Th
     if (o.ref === null && used.has(o)) continue;
     let best: Leg | null = null;
     let bestDist = Number.POSITIVE_INFINITY;
+    let bestOn: "amount" | "quantity" = "amount";
     for (const i of ins) {
       if (used.has(i) || i.account === o.account) continue;
-      if (decimal.cmp(decimal.abs(o.amount), i.amount) !== 0) continue;
+      const on = sameMovement(o, i);
+      if (on === null) continue;
       const dist = Math.abs(i.posted - o.posted);
       if (dist > windowMs) continue;
       if (dist < bestDist || (dist === bestDist && best !== null && i.payload.txn_id < best.payload.txn_id)) {
         best = i;
         bestDist = dist;
+        bestOn = on;
       }
     }
     if (best === null) continue;
@@ -665,6 +694,8 @@ function classifyTransfers(facts: ProposedFact[], ledger: Ledger, thresholds: Th
       in_account: best.account,
       out_raw_type: o.type,
       in_raw_type: best.type,
+      matched_on: bestOn,
+      ...(bestOn === "quantity" ? { instrument: instrumentOf(best), quantity: best.payload.quantity ?? null } : {}),
     });
   }
   return pairs;
