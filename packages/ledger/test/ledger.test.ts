@@ -189,6 +189,11 @@ describe("provisional + resolution", () => {
     );
     expect(l.listJournal()).toHaveLength(1);
     expect(l.eventsSince(0).map((e) => e.kind)).toEqual(["finding.resolved"]);
+    expect(l.lastSeq()).toBe(l.eventsSince(0).at(-1)?.seq ?? -1);
+  });
+
+  test("lastSeq is 0 on an empty ledger", () => {
+    expect(openLedger(":memory:").lastSeq()).toBe(0);
   });
 });
 

@@ -389,6 +389,9 @@ export function startIpc(opts: IpcOptions): ReturnType<typeof Bun.serve> {
         if (p === "/api/journal") return json(app.ledger.listJournal());
         if (p === "/api/access-log") return json(app.ledger.listAccess(Number(q.get("limit") ?? 200)));
         if (p === "/api/events") return json(app.ledger.eventsSince(Number(q.get("since") ?? 0)));
+        // The GUI polls this to notice a nightly it did not start (issue
+        // #120): one indexed read, no payloads, no FX.
+        if (p === "/api/events/head") return json({ seq: app.ledger.lastSeq() });
         if (p === "/api/batches") return json(app.ledger.listBatches());
         if (p === "/api/institutions" && req.method === "GET") return json(app.institutions().entries);
         if (p === "/api/institutions-overview") return json(app.institutionsOverview());
