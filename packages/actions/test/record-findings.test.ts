@@ -89,6 +89,38 @@ describe("record_findings resolves answered institutions' fetch failures", () =>
     expect(ledger.getFinding(bank)?.resolved).toBe(false);
   });
 
+  test("an own-ids account's open duplicate_transaction is resolved as moot; a feed's stays open (#123)", async () => {
+    const ledger = openLedger(":memory:");
+    const dup = (subject: string): string =>
+      ledger.appendFinding({
+        kind: "break",
+        code: "duplicate_transaction",
+        severity: "high",
+        subject,
+        summary: `4 transactions in ${subject} share date/amount/description under different ids`,
+        detail: { signature: "2026-07-14|-1003.13|advanced trade fill btc", txn_ids: ["a", "b", "c", "d"] },
+        evidence: [],
+        before: [],
+        after: [],
+        requires_human: true,
+        emitted_by: "reconciliation",
+        as_of: "2026-08-30T06:00:00.000Z",
+        provenance: { source_id: "handler.reconcile", source_doc_id: null, observed_at: "2026-08-30T06:00:00.000Z", via: "reconcile@1" },
+      });
+    const exchange = dup("acct.cb.cb");
+    const bank = dup("acct.bank.chk");
+    const handler = recordFindingsHandler({ ledger, clock: () => NOW } as unknown as ActionContext);
+    const out = (await handler(
+      { run_key: "n1", clean: true, findings: [], provisional_subjects: [], authoritative_id_subjects: ["acct.cb.cb"] },
+      passThroughCtx,
+      new AbortController().signal,
+    )) as { resolved_own_id_duplicates: number };
+    expect(out.resolved_own_id_duplicates).toBe(1);
+    expect(ledger.getFinding(exchange)?.resolved).toBe(true);
+    expect(ledger.getFinding(exchange)?.resolutions[0]?.note).toContain("own ids");
+    expect(ledger.getFinding(bank)?.resolved).toBe(false);
+  });
+
   test("only fetch_failed findings are touched", async () => {
     const ledger = openLedger(":memory:");
     const other = ledger.appendFinding({

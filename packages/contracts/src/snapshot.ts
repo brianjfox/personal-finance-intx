@@ -87,6 +87,14 @@ export const SnapshotAccount = type({
    */
   "manual?": "boolean",
   /**
+   * True when the institution's own ids are the identity of a movement
+   * (an exchange's fill ids, a chain's txids): distinct ids are distinct
+   * movements, and equal same-day fills of one order are routine. The
+   * same-day/amount/description duplicate check does not apply (issue
+   * #123). Unset for aggregator feeds, which can re-issue an id.
+   */
+  "txn_ids_authoritative?": "boolean",
+  /**
    * For a watch-only wallet: the public addresses and xpubs this account
    * reads, in comparable form (issue #112). Two open accounts that share
    * one are the same funds counted twice; the reconciler says so.

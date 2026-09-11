@@ -54,6 +54,8 @@ export interface NormalizeAccount {
   source_doc_id: string | null;
   /** The operator typed these figures in; no feed behind them (D-049). */
   manual?: boolean;
+  /** The institution's own ids identify its movements: distinct ids are distinct movements (issue #123). */
+  txn_ids_authoritative?: boolean;
 }
 
 export interface TransferPair {
@@ -559,6 +561,7 @@ function normalizeAccount(
     institution_id: snap.institution_id,
     account_id: acct.account_id,
     ...(acct.manual === true ? { manual: true } : {}),
+    ...(acct.txn_ids_authoritative === true ? { txn_ids_authoritative: true } : {}),
     type: acct.type,
     as_of: acct.as_of,
     fetched_at: snap.fetched_at,

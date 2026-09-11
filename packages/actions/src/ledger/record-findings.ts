@@ -21,6 +21,8 @@ export interface RecordFindingsInput {
   answered?: string[];
   /** Hand-entered holdings reported tonight: their open stale_balance findings are moot (D-049). */
   manual_subjects?: string[];
+  /** Accounts whose institution's own ids identify its movements: their open duplicate_transaction findings are moot (issue #123). */
+  authoritative_id_subjects?: string[];
   /** The address_watched_twice conditions still standing tonight, by fingerprint (issue #112): open findings not in it are resolved. */
   still_watched_twice?: string[];
   [writer: string]: unknown;
@@ -36,6 +38,7 @@ export interface RecordFindingsOutput {
   resolved_fetch_failures: number;
   /** stale_balance findings this run closed because the holding is hand-entered (D-049). */
   resolved_stale_holdings: number;
+  resolved_own_id_duplicates: number;
   /** address_watched_twice findings this run closed because only one open account watches the address now (issue #112). */
   resolved_watched_twice: number;
 }
@@ -107,6 +110,24 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
             resolvedStaleHoldings += 1;
           }
         }
+        // Where the institution's own ids identify its movements, a
+        // duplicate finding raised on equal same-day fills (before #123)
+        // was never a duplicate: moot.
+        let resolvedOwnIdDuplicates = 0;
+        for (const subject of input.authoritative_id_subjects ?? []) {
+          for (const f of actx.ledger.openFindings({ subject })) {
+            if (f.code !== "duplicate_transaction") continue;
+            actx.ledger.appendResolution({
+              finding_id: f.id,
+              decision: "dismiss",
+              note: `the institution's own ids tell these movements apart; equal same-day fills are not duplicates (resolved on ${input.run_key})`,
+              decided_by: "reconciliation",
+              decided_at: actx.clock().toISOString(),
+              resulting_facts: [],
+            });
+            resolvedOwnIdDuplicates += 1;
+          }
+        }
         // An address watched twice stops being so when one of the
         // accounts closes (the operator removed the entry): the finding
         // resolves itself rather than waiting for a dismissal.
@@ -136,6 +157,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
           provisional_subjects: input.provisional_subjects ?? [],
           resolved_fetch_failures: resolvedFetchFailures,
           resolved_stale_holdings: resolvedStaleHoldings,
+          resolved_own_id_duplicates: resolvedOwnIdDuplicates,
           resolved_watched_twice: resolvedWatchedTwice,
         } satisfies RecordFindingsOutput;
       },

@@ -249,6 +249,9 @@ export function walletAdapter(opts: WalletOptions): InstitutionAdapter {
         type: "crypto" as const,
         currency: "USD",
         as_of: asOf,
+        // The exchange's/chain's own ids identify each movement: equal
+        // same-day fills are distinct, never duplicates (issue #123).
+        txn_ids_authoritative: true,
         balances: [{ balance_type: "total", amount: total }],
         ...(positions.length > 0 ? { positions } : {}),
         ...(transactions.length > 0 ? { transactions } : {}),

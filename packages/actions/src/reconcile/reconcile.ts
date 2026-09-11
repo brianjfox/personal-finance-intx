@@ -52,6 +52,8 @@ export interface ReconcileOutput {
   still_watched_twice: string[];
   /** Hand-entered holdings reported tonight: record_findings resolves their open stale_balance findings as moot (D-049). */
   manual_subjects: string[];
+  /** Accounts whose institution's own ids identify its movements: record_findings resolves their open duplicate_transaction findings as moot (issue #123). */
+  authoritative_id_subjects: string[];
   stats: Record<string, number>;
 }
 
@@ -91,6 +93,7 @@ export function reconcile(input: NormalizeOutput, ledger: Ledger, thresholds: Th
     answered: input.answered ?? [],
     still_watched_twice: stillWatchedTwice,
     manual_subjects: [...new Set(input.accounts.filter((a) => a.manual === true).map((a) => a.account_id))].sort(),
+    authoritative_id_subjects: [...new Set(input.accounts.filter((a) => a.txn_ids_authoritative === true).map((a) => a.account_id))].sort(),
     stats,
   };
 }
@@ -328,7 +331,11 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
 
   // 1b. The same movement booked twice: same account, same day, same amount,
   // same (normalised) description, different txn ids -- across tonight's
-  // proposed transactions and the ledger's current ones.
+  // proposed transactions and the ledger's current ones. Not for an
+  // account whose institution's own ids are the identity of a movement
+  // (an exchange's fills, a chain's txids): there, equal same-day fills
+  // of one order are routine and distinct ids are distinct fills (#123).
+  const ownIds = new Set(ctx.input.accounts.filter((a) => a.txn_ids_authoritative === true).map((a) => a.account_id));
   interface Tx {
     ref: string | null;
     id: string | null;
@@ -341,12 +348,13 @@ function detectTransfersAndDuplicates(ctx: DetectorContext): void {
   const txs: Tx[] = [];
   for (const pf of proposed(ctx, "transaction")) {
     const p = pf.fact.payload as TransactionPayload;
+    if (ownIds.has(p.account_id)) continue;
     txs.push({ ref: pf.ref, id: null, account: p.account_id, sig: sig(p), txn_id: p.txn_id });
   }
   const proposedIds = new Set(txs.map((t) => `${t.account}|${t.txn_id}`));
   for (const f of ctx.ledger.asOf({ kind: "transaction" })) {
     const p = f.payload as TransactionPayload;
-    if (p.voided === true) continue;
+    if (p.voided === true || ownIds.has(p.account_id)) continue;
     if (proposedIds.has(`${p.account_id}|${p.txn_id}`)) continue;
     txs.push({ ref: null, id: f.id, account: p.account_id, sig: sig(p), txn_id: p.txn_id });
   }
