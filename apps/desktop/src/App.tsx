@@ -772,11 +772,20 @@ function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // Whether the form holds edits the host has not seen. A tick bump the
+  // user did not cause (the ledger watcher noticing a nightly, issue
+  // #120) must not reload the stored profile over them; Reset Form and a
+  // landed save still reload on purpose.
+  const dirty = useRef(false);
   const reset = useCallback(() => {
+    dirty.current = false;
     api.profile().then((p) => setDraft(draftFrom(p))).catch(() => setDraft(null));
   }, []);
-  useEffect(reset, [reset, tick]);
+  useEffect(() => {
+    if (!dirty.current) reset();
+  }, [reset, tick]);
   const setD = (fn: (x: ProfileDraft) => ProfileDraft) => {
+    dirty.current = true;
     setSaved(false);
     setDraft((x) => (x === null ? x : fn(x)));
   };
@@ -794,6 +803,7 @@ function useProfileDraft(tick: number): { d: ProfileDraft | null; setD: (fn: (d:
     setError(null);
     try {
       const r = await api.profileSave(saveInputFrom(d));
+      dirty.current = false;
       setDraft(draftFrom(r));
       setSaved(true);
       return true;
