@@ -10,6 +10,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, factHeadline, findingSummary, fxState, isMasked, maskDigits, money, moneyNative, setApiToken, setFxRates, setMasked, when, type ChatAgentName, type ChatTurn, type EstateStatus, type Fact, type Finding, type InstitutionOverview, type InstitutionsOverview, type JournalEntry, type NetWorth, type Position, type RunSummary, type Doc, type TaxStatus, type TaxQuarterStatus, type TaxStageStatus, type UserInfo } from "./api";
 import { DonutChart, HorizonChart, PairedBars, type DonutSlice, type FlowBar } from "./charts";
 import { Icon, LogoMark } from "./icons";
+import { watchLedger } from "./watch";
 import { applyUiSettings, loadUiSettings, resolvedTheme, saveUiSettings, UI_DEFAULTS, type ThemeColors, type UiSettings } from "./theme";
 import tauriConf from "../src-tauri/tauri.conf.json";
 
@@ -436,6 +437,11 @@ function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; 
       setFxTick((t) => t + 1); // re-render with rates in hand
     }).catch(() => {});
   }, [tick]);
+  // A nightly the GUI did not start (the scheduler's, the tray's Refresh
+  // Assets, the CLI's) moves the ledger without any button here being
+  // pressed; the watcher notices and bumps the same tick a button would
+  // (issue #120).
+  useEffect(() => watchLedger(api.eventsHead, refresh), [refresh]);
 
   // Nothing at all yet: the welcome screen takes over (except when the
   // user is already on the Institutions page connecting something).
