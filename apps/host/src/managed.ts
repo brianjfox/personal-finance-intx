@@ -13,10 +13,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AccountType, LIABILITY_ACCOUNT_TYPES, type Decimal } from "@fin/contracts";
-import { defaultInbox, type InstitutionEntry } from "@fin/institutions";
+import { defaultInbox, MANAGED_OPTION, type InstitutionEntry } from "@fin/institutions";
 import { type } from "arktype";
 
-export const MANAGED_OPTION = "managed";
+export { MANAGED_OPTION };
 
 export function isManaged(entry: InstitutionEntry): boolean {
   return entry.adapter === "jsondrop" && entry.options?.[MANAGED_OPTION] === true;
