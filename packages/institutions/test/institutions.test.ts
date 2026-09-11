@@ -85,6 +85,32 @@ describe("jsondrop adapter + registry", () => {
     await expect(empty.fetch({ now: NOW })).rejects.toThrow(/no \*\.json/);
   });
 
+  test("a managed institution's accounts are hand-entered whatever the file says (issue #122)", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "fin-inst-"));
+    const inbox = path.join(dataDir, "institutions", "house", "inbox");
+    fs.mkdirSync(inbox, { recursive: true });
+    // A snapshot the managed writer produced before D-049: no `manual` flag.
+    fs.writeFileSync(
+      path.join(inbox, "2026-08-01.json"),
+      JSON.stringify({ accounts: [{ account_id: "acct.house.house", name: "House", type: "real_estate", currency: "USD", as_of: "2026-08-01T00:00:00.000Z", balances: [{ balance_type: "total", amount: "500000" }] }] }),
+    );
+    fs.writeFileSync(
+      path.join(dataDir, "institutions.json"),
+      JSON.stringify({
+        institutions: [
+          { institution_id: "inst.house", name: "House", adapter: "jsondrop", options: { managed: true } },
+          { institution_id: "inst.drop", name: "Drop", adapter: "jsondrop", options: { dir: "institutions/house/inbox" } },
+        ],
+      }),
+    );
+    const { adapters } = loadInstitutions(dataDir);
+    const managed = await adapters[0]!.fetch({ now: NOW });
+    expect(managed.snapshot.accounts[0]!.manual).toBe(true);
+    // A plain file-drop institution reading the same file stays as written: the flag is about the source.
+    const dropped = await adapters[1]!.fetch({ now: NOW });
+    expect(dropped.snapshot.accounts[0]!.manual).toBeUndefined();
+  });
+
   test("fixture adapter validates the draft", async () => {
     const bad = fixtureAdapter("inst.demo", { accounts: [{ account_id: "acct.demo.x", name: "x", type: "checking", currency: "USD", as_of: "nope", balances: [] }] } as never);
     await expect(bad.fetch({ now: NOW })).rejects.toThrow(/violates contract/);

@@ -15,6 +15,13 @@ import { validateDraftSnapshot, type FetchOutput, type InstitutionAdapter } from
 export interface JsonDropOptions {
   institution_id: string;
   dir: string;
+  /**
+   * Every figure in this inbox was typed in by the operator (a managed
+   * institution): each account is stamped `manual: true` whatever the
+   * file says, so a snapshot written before D-049 reads the same as one
+   * written after it (issue #122).
+   */
+  manual?: boolean;
 }
 
 export const JSONDROP_VIA = "adapter.jsondrop@1";
@@ -41,12 +48,16 @@ export function jsonDropAdapter(opts: JsonDropOptions): InstitutionAdapter {
           `jsondrop ${opts.institution_id}: ${path.basename(file)} is for ${String(body["institution_id"])}`,
         );
       }
+      const accounts =
+        opts.manual === true && Array.isArray(body["accounts"])
+          ? body["accounts"].map((a: unknown) => (typeof a === "object" && a !== null ? { ...(a as Record<string, unknown>), manual: true } : a))
+          : body["accounts"];
       const draft = validateDraftSnapshot(
         {
           institution_id: opts.institution_id,
           fetched_at: ctx.now.toISOString(),
           via: JSONDROP_VIA,
-          accounts: body["accounts"],
+          accounts,
         },
         `jsondrop ${opts.institution_id}: ${path.basename(file)}`,
       );

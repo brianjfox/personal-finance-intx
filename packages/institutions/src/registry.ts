@@ -162,6 +162,13 @@ export function setInstitutionEnabled(dataDir: string, institutionId: string, en
   return true;
 }
 
+/**
+ * Registry option marking a jsondrop institution as GUI-managed: the
+ * operator types its figures in, and the host writes the snapshots. The
+ * host's managed module keys on the same option.
+ */
+export const MANAGED_OPTION = "managed";
+
 export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: SecretStore): InstitutionAdapter {
   const o = e.options ?? {};
   const dir = typeof o["dir"] === "string" ? path.resolve(dataDir, o["dir"]) : defaultInbox(dataDir, e.institution_id);
@@ -169,7 +176,10 @@ export function buildAdapter(dataDir: string, e: InstitutionEntry, secrets?: Sec
   const num = (k: string): number | undefined => (typeof o[k] === "number" ? (o[k] as number) : undefined);
   switch (e.adapter) {
     case "jsondrop":
-      return jsonDropAdapter({ institution_id: e.institution_id, dir });
+      // A managed institution's figures are hand-entered whatever its
+      // snapshot files say (issue #122): the flag comes from the
+      // registry, not from each file.
+      return jsonDropAdapter({ institution_id: e.institution_id, dir, ...(o[MANAGED_OPTION] === true ? { manual: true } : {}) });
     case "csvdrop":
       return csvDropAdapter({ ...(o as unknown as CsvDropOptions), institution_id: e.institution_id, dir });
     case "plaid": {
