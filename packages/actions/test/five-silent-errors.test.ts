@@ -42,6 +42,31 @@ describe("1. a transfer between your own accounts booked twice as income", () =>
     expect(night.rec.clean).toBe(false);
   });
 
+  test("equal same-day fills under the institution's own ids are distinct movements, not duplicates (#123)", () => {
+    const ledger = freshLedger();
+    const fill = (txn_id: string) => ({ txn_id, posted_at: "2026-07-14T15:02:00.000Z", amount: "-1003.13", type: "buy" as const, description: "Advanced Trade Fill BTC" });
+    const n1 = runNight(
+      ledger,
+      "n1",
+      { snapshots: [snap("inst.cb", NIGHT1, [checking("acct.cb.cb", ASOF1, "5000", { txn_ids_authoritative: true, transactions: [fill("f-1"), fill("f-2")] })])], failures: [] },
+      NIGHT1,
+    );
+    expect(n1.rec.findings.filter((f) => f.code === "duplicate_transaction")).toHaveLength(0);
+    expect(n1.rec.authoritative_id_subjects).toEqual(["acct.cb.cb"]);
+    expect(n1.rec.provisional_subjects).toEqual([]);
+    n1.commit();
+    // Two more fills of the same order next night, against the two already in the ledger: still nothing.
+    const n2 = runNight(
+      ledger,
+      "n2",
+      { snapshots: [snap("inst.cb", NIGHT2, [checking("acct.cb.cb", ASOF2, "3000", { txn_ids_authoritative: true, transactions: [fill("f-1"), fill("f-2"), fill("f-3"), fill("f-4")] })])], failures: [] },
+      NIGHT2,
+    );
+    expect(n2.norm.stats.transactions_new).toBe(2);
+    expect(n2.rec.findings.filter((f) => f.code === "duplicate_transaction")).toHaveLength(0);
+    expect(n2.rec.clean).toBe(true);
+  });
+
   test("an aggregator duplicate (same movement, new id) is caught and queued, not absorbed", () => {
     const ledger = freshLedger();
     const tx = { txn_id: "b-1", posted_at: "2026-08-20T00:00:00.000Z", amount: "2500", type: "credit" as const, description: "PAYROLL ACME" };

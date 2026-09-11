@@ -236,6 +236,9 @@ export function krakenAdapter(opts: KrakenOptions): InstitutionAdapter {
         type: "crypto" as const,
         currency: "USD",
         as_of: asOf,
+        // The exchange's/chain's own ids identify each movement: equal
+        // same-day fills are distinct, never duplicates (issue #123).
+        txn_ids_authoritative: true,
         balances: [
           { balance_type: "total", amount: total },
           ...(decimal.isZero(cash) ? [] : [{ balance_type: "cash", amount: cash }]),

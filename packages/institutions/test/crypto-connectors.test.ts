@@ -179,6 +179,7 @@ describe("coinbase adapter (mock API)", () => {
     const acct = out.snapshot.accounts[0]!;
     expect(acct.account_id).toBe("acct.coinbase.coinbase");
     expect(acct.type).toBe("crypto");
+    expect(acct.txn_ids_authoritative).toBe(true); // issue #123
     const pos = new Map((acct.positions ?? []).map((p) => [p.instrument.symbol, p]));
     expect([...pos.keys()].sort()).toEqual(["BTC", "USDC"]); // DOGE zero dropped, USD is cash
     expect(pos.get("BTC")).toMatchObject({ quantity: "0.75", price: "60000.10", market_value: "45000.08", cost_basis: "30030" }); // the sum of the remaining lots' bases
@@ -278,6 +279,7 @@ describe("watch-only wallet adapter (mock chain APIs)", () => {
     const out = await adapter.fetch({ now: NOW });
     const acct = out.snapshot.accounts[0]!;
     expect(acct.account_id).toBe("acct.ledger.wallet");
+    expect(acct.txn_ids_authoritative).toBe(true); // issue #123
     const pos = new Map((acct.positions ?? []).map((p) => [p.instrument.symbol, p]));
     expect(pos.get("BTC")).toMatchObject({ quantity: "1.75", price: "60000", market_value: "105000.00" });
     expect(pos.get("ETH")).toMatchObject({ quantity: "2", price: "2500.50", market_value: "5001.00" });
@@ -478,6 +480,7 @@ describe("kraken adapter (mock API)", () => {
     expect(seenNonces).toHaveLength(1);
     const acct = out.snapshot.accounts[0]!;
     expect(acct.account_id).toBe("acct.kraken.kraken");
+    expect(acct.txn_ids_authoritative).toBe(true); // issue #123
     const pos = new Map((acct.positions ?? []).map((p) => [p.instrument.symbol, p]));
     expect([...pos.keys()].sort()).toEqual(["BTC", "EUR", "SOL"]); // DUST zero dropped, USD is cash
     expect(pos.get("BTC")).toMatchObject({ quantity: "0.75", market_value: "45000.00" }); // spot + earn summed
