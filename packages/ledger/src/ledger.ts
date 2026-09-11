@@ -740,6 +740,11 @@ export class Ledger {
     return id;
   }
 
+  /** The newest event's sequence number (0 on an empty ledger): a cheap "has anything changed?" cursor for pollers. */
+  lastSeq(): number {
+    return this.db.query<{ seq: number }, []>("SELECT coalesce(max(seq), 0) AS seq FROM ledger_event").get()?.seq ?? 0;
+  }
+
   eventsSince(seq: number, limit = 1000): LedgerEvent[] {
     return this.db
       .query<

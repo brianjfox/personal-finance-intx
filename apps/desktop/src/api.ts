@@ -293,6 +293,8 @@ export const api = {
   finding: (id: string) => get<{ finding: Finding; before: Fact[]; after: Fact[] }>(`/api/finding/${id}`),
   resolve: (id: string, decision: string, note: string) => post<{ resolutionId: string; resultingFacts: string[] }>(`/api/finding/${id}/resolve`, { decision, note }),
   runs: () => get<RunSummary[]>("/api/runs"),
+  /** The ledger's newest event sequence: advances whenever anything lands, whoever caused it. */
+  eventsHead: () => get<{ seq: number }>("/api/events/head"),
   nightly: () => post<{ runId: string; status: string }>("/api/nightly?wait=1"),
   documents: () => get<Doc[]>("/api/documents"),
   journal: () => get<Array<{ id: string; at: string; kind: string; summary: string; author: string; refs: string[] }>>("/api/journal"),
