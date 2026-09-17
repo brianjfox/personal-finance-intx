@@ -447,14 +447,21 @@ function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; 
 
   const [, setFxTick] = useState(0);
   useEffect(() => {
+    // Every answer belongs to the tick that asked; a slow one from an
+    // earlier tick must not land on top of a newer one (issue #126).
+    let live = true;
     void loadQueue();
-    api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
-    api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
-    api.netWorth().then(setNw).catch(() => setNw(null));
+    api.approvals().then((a) => live && setApprovalsCount(a.length)).catch(() => live && setApprovalsCount(0));
+    api.institutionsOverview().then((o) => live && setOverview(o)).catch(() => live && setOverview(null));
+    api.netWorth().then((n) => live && setNw(n)).catch(() => live && setNw(null));
     api.fx().then((fx) => {
+      if (!live) return;
       setFxRates(fx);
       setFxTick((t) => t + 1); // re-render with rates in hand
     }).catch(() => {});
+    return () => {
+      live = false;
+    };
   }, [tick, loadQueue]);
   // A nightly the GUI did not start (the scheduler's, the tray's Refresh
   // Assets, the CLI's) moves the ledger without any button here being
