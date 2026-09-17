@@ -41,6 +41,8 @@ export interface RecordFindingsOutput {
   resolved_own_id_duplicates: number;
   /** address_watched_twice findings this run closed because only one open account watches the address now (issue #112). */
   resolved_watched_twice: number;
+  /** Every finding this run closed on its own, announced as one `findings.resolved` event (issue #126). */
+  resolved_finding_ids: string[];
 }
 
 export function recordFindingsHandler(actx: ActionContext): ActionHandler {
@@ -78,6 +80,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
         // tonight": close the institution's open fetch_failed findings so
         // the card's warning banner clears itself (issue #15). Idempotent
         // across crash re-runs -- a resolved finding is no longer open.
+        const resolvedFindingIds: string[] = [];
         let resolvedFetchFailures = 0;
         for (const inst of input.answered ?? []) {
           for (const f of actx.ledger.openFindings({ subject: inst })) {
@@ -91,6 +94,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
               resulting_facts: [],
             });
             resolvedFetchFailures += 1;
+            resolvedFindingIds.push(f.id);
           }
         }
         // A hand-entered holding has no feed to be stale: any open
@@ -108,6 +112,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
               resulting_facts: [],
             });
             resolvedStaleHoldings += 1;
+            resolvedFindingIds.push(f.id);
           }
         }
         // Where the institution's own ids identify its movements, a
@@ -126,6 +131,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
               resulting_facts: [],
             });
             resolvedOwnIdDuplicates += 1;
+            resolvedFindingIds.push(f.id);
           }
         }
         // An address watched twice stops being so when one of the
@@ -147,7 +153,19 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
               resulting_facts: [],
             });
             resolvedWatchedTwice += 1;
+            resolvedFindingIds.push(f.id);
           }
+        }
+        // A finding this run closed on its own is a change the shell
+        // must hear about NOW, not after notify/hold: a run that dies
+        // between here and there would otherwise leave the queue badge
+        // counting findings the ledger already closed (issue #126).
+        if (resolvedFindingIds.length > 0) {
+          actx.ledger.emitEvent({
+            id: `${input.run_key}:findings.resolved`,
+            kind: "findings.resolved",
+            payload: { run_key: input.run_key, finding_ids: resolvedFindingIds, decided_by: "reconciliation" },
+          });
         }
         return {
           run_key: input.run_key,
@@ -155,6 +173,7 @@ export function recordFindingsHandler(actx: ActionContext): ActionHandler {
           finding_ids: ids,
           queued,
           provisional_subjects: input.provisional_subjects ?? [],
+          resolved_finding_ids: resolvedFindingIds,
           resolved_fetch_failures: resolvedFetchFailures,
           resolved_stale_holdings: resolvedStaleHoldings,
           resolved_own_id_duplicates: resolvedOwnIdDuplicates,

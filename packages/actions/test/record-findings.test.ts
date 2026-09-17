@@ -147,3 +147,35 @@ describe("record_findings resolves answered institutions' fetch failures", () =>
     expect(ledger.getFinding(other)?.resolved).toBe(false);
   });
 });
+
+// Issue #126: a finding the run closes on its own must move the ledger's
+// event head, or the shell's watcher never learns the queue shrank and
+// the badge keeps counting findings the ledger already closed.
+describe("record_findings announces its own dismissals", () => {
+  test("one findings.resolved event names every finding the run closed; none when it closed nothing", async () => {
+    const ledger = openLedger(":memory:");
+    const a = openFetchFailure(ledger, "inst.chase");
+    const b = openFetchFailure(ledger, "inst.schwab");
+    const handler = recordFindingsHandler({ ledger, clock: () => NOW } as unknown as ActionContext);
+    const before = ledger.lastSeq();
+    const out = (await handler(
+      { run_key: "n1", clean: true, findings: [], provisional_subjects: [], answered: ["inst.chase", "inst.schwab"] },
+      passThroughCtx,
+      new AbortController().signal,
+    )) as { resolved_finding_ids: string[] };
+    expect(out.resolved_finding_ids.sort()).toEqual([a, b].sort());
+    expect(ledger.lastSeq()).toBeGreaterThan(before);
+    const evts = ledger.eventsSince(before).filter((e) => e.kind === "findings.resolved");
+    expect(evts).toHaveLength(1);
+    expect((evts[0]?.payload as { finding_ids: string[] }).finding_ids.sort()).toEqual([a, b].sort());
+    // A replay closes nothing and must not pretend otherwise.
+    const quiet = ledger.lastSeq();
+    const again = (await handler(
+      { run_key: "n2", clean: true, findings: [], provisional_subjects: [], answered: ["inst.chase", "inst.schwab"] },
+      passThroughCtx,
+      new AbortController().signal,
+    )) as { resolved_finding_ids: string[] };
+    expect(again.resolved_finding_ids).toEqual([]);
+    expect(ledger.lastSeq()).toBe(quiet);
+  });
+});
