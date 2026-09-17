@@ -417,7 +417,26 @@ const NAV_ITEMS: ReadonlyArray<readonly [Page, string, string]> = [
 
 function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; name: string } | null; signOut: () => void; onRenamed: (name: string) => void; openAbout: () => void }) {
   const [page, setPage] = useState<Page>("dashboard");
+  // The ONE exception list: the nav badge, the health card, the bell,
+  // and the Queue page all read it, so none can disagree with another
+  // (issue #126). A failed load keeps the last list and says so.
   const [queue, setQueue] = useState<Finding[]>([]);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const queueLoad = useRef(0);
+  const loadQueue = useCallback((): Promise<void> => {
+    const n = ++queueLoad.current;
+    return api
+      .queue()
+      .then((items) => {
+        if (n !== queueLoad.current) return; // a newer load is the answer
+        setQueue(items);
+        setQueueError(null);
+      })
+      .catch((e: unknown) => {
+        if (n !== queueLoad.current) return;
+        setQueueError(e instanceof Error ? e.message : String(e));
+      });
+  }, []);
   const [approvalsCount, setApprovalsCount] = useState(0);
   const [strategyTab, setStrategyTab] = useState<StrategyTab>("chat");
   const [overview, setOverview] = useState<InstitutionsOverview | null>(null);
@@ -428,7 +447,7 @@ function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; 
 
   const [, setFxTick] = useState(0);
   useEffect(() => {
-    api.queue().then(setQueue).catch(() => setQueue([]));
+    void loadQueue();
     api.approvals().then((a) => setApprovalsCount(a.length)).catch(() => setApprovalsCount(0));
     api.institutionsOverview().then(setOverview).catch(() => setOverview(null));
     api.netWorth().then(setNw).catch(() => setNw(null));
@@ -436,7 +455,7 @@ function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; 
       setFxRates(fx);
       setFxTick((t) => t + 1); // re-render with rates in hand
     }).catch(() => {});
-  }, [tick]);
+  }, [tick, loadQueue]);
   // A nightly the GUI did not start (the scheduler's, the tray's Refresh
   // Assets, the CLI's) moves the ledger without any button here being
   // pressed; the watcher notices and bumps the same tick a button would
@@ -574,7 +593,7 @@ function AppBody({ user, signOut, onRenamed, openAbout }: { user: { id: string; 
           ) : (
             <>
               {!nothingYet && <NoNumbersYet overview={overview} onChanged={refresh} goInstitutions={() => setPage("institutions")} />}
-              {page === "queue" && <QueuePage tick={tick} onChanged={refresh} openFact={setFactId} />}
+              {page === "queue" && <QueuePage items={queue} error={queueError} reload={loadQueue} onChanged={refresh} openFact={setFactId} />}
               {page === "dashboard" && <Dashboard tick={tick} openFact={setFactId} />}
               {page === "institutions" && <InstitutionsPage tick={tick} onChanged={refresh} />}
               {page === "credentials" && contained(<CredentialsPage tick={tick} onChanged={refresh} user={user} onRenamed={onRenamed} />)}
@@ -3941,17 +3960,24 @@ function Positions({ tick, openFact }: { tick: number; openFact: (id: string) =>
 // Pure reconciliation exceptions: what the feeds did that needs your
 // judgment. The Market Manager's proposals and prepared orders live on
 // Strategy -> Plan & Rebalancing.
-function QueuePage({ tick, onChanged, openFact }: { tick: number; onChanged: () => void; openFact: (id: string) => void }) {
-  const [items, setItems] = useState<Finding[]>([]);
+// The list is the shell's (issue #126): opening the page reloads it in
+// place, so the badge that brought you here shows what you now see.
+function QueuePage({ items, error, reload, onChanged, openFact }: { items: Finding[]; error: string | null; reload: () => Promise<void>; onChanged: () => void; openFact: (id: string) => void }) {
   useEffect(() => {
-    api.queue().then(setItems).catch(() => setItems([]));
-  }, [tick]);
+    void reload();
+  }, [reload]);
   return (
     <div className="page page-narrow">
       <h2>Attention Queue</h2>
       <p className="page-sub">Data exceptions that need your judgment before the books are trusted.</p>
+      {error !== null && (
+        <div className="banner">
+          The queue could not be loaded ({error}); this is the last list the host answered with.{" "}
+          <button className="secondary" onClick={() => void reload()}>Try again</button>
+        </div>
+      )}
       {items.length === 0 ? (
-        <p className="muted">Nothing requires your attention. Every account reconciled clean.</p>
+        error === null && <p className="muted">Nothing requires your attention. Every account reconciled clean.</p>
       ) : (
         <>
           <div className="section-label" style={{ marginTop: 0 }}><Icon name="warning-circle" /> Conflict Resolution Required</div>
